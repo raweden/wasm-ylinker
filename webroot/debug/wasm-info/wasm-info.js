@@ -995,39 +995,60 @@ class ByteArray {
     }
 
     readBigUint64() {
-
+        let off = this._offset;
+        let ret = this._data.getBigUint64(off, this._littleEndian);
+        this._offset = off + 8;
+        return ret;
     }
 
     readFloat32() {
-
+        let off = this._offset;
+        let ret = this._data.getFloat32(off, this._littleEndian);
+        this._offset = off + 4;
+        return ret;
     }
 
     readFloat64() {
-
+        let off = this._offset;
+        let ret = this._data.getFloat64(off, this._littleEndian);
+        this._offset = off + 8;
+        return ret;
     }
 
     readInt16() {
-
+        let off = this._offset;
+        let ret = this._data.getInt16(off, this._littleEndian);
+        this._offset = off + 2;
+        return ret;
     }
 
     readInt32() {
-
+        let off = this._offset;
+        let ret = this._data.getInt32(off, this._littleEndian);
+        this._offset = off + 4;
+        return ret;
     }
 
     readInt8() {
-
+        return this._data.getInt8(this._offset++, this._littleEndian);
     }
 
     readUint16() {
-
+        let off = this._offset;
+        let ret = this._data.getUint16(off, this._littleEndian);
+        this._offset = off + 2;
+        return ret;
     }
 
     readUint32() {
-
+        let off = this._offset;
+        let ret = this._data.getUint32(off, this._littleEndian);
+        this._offset = off + 4;
+        return ret;
     }
 
     readUint8() {
-        return this._u8[this._offset++];
+        return this._data.getUint8(this._offset++, value);
     }
 
     readULEB128() {
@@ -1072,50 +1093,101 @@ class ByteArray {
         throw RangeError("encoding of LEB128 did not end correct");
     }
 
-    writeBigInt64(value)
-    writeBigUint64(value)
-    writeFloat32(value)
-    writeFloat64(value)
-    writeInt16(value)
-    writeInt32(value)
-    writeInt8(value)
-    writeUint16(value)
-    writeUint32(value)
-    writeUint8(value)
+    // writting
 
-    writeULEB128() {
+    writeBigInt64(value) {
+        let off = this._offset;
+        this._data.setBigInt64(off, value, this._littleEndian);
+        this._offset = off + 8;
+    }
 
+    writeBigUint64(value) {
+        let off = this._offset;
+        this._data.setBigUint64(off, value, this._littleEndian);
+        this._offset = off + 8;
+    }
+
+    writeFloat32(value) {
+        let off = this._offset;
+        this._data.setFloat32(off, value, this._littleEndian);
+        this._offset = off + 4;
+    }
+
+    writeFloat64(value) {
+        let off = this._offset;
+        this._data.setFloat64(off, value, this._littleEndian);
+        this._offset = off + 8;
+    }
+
+    writeInt16(value) {
+        let off = this._offset;
+        this._data.setInt16(off, value, this._littleEndian);
+        this._offset = off + 2;
+    }
+
+    writeInt32(value) {
+        let off = this._offset;
+        this._data.setInt32(off, value, this._littleEndian);
+        this._offset = off + 4;
+    }
+
+    writeInt8(value) {
+        this._data.setInt8(this._offset++, value);
+    }
+
+    writeUint16(value) {
+        let off = this._offset;
+        this._data.setUint16(off, value, this._littleEndian);
+        this._offset = off + 2;
+    }
+
+    writeUint32(value) {
+        let off = this._offset;
+        this._data.setUint32(off, value, this._littleEndian);
+        this._offset = off + 4;
+    }
+
+    writeUint8(value) {
+        this._data.setUint8(this._offset++, value);
+    }
+
+    writeULEB128(value) {
+        let u8 = this._u8;
+        let off = this._offset;
+        let len = u8.byteLength;
+        do {
+            let byte = value & 0x7f;
+            value >>= 7;
+            if (value != 0) {
+                u8[off++] = (byte | 0x80);
+            } else {
+                u8[off++] = byte;
+                this._offset = off;
+                return;
+            }
+
+        } while (value != 0);
+
+        throw RangeError("arraybuffer to small");
     }
 
     writeSLEB128(value) {
+        let u8 = this._u8;
+        let off = this._offset;
+        let len = u8.byteLength;
         value |= 0;
-        const result = [];
-        while (true) {
+        while (off < len) {
             const byte_ = value & 0x7f;
             value >>= 7;
             if ((value === 0 && (byte_ & 0x40) === 0) || (value === -1 && (byte_ & 0x40) !== 0)) {
-                result.push(byte_);
-                return result;
+                u8[off++] = byte_;
+                this._offset = off;
+                return;
             }
-            result.push(byte_ | 0x80);
+            u8[off++] = (byte_ | 0x80);
         }
 
-
-        // consumes an signed LEB128 integer starting at `off`.
-        // changes `off` to immediately after the integer
-        let off = this._offset;
-        let result = 0;
-        let shift = 0;
-        let byte = 0;
-        do {
-                byte = u8[off++];
-                result += (byte & 0x7F) << shift;
-                shift += 7;
-        } while (byte & 0x80);
-
-        this._offset = off;
-
-        return result;
+        throw RangeError("arraybuffer to small");
     }
 
 };
