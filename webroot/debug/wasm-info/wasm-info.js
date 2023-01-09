@@ -88,6 +88,60 @@ function dump_func_type(type, argc, argv, retc, retv) {
     console.log("type: %s %s %s", type.toString(16), argstr, retstr);
 }
 
+function functype_toString(functype) {
+    let arg, ret;
+    let argc = functype.argc;
+    if (argc == 0) {
+        arg = "void";
+    } else if (argc == 1){
+        arg = type_name(functype.argv[0]);
+    } else {
+        let argv = functype.argv;
+        arg = [];
+        for (let x = 0; x < argc; x++) {
+            arg.push(type_name(argv[x]));
+        }
+    }
+
+    let retc = functype.retc;
+    if (retc == 0) {
+        ret = "void";
+    } else if (retc == 1){
+        ret = type_name(functype.retv[0]);
+    } else {
+        let retv = functype.retv;
+        ret = [];
+        for (let x = 0; x < retc; x++) {
+            ret.push(type_name(retv[x]));
+        }
+    }
+
+    let str = "";
+    if (typeof ret == "string") {
+        str += ret;
+    } else {
+        str += '{ ' + ret.join(', ') + ' }';
+    }
+    str += '\x20(';
+    if (typeof arg == "string") {
+        str += arg;
+    } else {
+        str += arg.join(', ');
+    }
+    str += ")";
+    return str;
+}
+
+function dump_functypes(functypes) {
+
+    let ylen = functypes.length;
+    for (let y = 0; y < ylen; y++) {
+        let fstr = functype_toString(functypes[y]);
+        console.log("[%d]: %s", y, fstr);
+
+    }
+}
+
 // from emscripten.
 var UTF8Decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf8') : undefined;
 
@@ -136,43 +190,6 @@ function inst_name(optcode) {
 
 }
 
-const optcode_names = {};
-optcode_names[0x00] = "unreachable";
-optcode_names[0x01] = "noop";
-optcode_names[0x02] = "block";
-optcode_names[0x03] = "if->else";
-optcode_names[0x04] = "if->elif";
-optcode_names[0x0C] = "br";
-optcode_names[0x0D] = "br_if";
-optcode_names[0x0E] = "br_label";
-optcode_names[0x0F] = "return";
-optcode_names[0x10] = "call";
-optcode_names[0x11] = "call_indirect";
-optcode_names[0xd0] = "ref.null";
-optcode_names[0xd1] = "ref.is_null";
-optcode_names[0xd2] = "ref.func";
-optcode_names[0x1a] = "drop";
-optcode_names[0x1b] = "select";
-optcode_names[0x1c] = "select t*";
-
-optcode_names[0x20] = "local.get";
-optcode_names[0x21] = "local.set";
-optcode_names[0x22] = "local.tee";
-optcode_names[0x23] = "global.get";
-optcode_names[0x24] = "global.set";
-
-optcode_names[0x25] = "table.get";
-optcode_names[0x26] = "table.set";
-optcode_names[0xfc] = "<multibyte>";
-
-optcode_names[0x28] = "i32.load";
-
-optcode_names[0x41] = "i32.const";
-optcode_names[0x42] = "i64.const";
-optcode_names[0x43] = "f32.const";
-optcode_names[0x44] = "f64.const";
-
-optcode_names[0x0b] = "end";
 
 function instname(opt1, opt2) {
 
@@ -198,8 +215,8 @@ function instname(opt1, opt2) {
         case 0x24: return "global.set";
 
         // wasm 2.0
-        case 0x23: return "table.get";
-        case 0x24: return "table.set";
+        case 0x25: return "table.get";
+        case 0x26: return "table.set";
 
         case 0x28: return "i32.load";
         case 0x29: return "i64.load";
@@ -534,123 +551,449 @@ function instname(opt1, opt2) {
     }
 }
 
+class InstList {
+
+    constructor(optcode) {
+        this.optcodes = [];
+    }
+};
+
+class Inst {
+
+    constructor(optcode) {
+        this.optcode = optcode;
+    }
+};
+
+class UnreachableInst extends Inst {
+
+    constructor() {
+        super(0x00);
+    }
+}
+
+class NopInst extends Inst {
+
+    constructor() {
+        super(0x01);
+    }
+}
+
+class EndInst extends Inst {
+
+    constructor() {
+        super(0x0b);
+    }
+}
+
+class BlockInst extends Inst {
+
+    constructor(optcode) {
+        super(optcode);
+    }
+}
+
+class LoopInst extends Inst {
+
+    constructor(optcode) {
+        super(optcode);
+    }
+}
+
+class IfInst extends Inst {
+
+    constructor(optcode) {
+        super(optcode);
+    }
+}
+
+class ReturnInst extends Inst {
+
+    constructor(optcode) {
+        super(optcode);
+    }
+}
+
+class LoadInst extends Inst {
+
+    constructor(optcode) {
+        super(optcode);
+    }
+}
+
+class StoreInst extends Inst {
+
+    constructor(optcode) {
+        super(optcode);
+    }
+}
+
+class CallInst extends Inst {
+
+    constructor(optcode, funcidx) {
+        super(optcode);
+        this.funcidx = funcidx;
+    }
+}
+
+class BranchInst extends Inst {
+
+    constructor(optcode, labelidx) {
+        super(optcode);
+        this.labelidx = labelidx;
+    }
+}
+
+class BranchIfInst extends Inst {
+
+    constructor(optcode, labelidx) {
+        super(optcode);
+        this.labelidx = labelidx;
+    }
+}
+
+class BranchTableInst extends Inst {
+
+    constructor(optcode, labels) {
+        super(optcode);
+        this.labels = labels;
+    }
+}
+
+class IndirectCallInst extends Inst {
+
+    constructor(optcode, tableidx, typeidx) {
+        super(optcode);
+        this.tableidx = tableidx;
+        this.typeindx = typeidx;
+    }
+}
+
+class LocalGetInst extends Inst {
+
+    constructor(optcode, localidx) {
+        super(optcode);
+        this.localidx = localidx;
+    }
+}
+
+class LocalSetInst extends Inst {
+
+    constructor(optcode, localidx) {
+        super(optcode);
+        this.localidx = localidx;
+    }
+}
+
+class GlobalGetInst extends Inst {
+
+    constructor(optcode, globalidx) {
+        super(optcode);
+        this.globalidx = globalidx;
+    }
+}
+
+class GlobalSetInst extends Inst {
+
+    constructor(optcode, globalidx) {
+        super(optcode);
+        this.globalidx = globalidx;
+    }
+}
+
+class TableGetInst extends Inst {
+
+    constructor(optcode, tableidx) {
+        super(optcode);
+        this.tableidx = tableidx;
+    }
+}
+
+class TableSetInst extends Inst {
+
+    constructor(optcode, tableidx) {
+        super(optcode);
+        this.tableidx = tableidx;
+    }
+}
+
+function InstTraversal(optcodes) {
+
+    let atEnd = false;
+    let lidx = 0;
+    let pseudo = null;
+    let scope = optcodes;
+    let scopes = [{scope: optcodes, index: undefined}];
+
+    return function next() {
+
+        if (pseudo !== null) {
+            let tmp = pseudo;
+            pseudo = null;
+            return tmp;
+        } else if (atEnd) {
+            return null;
+        }
+
+        let inst = scope[lidx++];
+        if ((inst.optcode == 0x02 || inst.optcode == 0x03 || inst.optcode == 0x04 || inst.optcode == 0x05) && inst.optcodes.length > 0) {
+            scopes[scopes.length - 1].index = lidx;
+            scopes.push({scope: inst.optcodes, inst: inst, index: undefined});
+            scope = inst.optcodes;
+            lidx = 0;
+        } else if (lidx == scope.length) {
+
+            if (scope.inst.optcode == 0x04 && blkst.else) {
+                let last = scopes[scopes.length - 1];
+                last.scope = blkst.else.optcodes;
+                last.inst = blkst.else;
+                last.index = undefined;
+                scope = last.scope;
+                lidx = 0;
+                pseudo = {optcode: 0x05};
+            } else {
+                while (scopes.length > 0) {
+                    let tmp = scopes[scopes.length - 1];
+                    if (tmp.index === undefined) {
+                        console.error("scopes[i].index should not be undefined");
+                        throw new Error("index is undefined");
+                    }
+                    if (tmp.index == tmp.scope.length) {
+                        scopes.pop();
+                    } else {
+                        scope = tmp.scope;
+                        lidx = tmp.index;
+                        break;
+                    }
+                }
+
+                if (scopes.length == 0)
+                    atEnd = true;
+            }
+        }
+
+        return inst;
+    }
+}
+
+function InstToArray(optcodes) {
+
+    let lidx = 0;
+    let scope = optcodes;
+    let scopes = [{optcodes: scope, inst: undefined, index: undefined}];
+    let results = [];
+
+    while (lidx < scope.length) {
+
+        let inst = scope[lidx++];
+
+        if ((inst.optcode == 0x02 || inst.optcode == 0x03 || inst.optcode == 0x04 || inst.optcode == 0x05) && inst.optcodes.length > 0) {
+            scopes[scopes.length - 1].index = lidx;
+            scopes.push({scope: inst.optcodes, inst: inst, index: undefined});
+            scope = inst.optcodes;
+            lidx = 0;
+        } else if (lidx == scope.length) {
+
+        }
+
+        return inst;
+    }
+}
+
+function InstMap(optcodes, cb) {
+
+}
+
+
 // https://webassembly.github.io/spec/core/binary/instructions.html#binary-expr
 // https://webassembly.github.io/spec/core/appendix/index-instructions.html
-function decodeByteCode(u8, data, off)
-{
-
-    function unsignedLEB128() {
-        // consumes an unsigned LEB128 integer starting at `off`.
-        // changes `off` to immediately after the integer
-        let result = 0;
-        let shift = 0;
-        let byte = 0;
-        do {
-                byte = u8[off++];
-                result += (byte & 0x7F) << shift;
-                shift += 7;
-        } while (byte & 0x80);
-
-        return result;
-    }
+function decodeByteCode(data) {
     
-    let start = off;
+    let start = data.offset;
     let brk = false;
-    let optcodes = [];
+    let topInsts = [];
+    let optcodes = topInsts;
+    let blkstack = [{optcodes: topInsts}]; // holds the nesting for block, loop and if/else
 
     while(brk == false) {
-        let opt_code = data.getUint8(off++);
+        let opt_code = data.readUint8();
         switch (opt_code) {
             case 0x00: // unreachable
-                break;
             case 0x01: // nop
+                optcodes.push({optcode: opt_code});
                 break;
             case 0x02: // block
-                break;
             case 0x03: // loop
-                break;
-            case 0x04: // if-else <inst> 0x0B || if-elif <inst> 0x05 <inst> 0x0B
-                break;
-            case 0x0C: // br
-                break;
-            case 0x0D: // br_if
-                break;
-            case 0x0E: // br_table
-                break;
-            case 0x0F: // return
-                break;
-            case 0x10: // call
-                break;
-            case 0x11: // call_indirect
-                break;
-            case 0x41: // i32.const
-                optcodes.push({optcode: opt_code, value: unsignedLEB128()});
-                break;
-            case 0x42: // i64.const
-                optcodes.push({optcode: opt_code, value: unsignedLEB128()});
-                break;
-            case 0x43: // f32.const
-                optcodes.push({optcode: opt_code, value: data.getFloat32(off)});
-                off += 4;
-                break;
-            case 0x44: // f64.const
-                optcodes.push({optcode: opt_code, value: data.getFloat64(off)});
-                off += 8;
-                break;
-            case 0x0b: // end
-                optcodes.push({optcode: opt_code});
-                brk = true;
-                break;
-            case 0x1A: // drop
-            case 0x1B: // select
-            case 0x1C: // select t*
-                break;
-            case 0x20: // local.get
-                optcodes.push({optcode: opt_code, x: unsignedLEB128()});
-                break;
-            case 0x21: // local.set
-                optcodes.push({optcode: opt_code, x: unsignedLEB128()});
-                break;
-            case 0x22: // local.tee
-                optcodes.push({optcode: opt_code, x: unsignedLEB128()});
-                break;
-            case 0x23: // global.get
-                optcodes.push({optcode: opt_code, x: unsignedLEB128()});
-                break;
-            case 0x24: // global.set
-                optcodes.push({optcode: opt_code, x: unsignedLEB128()});
-                break;
-            case 0x28: // i32.load
-            case 0x29: // i64.load
-            case 0x2a: // f32.load
-            case 0x2b: // f64.load
-            case 0x2c: // i32.load8_s
-            case 0x2d: // i32.load8_u
-            case 0x2e: // i32.load16_s
-            case 0x2f: // i32.load16_u
-            case 0x30: // i64.load8_s
-            case 0x31: // i64.load8_u
-            case 0x32: // i64.load16_s
-            case 0x33: // i64.load16_u
-            case 0x34: // i64.load32_s
-            case 0x35: // i64.load32_u
-            case 0x36: // i32.store
-            case 0x37: // i64.store
-            case 0x38: // f32.store
-            case 0x39: // f64.store
-            case 0x3a: // i32.store8
-            case 0x3b: // i32.store16
-            case 0x3c: // i64.store8
-            case 0x3d: // i64.store16
-            case 0x3e: // i64.store32
             {
-                let a = unsignedLEB128();
-                let o = unsignedLEB128();
+                let inst = (opt_code == 0x03) ? new LoopInst(opt_code) : new BlockInst(opt_code);
+                let type = data.readUint8();
+                if (type == 0x40) { // empty
+                    inst.type = type;
+                } else if (type == 0x7F || type == 0x7E || type == 0x7D || type == 0x7C || type == 0x7B  || type == 0x70 || type == 0x6F) {
+                    inst.type = type;
+                } else {
+                    data.offset--;
+                    type = data.readSLEB128();
+                    inst.type = type;
+                }
+                optcodes.push(inst);
+                inst.optcodes = [];
+                optcodes = inst.optcodes;
+                blkstack.push(inst);
                 break;
             }
-            case 0x3f: // suffix 0x00 memory.size
-            case 0x40: // suffix 0x00 memory.grow
+            case 0x04: // if <inst> 0x0B || if <inst> 0x05 <inst> 0x0B
+            {
+                let inst = new IfInst(opt_code);
+                optcodes.push(inst);
+                inst.optcodes = [];
+                optcodes = inst.optcodes;
+                blkstack.push(inst);
+                break;
+            }
+            case 0x05: // else <inst> 0x0B
+            {
+                let lastidx = blkstack.length - 1;
+                let blkst = blkstack[lastidx];
+                if (blkst.optcode != 0x04)
+                    throw new TypeError("else optcode found outside if optcode");
+                if (blkst.else)
+                    throw new TypeError("else followed by a else");
+                let inst = new IfInst(opt_code);
+                inst.optcodes = [];
+                blkst.else = inst;
+                optcodes = inst.optcodes;
+                blkstack[lastidx] = inst;
+                break;
+            }
+            case 0x0C: // br
+                optcodes.push({optcode: opt_code, labelidx: data.readULEB128()});
+                break;
+            case 0x0D: // br_if
+                optcodes.push({optcode: opt_code, labelidx: data.readULEB128()});
+                break;
+            case 0x0E: // br_table
+            {
+                let labels = [];
+                let cnt = data.readULEB128();
+                for (let x = 0; x < cnt; x++) {
+                    let label = data.readULEB128();
+                    labels.push(label);
+                }
+                let def = data.readULEB128();
+                let inst = new BranchTableInst(opt_code, labels);
+                inst.default_br = def;
+                optcodes.push(inst);
+                break;
+            }
+            case 0x0F: // return
+                optcodes.push(new ReturnInst(opt_code));
+                break;
+            case 0x10: // call
+                optcodes.push(new CallInst(opt_code, data.readULEB128()));
+                break;
+            case 0x11: // call_indirect
+                optcodes.push(new IndirectCallInst(opt_code, data.readULEB128(), data.readULEB128()));
+                //optcodes.push({optcode: opt_code, tableidx: data.readULEB128(), typeidx: data.readULEB128()});
+                break;
+            case 0x41: // i32.const     [] -> [i32]
+                optcodes.push({optcode: opt_code, value: data.readULEB128()});
+                break;
+            case 0x42: // i64.const     [] -> [i64]
+                optcodes.push({optcode: opt_code, value: data.readULEB128()});
+                break;
+            case 0x43: // f32.const     [] -> [f32]
+                optcodes.push({optcode: opt_code, value: data.readFloat32()});
+                break;
+            case 0x44: // f64.const     [] -> [f64]
+                optcodes.push({optcode: opt_code, value: data.readFloat64()});
+                break;
+            case 0x0b: // end
+            {
+                optcodes.push({optcode: opt_code});
+                blkstack.pop();
+
+                if (blkstack.length > 0) {
+                    let last = blkstack[blkstack.length - 1];
+                    optcodes = last.optcodes;
+                } else if (blkstack.length == 0) {
+                    brk = true;
+                }
+                break;
+            }
+            case 0x1A: // drop              [t] -> []
+                optcodes.push({optcode: opt_code});
+                break;
+            case 0x1B: // select
+                optcodes.push({optcode: opt_code});
+                break;
+            case 0x1C: // select t*
+                optcodes.push({optcode: opt_code});
+                break;
+            case 0x20: // local.get
+                optcodes.push({optcode: opt_code, x: data.readULEB128()});
+                break;
+            case 0x21: // local.set
+                optcodes.push({optcode: opt_code, x: data.readULEB128()});
+                break;
+            case 0x22: // local.tee
+                optcodes.push({optcode: opt_code, x: data.readULEB128()});
+                break;
+            case 0x23: // global.get
+                optcodes.push({optcode: opt_code, x: data.readULEB128()});
+                break;
+            case 0x24: // global.set
+                optcodes.push({optcode: opt_code, x: data.readULEB128()});
+                break;
+            case 0x25: // table.get
+                optcodes.push({optcode: opt_code, tableidx: data.readULEB128()});
+                break;
+            case 0x26: // table.set
+                optcodes.push({optcode: opt_code, tableidx: data.readULEB128()});
+                break;                
+            case 0x28: // i32.load          [i32] -> [i32]
+            case 0x29: // i64.load          [i32] -> [i64]
+            case 0x2a: // f32.load          [i32] -> [f32]
+            case 0x2b: // f64.load          [i32] -> [f64]
+            case 0x2c: // i32.load8_s       [i32] -> [i32]
+            case 0x2d: // i32.load8_u       [i32] -> [i32]
+            case 0x2e: // i32.load16_s      [i32] -> [i32]
+            case 0x2f: // i32.load16_u      [i32] -> [i32]
+            case 0x30: // i64.load8_s       [i32] -> [i64]
+            case 0x31: // i64.load8_u       [i32] -> [i64]
+            case 0x32: // i64.load16_s      [i32] -> [i64]
+            case 0x33: // i64.load16_u      [i32] -> [i64]
+            case 0x34: // i64.load32_s      [i32] -> [i64]
+            case 0x35: // i64.load32_u      [i32] -> [i64]
+            case 0x36: // i32.store         [i32] -> []
+            case 0x37: // i64.store         [i32] -> []
+            case 0x38: // f32.store         [i32] -> []
+            case 0x39: // f64.store         [i32] -> []
+            case 0x3a: // i32.store8        [i32] -> []
+            case 0x3b: // i32.store16       [i32] -> []
+            case 0x3c: // i64.store8        [i32] -> []
+            case 0x3d: // i64.store16       [i32] -> []
+            case 0x3e: // i64.store32       [i32] -> []
+            {
+                optcodes.push({optcode: opt_code, offset: data.readULEB128(), align: data.readULEB128()});
+                break;
+            }
+            case 0x3f: // suffix 0x00 memory.size   [] -> [i32]
+            {
+                let sub = data.readULEB128();
+                if (sub == 0x00) {
+                    optcodes.push({optcode: (opt_code << 8) | sub});
+                }
+                break;
+            }
+            case 0x40: // suffix 0x00 memory.grow   [i32] -> []
+            {
+                let sub = data.readULEB128();
+                if (sub == 0x00) {
+                    optcodes.push({optcode: (opt_code << 8) | sub});
+                } 
                 break
+            }
             case 0x45: // i32.eqz
             case 0x46: // i32.eq
             case 0x47: // i32.ne
@@ -693,10 +1036,7 @@ function decodeByteCode(u8, data, off)
             case 0x68: // i32.ctz
             case 0x69: // i32.popcnt
             case 0x6a: // i32.add
-                break;
             case 0x6b: // i32.sub
-                optcodes.push({optcode: opt_code});
-                break;
             case 0x6c: // i32.mul
             case 0x6d: // i32.div_s
             case 0x6e: // i32.div_u
@@ -791,14 +1131,20 @@ function decodeByteCode(u8, data, off)
             case 0xC2: // i64.extend8_s
             case 0xC3: // i64.extend16_s
             case 0xC4: // i64.extend32_s
-
+                optcodes.push({optcode: opt_code});
+                break;
             case 0xD0: // ref.null
+                optcodes.push({optcode: opt_code, reftype: data.readULEB128()});
+                break;
             case 0xD1: // ref.is_null
+                optcodes.push({optcode: opt_code});
+                break;
             case 0xD2: // ref.func
-
+                optcodes.push({optcode: opt_code, funcidx: data.readULEB128()});
+                break;
             case 0xfc:
             {
-                let sub = unsignedLEB128();
+                let sub = data.readULEB128();
                 switch (sub) {
                     case  0: // i32.trunc_sat_f32_s
                     case  1: // i32.trunc_sat_f32_u
@@ -808,25 +1154,44 @@ function decodeByteCode(u8, data, off)
                     case  5: // i64.trunc_sat_f32_u
                     case  6: // i64.trunc_sat_f64_s
                     case  7: // i64.trunc_sat_f64_u
-
+                        optcodes.push({optcode: (opt_code << 8) | sub});
+                        break;
                     case  8: // memory.init
+                        optcodes.push({optcode: (opt_code << 8) | sub, dataidx: data.readULEB128()});
+                        break;
                     case  9: // data.drop
+                        optcodes.push({optcode: (opt_code << 8) | sub, dataidx: data.readULEB128()});
+                        break;
                     case 10: // memory.copy [i32 i32 i32] -> []
                     case 11: // memory.fill [i32 i32 i32] -> []
+                        optcodes.push({optcode: (opt_code << 8) | sub});
+                        break;
                     //
                     case 12: // table.init
+                        optcodes.push({optcode: (opt_code << 8) | sub, tableidx: data.readULEB128(), elemidx: data.readULEB128()});
+                        break;
                     case 13: // elem.drop
+                        optcodes.push({optcode: (opt_code << 8) | sub, elemidx: data.readULEB128()});
+                        break;
                     case 14: // table.copy
+                        optcodes.push({optcode: (opt_code << 8) | sub, tableidx1: data.readULEB128(), tableidx2: data.readULEB128()});
+                        break;
                     case 15: // table.grow
+                        optcodes.push({optcode: (opt_code << 8) | sub, tableidx: data.readULEB128()});
+                        break;
                     case 16: // table.size [] -> [i32]
-                    case 17: // table.fill 
+                        optcodes.push({optcode: (opt_code << 8) | sub, tableidx: data.readULEB128()});
+                        break;
+                    case 17: // table.fill
+                        optcodes.push({optcode: (opt_code << 8) | sub, tableidx: data.readULEB128()});
+                        break;
                 }
                 break;
             } 
 
             case 0xFD: // multi-byte sequence
             {
-                let sub = unsignedLEB128();
+                let sub = data.readULEB128();
                 switch (sub) {
                     case  0: // v128.load
                     case  1: // v128.load8x8_s
@@ -842,10 +1207,15 @@ function decodeByteCode(u8, data, off)
                     case 92: // v128.load32_zero
                     case 93: // v128.load64_zero
                     case 11: // v128.store
+                        optcodes.push({optcode: (opt_code << 8) | sub, offset: data.readULEB128(), align: data.readULEB128()});
                         break;
                     case 12: // v128.const
+                        optcodes.push({optcode: (opt_code << 8) | sub});
+                        data.offset += 16;
                         break
                     case 13: // i8x16.shuffle
+                        optcodes.push({optcode: (opt_code << 8) | sub});
+                        data.offset += 16;
                         break
                     case 84: // v128.load8_lane
                     case 85: // v128.load16_lane
@@ -855,14 +1225,286 @@ function decodeByteCode(u8, data, off)
                     case 89: // v128.store16_lane
                     case 90: // v128.store32_lane
                     case 91: // v128.store64_lane
+                        optcodes.push({optcode: (opt_code << 8) | sub});
                         break;
                         // the list of ops convers the whole 0-255 byte range.
+                    
+
+                    case 0:     // m:memarg =>  v128.load m
+                    case 1:     // m:memarg =>  v128.load8x8_s m
+                    case 2:     // m:memarg =>  v128.load8x8_u m
+                    case 3:     // m:memarg =>  v128.load16x4_s m
+                    case 4:     // m:memarg =>  v128.load16x4_u m
+                    case 5:     // m:memarg =>  v128.load32x2_s m
+                    case 6:     // m:memarg =>  v128.load32x2_u m
+                    case 7:     // m:memarg =>  v128.load8_splat m
+                    case 8:     // m:memarg =>  v128.load16_splat m
+                    case 9:     // m:memarg =>  v128.load32_splat m
+                    case 10:    // m:memarg =>  v128.load64_splat m
+                    case 92:    // m:memarg =>  v128.load32_zero m
+                    case 93:    // m:memarg =>  v128.load64_zero m
+                    case 11:    // m:memarg =>  v128.store m
+                    {
+                        optcodes.push({optcode: (opt_code << 8) | sub, offset: data.readULEB128(), align: data.readULEB128()});
+                        break;
+                    }
+                    case 84:    // m:memarg l:laneidx   =>  v128.load8_lane m l
+                    case 85:    // m:memarg l:laneidx   =>  v128.load16_lane m l
+                    case 86:    // m:memarg l:laneidx   =>  v128.load32_lane m l
+                    case 87:    // m:memarg l:laneidx   =>  v128.load64_lane m l
+                    case 88:    // m:memarg l:laneidx   =>  v128.store8_lane m l
+                    case 89:    // m:memarg l:laneidx   =>  v128.store16_lane m l
+                    case 90:    // m:memarg l:laneidx   =>  v128.store32_lane m l
+                    case 91:    // m:memarg l:laneidx   =>  v128.store64_lane m l
+
+                        break;
+
+                    case 12:    // v128.const (b0 ... b15)
+
+                        break;
+                    case 13:    // i8x16.shuffle l
+
+                        break;
+                    case 21:    // l:laneidx    =>  i8x16.extract_lane_s l
+                    case 22:    // l:laneidx    =>  i8x16.extract_lane_u l
+                    case 23:    // l:laneidx    =>  i8x16.replace_lane l
+                    case 24:    // l:laneidx    =>  i16x8.extract_lane_s l
+                    case 25:    // l:laneidx    =>  i16x8.extract_lane_u l
+                    case 26:    // l:laneidx    =>  i16x8.replace_lane l
+                    case 27:    // l:laneidx    =>  i32x4.extract_lane l
+                    case 28:    // l:laneidx    =>  i32x4.replace_lane l
+                    case 29:    // l:laneidx    =>  i64x2.extract_lane l
+                    case 30:    // l:laneidx    =>  i64x2.replace_lane l
+                    case 31:    // l:laneidx    =>  f32x4.extract_lane l
+                    case 32:    // l:laneidx    =>  f32x4.replace_lane l
+                    case 33:    // l:laneidx    =>  f64x2.extract_lane l
+                    case 34:    // l:laneidx    =>  f64x2.replace_lane l
+
+                        break;
+                    case 14:    // i8x16.swizzle
+                    case 15:    // i8x16.splat
+                    case 16:    // i16x8.splat
+                    case 17:    // i32x4.splat
+                    case 18:    // i64x2.splat
+                    case 19:    // f32x4.splat
+                    case 20:    // f64x2.splat
+
+                    case 35:    // i8x16.eq
+                    case 36:    // i8x16.ne
+                    case 37:    // i8x16.lt_s
+                    case 38:    // i8x16.lt_u
+                    case 39:    // i8x16.gt_s
+                    case 40:    // i8x16.gt_u
+                    case 41:    // i8x16.le_s
+                    case 42:    // i8x16.le_u
+                    case 43:    // i8x16.ge_s
+                    case 44:    // i8x16.ge_u
+
+                    case 45:    // i16x8.eq
+                    case 46:    // i16x8.ne
+                    case 47:    // i16x8.lt_s
+                    case 48:    // i16x8.lt_u
+                    case 49:    // i16x8.gt_s
+                    case 50:    // i16x8.gt_u
+                    case 51:    // i16x8.le_s
+                    case 52:    // i16x8.le_u
+                    case 53:    // i16x8.ge_s
+                    case 54:    // i16x8.ge_u
+
+                    case 55:    // i32x4.eq
+                    case 56:    // i32x4.ne
+                    case 57:    // i32x4.lt_s
+                    case 58:    // i32x4.lt_u
+                    case 59:    // i32x4.gt_s
+                    case 60:    // i32x4.gt_u
+                    case 61:    // i32x4.le_s
+                    case 62:    // i32x4.le_u
+                    case 63:    // i32x4.ge_s
+                    case 64:    // i32x4.ge_u
+
+                    case 214:   // i64x2.eq
+                    case 215:   // i64x2.ne
+                    case 216:   // i64x2.lt
+                    case 217:   // i64x2.gt
+                    case 218:   // i64x2.le
+                    case 219:   // i64x2.ge
+
+                    case 65:    // f32x4.eq
+                    case 66:    // f32x4.ne
+                    case 67:    // f32x4.lt
+                    case 68:    // f32x4.gt
+                    case 69:    // f32x4.le
+                    case 70:    // f32x4.ge
+
+                    case 71:    // f64x2.eq
+                    case 72:    // f64x2.ne
+                    case 73:    // f64x2.lt
+                    case 74:    // f64x2.gt
+                    case 75:    // f64x2.le
+                    case 76:    // f64x2.ge
+
+                    case 77:    // v128.not
+                    case 78:    // v128.and
+                    case 79:    // v128.andnot
+                    case 80:    // v128.or
+                    case 81:    // v128.xor
+                    case 82:    // v128.bitselect
+                    case 83:    // v128.any_true
+
+                    case 96:    // i8x16.abs
+                    case 97:    // i8x16.neg
+                    case 98:    // i8x16.popcnt
+                    case 99:    // i8x16.all_true
+                    case 100:   // i8x16.bitmask
+                    case 101:   // i8x16.narrow_i16x8_s
+                    case 102:   // i8x16.narrow_i16x8_u
+                    case 107:   // i8x16.shl
+                    case 108:   // i8x16.shr_s
+                    case 109:   // i8x16.shr_u
+                    case 110:   // i8x16.add
+                    case 111:   // i8x16.add_sat_s
+                    case 112:   // i8x16.add_sat_u
+                    case 113:   // i8x16.sub
+                    case 114:   // i8x16.sub_sat_s
+                    case 115:   // i8x16.sub_sat_u
+                    case 118:   // i8x16.min_s
+                    case 119:   // i8x16.min_u
+                    case 120:   // i8x16.max_s
+                    case 121:   // i8x16.max_u
+                    case 123:   // i8x16.avgr_u
+
+                    case 124:   // i16x8.extadd_pairwise_i8x16_s
+                    case 125:   // i16x8.extadd_pairwise_i8x16_u
+                    case 128:   // i16x8.abs
+                    case 129:   // i16x8.neg
+                    case 130:   // i16x8.q15mulr_sat_s
+                    case 131:   // i16x8.all_true
+                    case 132:   // i16x8.bitmask
+                    case 133:   // i16x8.narrow_i32x4_s
+                    case 134:   // i16x8.narrow_i32x4_u
+                    case 135:   // i16x8.extend_low_i8x16_s
+                    case 136:   // i16x8.extend_high_i8x16_s
+                    case 137:   // i16x8.extend_low_i8x16_u
+                    case 138:   // i16x8.extend_high_i8x16_u
+                    case 139:   // i16x8.shl
+                    case 140:   // i16x8.shr_s
+                    case 141:   // i16x8.shr_u
+                    case 142:   // i16x8.add
+                    case 143:   // i16x8.add_sat_s
+                    case 144:   // i16x8.add_sat_u
+
+                    case 145:   // i16x8.sub
+                    case 146:   // i16x8.sub_sat_s
+                    case 147:   // i16x8.sub_sat_u
+
+                    case 149:   // i16x8.mul
+                    case 150:   // i16x8.min_s
+                    case 151:   // i16x8.min_u
+                    case 152:   // i16x8.max_s
+                    case 153:   // i16x8.max_u
+                    case 155:   // i16x8.avgr_u
+                    case 156:   // i16x8.extmul_low_i8x16_s
+                    case 157:   // i16x8.extmul_high_i8x16_s
+                    case 158:   // i16x8.extmul_low_i8x16_u
+                    case 159:   // i16x8.extmul_high_i8x16_u
+
+                    case 126:   // i32x4.extadd_pairwise_i16x8_s
+                    case 127:   // i32x4.extadd_pairwise_i16x8_u
+                    case 160:   // i32x4.abs
+                    case 161:   // i32x4.neg
+                    case 163:   // i32x4.all_true
+                    case 164:   // i32x4.bitmask
+                    case 167:   // i32x4.extend_low_i16x8_s
+                    case 168:   // i32x4.extend_high_i16x8_s
+                    case 169:   // i32x4.extend_low_i16x8_u
+                    case 170:   // i32x4.extend_high_i16x8_u
+
+                    case 171:   // i32x4.shl
+                    case 172:   // i32x4.shr_s
+                    case 173:   // i32x4.shr_u
+                    case 174:   // i32x4.add
+                    case 177:   // i32x4.sub
+
+                    case 181:   // i32x4.mul
+                    case 182:   // i32x4.min_s
+                    case 183:   // i32x4.min_u
+                    case 184:   // i32x4.max_s
+                    case 185:   // i32x4.max_u
+                    case 186:   // i32x4.dot_i16x8_s
+                    case 188:   // i32x4.extmul_low_i16x8_s
+                    case 189:   // i32x4.extmul_high_i16x8_s
+                    case 190:   // i32x4.extmul_low_i16x8_u
+                    case 191:   // i32x4.extmul_high_i16x8_u
+
+                    case 192:   // i64x2.abs
+                    case 193:   // i64x2.neg
+                    case 195:   // i64x2.all_true
+                    case 196:   // i64x2.bitmask
+                    case 199:   // i64x2.extend_low_i32x4_s
+                    case 200:   // i64x2.extend_high_i32x4_s
+                    case 201:   // i64x2.extend_low_i32x4_u
+                    case 202:   // i64x2.extend_high_i32x4_u
+                    case 203:   // i64x2.shl
+                    case 204:   // i64x2.shr_s
+                    case 205:   // i64x2.shr_u
+                    case 206:   // i64x2.add
+                    case 209:   // i64x2.sub
+                    case 213:   // i64x2.mul
+                    case 220:   // i64x2.extmul_low_i32x4_s
+                    case 221:   // i64x2.extmul_high_i32x4_s
+                    case 222:   // i64x2.extmul_low_i32x4_u
+                    case 223:   // i64x2.extmul_high_i32x4_u
+
+
+                    case 103:   // f32x4.ceil
+                    case 104:   // f32x4.floor
+                    case 105:   // f32x4.trunc
+                    case 106:   // f32x4.nearest
+                    case 224:   // f32x4.abs
+                    case 225:   // f32x4.neg
+                    case 227:   // f32x4.sqrt
+                    case 228:   // f32x4.add
+                    case 229:   // f32x4.sub
+                    case 230:   // f32x4.mul
+                    case 231:   // f32x4.div
+                    case 232:   // f32x4.min
+                    case 233:   // f32x4.max
+                    case 234:   // f32x4.pmin
+                    case 235:   // f32x4.pmax
+
+                    case 116:   // f64x2.ceil
+                    case 117:   // f64x2.floor
+                    case 122:   // f64x2.trunc
+                    case 148:   // f64x2.nearest
+                    case 236:   // f64x2.abs
+                    case 237:   // f64x2.neg
+                    case 239:   // f64x2.sqrt
+                    case 240:   // f64x2.add
+                    case 241:   // f64x2.sub
+                    case 242:   // f64x2.mul
+                    case 243:   // f64x2.div
+                    case 244:   // f64x2.min
+                    case 245:   // f64x2.max
+                    case 246:   // f64x2.pmin
+                    case 247:   // f64x2.pmax
+
+                    case 248:   // i32x4.trunc_sat_f32x4_s
+                    case 249:   // i32x4.trunc_sat_f32x4_u
+                    case 250:   // f32x4.convert_i32x4_s
+                    case 251:   // f32x4.convert_i32x4_u
+                    case 252:   // i32x4.trunc_sat_f64x2_s_zero
+                    case 253:   // i32x4.trunc_sat_f64x2_u_zero
+                    case 254:   // f64x2.convert_low_i32x4_s
+                    case 255:   // f64x2.convert_low_i32x4_u
+                    case 94:    // f32x4.demote_f64x2_zero
+                    case 95:    // f64x2.promote_low_f32x4
                 }
             }
 
             case 0xFE: // Atomic Memory Instructions
             {
-                switch (opt2) {
+                let sub = data.readULEB128();
+                switch (sub) {
                     case 0x00: // memory.atomic.notify      [i32 i32] -> [i32]
                     case 0x01: // memory.atomic.wait32      [i32 i32 i64] -> [i32]
                     case 0x02: // memory.atomic.wait64      [i32 i64 i64] -> [i32]
@@ -937,6 +1579,12 @@ function decodeByteCode(u8, data, off)
                     case 0x4C: // i64.atomic.rmw8.cmpxchg_u     [i32 i64 i64] -> [i64]
                     case 0x4D: // i64.atomic.rmw16.cmpxchg_u    [i32 i64 i64] -> [i64]
                     case 0x4E: // i64.atomic.rmw32.cmpxchg_u    [i32 i64 i64] -> [i64]
+                    {
+                        let o = data.readULEB128();
+                        let a = data.readULEB128();
+                        optcodes.push({optcode: (opt_code << 8) | sub, offset: o, align: a});
+                        break;
+                    }
                     default:
                         return null;
                 }
@@ -948,7 +1596,7 @@ function decodeByteCode(u8, data, off)
         }   
     }
 
-    return {start: start, end: off, optcodes: optcodes};
+    return {start: start, end: data.offset, optcodes: topInsts};
 }
 
 // TODO: implement a Reader/Writter class which itself increments the read/write position.`
@@ -968,11 +1616,31 @@ const CHUNK_TYPE = {
     CUSTOM: 0x00
 };
 
+// LEB128 is based on psudeo code from the wikipedia page as well as other sources
+// https://en.wikipedia.org/wiki/LEB128
+// https://gitlab.com/mjbecze/leb128/-/blob/master/unsigned.js
 class ByteArray {
 
     constructor(buffer) {
         this._data = null;
         this._u8 = null;
+
+        // TODO: should support DataView subrange trough .byteOffset 
+        if (buffer instanceof DataView) {
+            this._data = buffer;
+            this._u8 = new Uint8Array(buffer.buffer); 
+        } else if (buffer instanceof Uint8Array) {
+            this._data = new DataView(buffer.buffer);
+            this._u8 = buffer;
+        } else if (ArrayBuffer.isView(buffer)) {
+            this._data = new DataView(buffer.buffer);
+            this._u8 = new Uint8Array(buffer.buffer);
+        } else if (buffer instanceof ArrayBuffer) {
+            this._data = new DataView(buffer);
+            this._u8 = new Uint8Array(buffer);
+        } else {
+            throw TypeError("buffer is of unsupported type");
+        }
         this._offset = 0;
         this._littleEndian = true;
     }
@@ -981,8 +1649,21 @@ class ByteArray {
         return this._offset;
     }
 
+    set offset(value) {
+        let len = this._u8.byteLength;
+        if (value < 0 || value > len) {
+            throw new RangeError("index out of range");
+        }
+
+        this._offset = value;
+    }
+
     get endian() {
 
+    }
+
+    get length() {
+        return this._u8.byteLength;
     }
 
     // reading
@@ -1030,7 +1711,7 @@ class ByteArray {
     }
 
     readInt8() {
-        return this._data.getInt8(this._offset++, this._littleEndian);
+        return this._data.getInt8(this._offset++);
     }
 
     readUint16() {
@@ -1048,7 +1729,7 @@ class ByteArray {
     }
 
     readUint8() {
-        return this._data.getUint8(this._offset++, value);
+        return this._data.getUint8(this._offset++);
     }
 
     readULEB128() {
@@ -1091,6 +1772,56 @@ class ByteArray {
         }
 
         throw RangeError("encoding of LEB128 did not end correct");
+    }
+
+    readUTF8Bytes(length) {
+        let u8 = this._u8;
+        let off = this._offset;
+        let end = off + length;
+        let str = '';
+
+        if (length > 16 && u8.subarray && UTF8Decoder) {
+            str = UTF8Decoder.decode(u8.subarray(off, end));
+            this._offset = end;
+            return str;
+        } else {
+            // If building with TextDecoder, we have already computed the string length above, so test loop end condition against that
+            while (off < end) {
+                // For UTF8 byte structure, see:
+                // http://en.wikipedia.org/wiki/UTF-8#Description
+                // https://www.ietf.org/rfc/rfc2279.txt
+                // https://tools.ietf.org/html/rfc3629
+                let u0 = u8[off++];
+                if (!(u0 & 0x80)) {
+                    str += String.fromCharCode(u0);
+                    continue;
+                }
+                let u1 = u8[off++] & 63;
+                if ((u0 & 0xE0) == 0xC0) {
+                    str += String.fromCharCode(((u0 & 31) << 6) | u1);
+                    continue;
+                }
+                let u2 = u8[off++] & 63;
+                if ((u0 & 0xF0) == 0xE0) {
+                    u0 = ((u0 & 15) << 12) | (u1 << 6) | u2;
+                } else {
+                    if ((u0 & 0xF8) != 0xF0)
+                        console.warn('Invalid UTF-8 leading byte 0x' + u0.toString(16) + ' encountered when deserializing a UTF-8 string in wasm memory to a JS string!');
+                    u0 = ((u0 & 7) << 18) | (u1 << 12) | (u2 << 6) | (u8[off++] & 63);
+                }
+
+                if (u0 < 0x10000) {
+                    str += String.fromCharCode(u0);
+                } else {
+                    let ch = u0 - 0x10000;
+                    str += String.fromCharCode(0xD800 | (ch >> 10), 0xDC00 | (ch & 0x3FF));
+                }
+            }
+        }
+
+        this._offset = off;
+        
+        return str;
     }
 
     // writting
@@ -1190,541 +1921,816 @@ class ByteArray {
         throw RangeError("arraybuffer to small");
     }
 
+    writeUTF8Bytes(value) {
+        let u8 = this._u8;
+        let off = this._offset;
+
+        let start = off;
+        let end = u8.byteLength;
+        for (let i = 0; i < value.length; ++i) {
+            // Gotcha: charCodeAt returns a 16-bit word that is a UTF-16 encoded code unit, not a Unicode code point of the character! So decode UTF16->UTF32->UTF8.
+            // See http://unicode.org/faq/utf_bom.html#utf16-3
+            // For UTF8 byte structure, see http://en.wikipedia.org/wiki/UTF-8#Description and https://www.ietf.org/rfc/rfc2279.txt and https://tools.ietf.org/html/rfc3629
+            let u = value.charCodeAt(i); // possibly a lead surrogate
+            if (u >= 0xD800 && u <= 0xDFFF) {
+                let u1 = value.charCodeAt(++i);
+                u = 0x10000 + ((u & 0x3FF) << 10) | (u1 & 0x3FF);
+            }
+            if (u <= 0x7F) {
+                if (off >= end)
+                    break;
+                u8[off++] = u;
+            } else if (u <= 0x7FF) {
+                if (off + 1 >= end)
+                    break;
+                u8[off++] = 0xC0 | (u >> 6);
+                u8[off++] = 0x80 | (u & 63);
+            } else if (u <= 0xFFFF) {
+                    
+                if (off + 2 >= end)
+                    break;
+                u8[off++] = 0xE0 | (u >> 12);
+                u8[off++] = 0x80 | ((u >> 6) & 63);
+                u8[off++] = 0x80 | (u & 63);
+            } else {
+                if (off + 3 >= end)
+                    break;
+                if (u > 0x10FFFF)
+                    console.warn('Invalid Unicode code point 0x' + u.toString(16) + ' encountered when serializing a JS string to a UTF-8 string in wasm memory! (Valid unicode code points should be in range 0-0x10FFFF).');
+                u8[off++] = 0xF0 | (u >> 18);
+                u8[off++] = 0x80 | ((u >> 12) & 63);
+                u8[off++] = 0x80 | ((u >> 6) & 63);
+                u8[off++] = 0x80 | (u & 63);
+            }
+        }
+        
+        this._offset = off;
+
+        return off - start;
+    }
+
 };
+
+// Returns the number of bytes the given Javascript string takes if encoded as a UTF8 byte array, EXCLUDING the null terminator byte.
+function lengthBytesUTF8(str) {
+    let len = 0;
+    for (let i = 0; i < str.length; ++i) {
+        // Gotcha: charCodeAt returns a 16-bit word that is a UTF-16 encoded code unit, not a Unicode code point of the character! So decode UTF16->UTF32->UTF8.
+        // See http://unicode.org/faq/utf_bom.html#utf16-3
+        let u = str.charCodeAt(i); // possibly a lead surrogate
+        if (u >= 0xD800 && u <= 0xDFFF)
+            u = 0x10000 + ((u & 0x3FF) << 10) | (str.charCodeAt(++i) & 0x3FF);
+        if (u <= 0x7F)
+            ++len;
+        else if (u <= 0x7FF)
+            len += 2;
+        else if (u <= 0xFFFF)
+            len += 3;
+        else 
+            len += 4;
+    }
+    
+    return len;
+}
+
+class WasmFunction {
+
+    constructor() {
+
+    }
+};
+
+class FuncType {
+
+    constructor() {
+
+    }
+};
+
+function decodeTypeSection(data, len) {
+    let end = data.offset + len;
+    let cnt = data.readULEB128();
+    let functypes = [];
+    for (let y = 0; y < cnt; y++) {
+        let prefix = data.readUint8();
+        if (prefix != 0x60) {
+            console.error("invalid functype prefix 0x%s", prefix.toString(16));
+            return null;
+        }
+        let argc = data.readULEB128();
+        let argv = argc > 0 ? [] : null;
+        for (let x = 0; x < argc; x++) {
+            let type = data.readUint8();
+            argv.push(type);
+        }
+
+        let retc = data.readULEB128();
+        let retv = retc > 0 ? [] : null;
+        for (let x = 0; x < retc; x++) {
+            let type = data.readUint8();
+            retv.push(type);
+        }
+        let functype = new FuncType();
+        functype.argc = argc;
+        functype.argv = argv;
+        functype.retc = retc;
+        functype.retv = retv;
+        functypes.push(functype);
+    }
+
+    console.log("functype vector count: %d", cnt);
+    console.log(functypes);
+
+    dump_functypes(functypes);
+
+    return functypes;
+}
+
+class ImportedFunction {
+
+    constructor() {
+        this.module = undefined;
+        this.name = undefined;
+        this.typeidx = undefined;
+    }
+};
+
+class ImportedTable {
+
+    constructor() {
+        this.module = undefined;
+        this.name = undefined;
+        this.min = null;
+        this.max = null;
+    }
+};
+
+class ImportedMemory {
+
+    constructor() {
+        this.module = undefined;
+        this.name = undefined;
+        this.min = null;
+        this.max = null;
+        this.shared = false;
+    }
+};
+
+class ImportedGlobal {
+
+    constructor() {
+        this.module = undefined;
+        this.name = undefined;
+        this.globaltype = undefined;
+        this.mutable = false;
+    }
+};
+
+function decodeImportSection(data, len, m) {
+    let end = data.offset + len;
+    let cnt = data.readULEB128();
+    let results = [];
+    while (data.offset < end) {
+        let mlen = data.readULEB128();
+        let mod = data.readUTF8Bytes(mlen);
+        let nlen = data.readULEB128();
+        let name = data.readUTF8Bytes(nlen);
+        let type = data.readUint8();
+        let imp;
+        if (type == 0x00) {         // function
+            imp = new ImportedFunction();
+            imp.typeidx = data.readULEB128();
+            if (!m.functions) {
+                m.functions = [];
+            }
+            m.functions.push(imp);
+        } else if (type == 0x01) {  // table
+            imp = new ImportedTable();
+            imp.reftype = data.readUint8();
+            let limit = data.readUint8();
+            if (limit == 0x01) {
+                imp.min = data.readULEB128();
+                imp.max = data.readULEB128();
+            } else if (limit == 0x00) {
+                imp.min = data.readULEB128();
+            }
+            if (!m.tables) {
+                m.tables = [];
+            }
+            m.tables.push(imp);
+        } else if (type == 0x02) {  // memory
+            let limit = data.readUint8();
+            if (limit == 0x01) {
+                imp = new ImportedMemory();
+                imp.min = data.readULEB128();
+                imp.max = data.readULEB128();
+                imp.shared = false;
+            } else if (limit == 0x00) {
+                imp = new ImportedMemory();
+                imp.min = data.readULEB128();
+                imp.shared = false;
+            } else if (limit == 0x02) {
+                imp = new ImportedMemory();
+                imp.min = data.readULEB128();
+                imp.shared = true;
+            } else if (limit == 0x03) {
+                imp = new ImportedMemory();
+                imp.min = data.readULEB128();
+                imp.max = data.readULEB128();
+                imp.shared = true;              
+            } else {
+                console.error("found memory limit of type %d", type);
+            }
+            if (!m.memory) {
+                m.memory = [];
+            }
+            m.memory.push(imp);
+        } else if (type == 0x03) {  // global
+            imp = new ImportedGlobal();
+            let t = data.readUint8();
+            imp.globaltype = type_name(t);
+            imp.valtype = type_name(t);
+            imp.mutable = data.readUint8() === 1;
+            if (!m.globals) {
+                m.globals = [];
+            }
+            m.globals.push(imp);
+        } else {
+            console.error("found unsupported import type %d", type);
+            continue;
+        }
+
+        if (imp) {
+            imp.type = export_type_name(type);
+            imp.module = mod;
+            imp.name = name;
+            results.push(imp);
+        }
+    }
+    console.log("import vector count: %d", cnt);
+    console.log(results);
+    // TODO: map every existing module-name
+    return results;
+}
+
+
+function decodeFuncSection(data, len, mod) {
+    let end = data.offset + len;
+    let cnt = data.readULEB128();
+    let results = [];
+    let arr;
+    let funcidx = 0;
+    if (!mod.functions) {
+        mod.functions = [];
+    }
+    arr = mod.functions;
+    while (data.offset < end) {
+        let typeidx = data.readULEB128();
+        let fn = new WasmFunction();
+        fn.type = mod.types[typeidx];
+        fn.funcidx = funcidx++;
+        arr.push(fn);
+        results.push(fn);
+    }
+    console.log("function vector count: %d", cnt);
+    return results;
+}
+
+function decodeTableSection(data, len, mod) {
+    let end = data.offset + len;
+    let cnt = data.readULEB128();
+    let arr, tables = [];
+    if (!mod.tables)
+        mod.tables = [];
+    arr = mod.tables;
+    for (let i = 0; i < cnt; i++) {
+        let table = {};
+        table.reftype = data.readUint8();
+        let limits = data.readUint8();
+        if (limits == 0x00) {
+            table.min = data.readULEB128();
+        } else if (limits == 0x01) {
+            table.min = data.readULEB128();
+            table.max = data.readULEB128();
+        }
+        tables.push(table);
+        arr.push(table);
+    }
+
+    console.log("table vector count: %d", cnt);
+    console.log(tables);
+}
+
+function decodeMemorySection(data, len) {
+    let end = data.offset + len;
+    let cnt = data.readULEB128();
+    let results = [];
+    while (data.offset < end) {
+        let limit = data.readUint8();
+        let obj = {};
+        if (limit == 0x01) {
+            obj.min = data.readULEB128();
+            obj.max = data.readULEB128();
+            obj.shared = false;
+        } else if (limit == 0x00) {
+            obj.min = data.readULEB128();
+            obj.shared = false;
+        } else if (limit == 0x02) {
+            obj.min = data.readULEB128();
+            obj.shared = true;
+        } else if (limit == 0x03) {
+            obj.min = data.readULEB128();
+            obj.max = data.readULEB128();
+            obj.shared = true;              
+        }
+        results.push(obj);
+    }
+    console.log("memory vector count: %d", cnt);
+    console.log(results);
+}
+
+function decodeGlobalSection(data, len, mod) {
+    let end = data.offset + len;
+    let cnt = data.readULEB128();
+    let results = [];
+    let arr;
+    if (!mod.globals) {
+        mod.globals = [];
+    }
+    arr = mod.globals;
+    while (data.offset < end) {
+        let type = data.readUint8();
+        let mut = data.readUint8();
+        let optcode = decodeByteCode(data);
+        let obj = {
+            type: type_name(type),
+            mutable: (mut === 1),
+            init: optcode.optcodes,
+        };
+        results.push(obj);
+        arr.push(obj);
+        data.offset = optcode.end;
+    }
+    console.log("global vector count: %d", cnt);
+    console.log(results);
+}
+
+class ExportedFunction {
+
+    constructor() {
+        this.type = "function";
+        this.name = undefined;
+        this.typeidx = undefined;
+    }
+};
+
+class ExportedTable {
+
+    constructor() {
+        this.type = "table";
+        this.name = undefined;
+        this.min = null;
+        this.max = null;
+    }
+};
+
+class ExportedMemory {
+
+    constructor() {
+        this.type = "memory";
+        this.name = undefined;
+        this.min = null;
+        this.max = null;
+        this.shared = false;
+    }
+};
+
+class ExportedGlobal {
+
+    constructor() {
+        this.type = "global";
+        this.name = undefined;
+        this.globaltype = undefined;
+        this.mutable = false;
+    }
+};
+
+function decodeExportSection(data, len, mod) {
+    let end = data.offset + len;
+    let cnt = data.readULEB128();
+    let results = [];
+    let results2 = [];
+    while (data.offset < end) {
+        let nlen = data.readULEB128();
+        let name = data.readUTF8Bytes(nlen);
+        let type = data.readUint8();
+        let idx = data.readULEB128();
+        results.push({
+            name: name,
+            type: export_type_name(type),
+            index: idx,
+        });
+
+        if (type == 0x00) {
+            let exp = new ExportedFunction();
+            exp.name = name;
+            exp.function = mod.functions[idx];
+            results2.push(exp);
+        } else if (type == 0x01) {
+            let exp = new ExportedTable();
+            exp.name = name;
+            exp.table = mod.tables[idx];
+            results2.push(exp);
+        } else if (type == 0x02) {
+            let exp = new ExportedMemory();
+            exp.name = name;
+            exp.memory = mod.memory[idx];
+            results2.push(exp);
+        } else if (type == 0x03) {
+            let exp = new ExportedGlobal();
+            exp.name = name;
+            exp.global = mod.globals[idx];
+            results2.push(exp);
+        } else {
+            console.warn("export of type %d is not supported", type);
+        }
+    }
+    console.log("export vector count: %d", cnt);
+    console.log(results);
+    console.log(results2);
+
+    mod.exports = results2;
+}
+
+function decodeStartSection(data, len) {
+    let funcidx = data.readULEB128();
+    console.log("start section entry-fn-idx: %d", funcidx);
+}
+
+function decodeElementSection(data, secsz) {
+    let end = data.offset + secsz;
+    let cnt = data.readULEB128();
+    for (let i = 0; i < cnt; i++) {
+        let prefix = data.readULEB128();
+        if (prefix == 0x00) {
+            let expr = decodeByteCode(data);
+            let vlen = data.readULEB128();
+            let vec = [];
+            for (let x = 0; x < vlen; x++) {
+                let funcidx = data.readULEB128();
+                vec.push(funcidx);
+            }
+
+            console.log("prefix: %d expr: %o vec(funcidx) %o", prefix, expr, vec);
+        }
+    }
+
+    console.log("element section vector count: %d", cnt);
+}
+
+function decodeCodeSection(data, len, mod, funcvec) {
+    let end = data.offset + len;
+    let cnt = data.readULEB128();
+    let idx = 0;
+    let results = [];
+    while (data.offset < end) {
+        let bytesz = data.readULEB128();
+        let tmp = data.offset;
+        let lcnt = data.readULEB128();
+        let locals = lcnt > 0 ? [] : null;
+        for(let i = 0;i < lcnt;i++) {
+            let n = data.readULEB128();
+            let t = data.readUint8();
+            locals.push({count: n, type: type_name(t)});
+        }
+        let optcode_start = data.offset;
+        let optcode_end = tmp + bytesz;
+        let optcodes = decodeByteCode(data);
+        let fn = funcvec[idx++];
+        fn.locals = locals;
+        fn.optcode_start = optcode_start;
+        fn.optcode_end = optcode_end;
+        fn.optcodes = optcodes.optcodes;
+        data.offset = optcode_end;
+    }
+    console.log("code vector count: %d", cnt);
+}
+
+function decodeDataSection(data, len) {
+    let end = data.offset + len;
+    let cnt = data.readULEB128();
+    let results = [];
+    while (data.offset < end) {
+        let kind = data.readULEB128();
+        if (kind == 0x00) {
+            let inst = decodeByteCode(data);
+            let data_start = inst.end;
+            data.offset = inst.end;
+            let datasz = data.readULEB128();
+            results.push({
+                memidx: 0,
+                inst: inst,
+                offset: data_start,
+                size: datasz,
+            });
+            data.offset += datasz;
+        } else if (kind == 0x01) {
+            console.warn("data segment of type `init b*, mode passive` is not implemented");
+            break;
+        } else if (kind == 0x02) {
+            console.warn("data segment of type `init b*, mode active {memory, offset }` is not implemented");
+            let memidx = data.readULEB128();
+            break;
+        } else {
+            console.warn("undefined data-segment mode!");
+            break;
+        }
+    }
+    console.log("data vector count: %d", cnt);
+    console.log(results);
+
+    return results;
+}
+
+function decodeCustomSection(data, section, size) {
+    let end = data.offset + len;
+    let results = [];
+    let nlen = data.readUint8();
+    let name = data.readUTF8Bytes(nlen);
+    let start = data.offset;
+    //let datasz = data.readULEB128();
+    results.push({
+        name: name,
+        start: start,
+        end : end,
+    });
+    console.log("custom section name: %s", name);
+    section.name = name;
+    console.log(results);
+
+    if (name == "producers") {
+        let info = decodeCustomProducers(start, end);
+    } else if (name == "name") {
+        let info = decodeCustomName(start, end);
+    }
+
+    // .debug_info
+    // .debug_loc
+    // .debug_ranges
+    // .debug_abbrev
+    // .debug_line
+    // .debug_str
+    // 
+    // are actually embedded DWARF debugging information.
+    // 
+    // https://github.com/WebAssembly/tool-conventions/blob/main/Debugging.md
+}
+
+// known custom sections.
+
+// https://github.com/WebAssembly/tool-conventions/blob/main/ProducersSection.md
+function decodeCustomProducers(data, size) {
+    let count = data.readULEB128();
+    console.log("count: %d", count);
+    let dict = {};
+    for (let i = 0; i < count; i++) {
+        let nlen = data.readULEB128();
+        let key = data.readUTF8Bytes(nlen);
+
+        let vcnt = data.readULEB128();
+        if (vcnt == 1) {
+            let vlen = data.readULEB128();
+            let val = data.readUTF8Bytes(vlen);
+            vlen = data.readULEB128(); // version string.
+            if (vlen > 0) {
+                let verv = data.readUTF8Bytes(vlen);
+                dict[key] = {value: val, version: verv};
+            } else {
+                dict[key] = val;
+            }
+            
+        } else if (vcnt > 0) {
+            let values = [];
+            for (let x = 0; x < vcnt; x++) {
+                let vlen = data.readULEB128();
+                let val = data.readUTF8Bytes(vlen);
+                vlen = data.readULEB128(); // version string.
+                if (vlen > 0) {
+                    let verv = data.readUTF8Bytes(vlen);
+                    values.push({value: val, version: verv});
+                } else {
+                    values.push(val);
+                }
+            }
+            dict[key] = values;
+        }
+    }
+
+    console.log(dict);
+    return dict;
+}
+
+function decode_name_map(data, size) {
+
+    let end = data.offset + size;
+    let cnt = data.readULEB128();
+    let map = new Map();
+    while (data.offset < end) {
+        let idx = data.readULEB128();
+        let nlen = data.readULEB128();
+        let name = data.readUTF8Bytes(nlen);
+        map.set(idx, name);
+    }
+
+    return map;
+}
+
+// https://webassembly.github.io/spec/core/appendix/custom.html
+// https://github.com/WebAssembly/extended-name-section/blob/main/document/core/appendix/custom.rst
+// 
+// id   desc
+// 0    module name
+// 1    function names
+// 2    local names
+// 3    label names
+// 4    type names
+// 5    table names
+// 6    memory names
+// 7    global names
+// 8    element segment names
+// 9    data segment names
+function decodeCustomName(data, size) {
+
+    let results = {};
+
+    let end = data.offset + size;
+    while (data.offset < end) {
+
+        let id = data.readUint8();
+        let subsz = data.readULEB128();
+        let substart = data.offset;
+        if (id == 0x01) {
+
+            console.log("id %d size: %d", id, subsz);
+            let map = decode_name_map(data, subsz);
+            console.log(map);
+            data.offset = substart + subsz;
+            results.functions = map;
+
+        } else if (id == 0x00) {
+            console.log("id %d size: %d", id, subsz);
+            data.offset = substart + subsz;
+        } else if (id == 0x02) {
+            console.log("id %d size: %d", id, subsz);
+            data.offset = substart + subsz;
+        } else if (id == 0x07) {
+
+            console.log("id %d size: %d", id, subsz);
+            let map = decode_name_map(data, subsz);
+            console.log(map);
+            data.offset = substart + subsz;
+            results.global = map;
+
+        } else if (id == 0x09) {
+
+            console.log("id %d size: %d", id, subsz);
+            let map = decode_name_map(data, subsz);
+            console.log(map);
+            data.offset = substart + subsz;
+            results.data = map;
+        } else {
+            console.warn("id %d size: %d", id, subsz);
+            data.offset = substart + subsz;
+        }
+    }
+
+    return results;
+}
+
+function isValidSectionType(type) {
+
+}
 
 // https://webassembly.github.io/spec/core/binary/modules.html#binary-version
 // https://coinexsmartchain.medium.com/wasm-introduction-part-1-binary-format-57895d851580
 function parseWebAssemblyBinary(buf) {
-    let u8 = new Uint8Array(buf);
-    let data = new DataView(buf);
-    let magic = data.getUint32(0, true);
-    let version = data.getUint32(4, true);
-    if (data.getUint8(0) != 0x00 || data.getUint8(1) != 0x61 || data.getUint8(2) != 0x73 || data.getUint8(3) != 0x6D) {
+    let data = new ByteArray(buf);
+    let magic = data.readUint32();
+    let version = data.readUint32();
+
+    data.offset = 0;
+    if (data.readUint8() != 0x00 || data.readUint8() != 0x61 || data.readUint8() != 0x73 || data.readUint8() != 0x6D) {
         console.error("magic is not equal to '\\0asm'");
         return false;
     }
 
     console.log("magic: %s version: %d", magic.toString(16), version);
 
-    let off = 8;
-    let len = data.byteLength;
-
-    function unsignedLEB128() {
-        // consumes an unsigned LEB128 integer starting at `off`.
-        // changes `off` to immediately after the integer
-        let result = 0;
-        let shift = 0;
-        let byte = 0;
-        do {
-                byte = u8[off++];
-                result += (byte & 0x7F) << shift;
-                shift += 7;
-        } while (byte & 0x80);
-
-        return result;
-    }
-
-    function decodeTypeSection(section, len) {
-        let end = off + len;
-        let cnt = data.getUint8(off++);
-        while (off < end) {
-            let type = data.getUint8(off++);
-            let argc = data.getUint8(off++);
-            let argv = argc > 0 ? [] : 'void';;
-            for(let i = 0;i < argc;i++) {
-                let arg = data.getUint8(off++);
-                argv.push(type_name(arg));
-            }
-            if (argc == 1) {
-                argv = argv[0];
-            }
-            let retc = data.getUint8(off++);
-            let retv = retc > 0 ? [] : 'void';
-            for(let i = 0;i < retc;i++) {
-                let ret = data.getUint8(off++);
-                retv.push(type_name(ret));
-            }
-            if (retc == 1) {
-                retv = retv[0];
-            }
-
-            if (type == 0x60) {
-                dump_func_type(type, argc, argv, retc, retv);
-            } else {
-                console.log("type: %s argv: %o retv: %o", type.toString(16), argv, retv);
-            }
-            
-            // // 0x7F: i32, 0x7E: i64, 0x7D: f32, 0x7C: f64
-        }
-    }
-
-    function decodeImportSection(section, len) {
-        let end = off + len;
-        let cnt = unsignedLEB128();
-        let results = [];
-        while (off < end) {
-            let mlen = unsignedLEB128();
-            let mod = UTF8ArrayToString(u8, off, mlen);
-            off += mlen;
-            let nlen = unsignedLEB128();
-            let name = UTF8ArrayToString(u8, off, nlen);
-            off += nlen;
-            let type = data.getUint8(off++);
-            let obj = {};
-            obj.mod = mod;
-            obj.name = name;
-            obj.type = export_type_name(type);
-            if (type == 0x00) {
-                obj.typeidx = unsignedLEB128();
-            } else if (type == 0x01) {
-                obj.reftype = data.getUint8(off++);
-                let limit = data.getUint8(off++);
-                let min = null;
-                let max = null;
-                if (limit == 0x01) {
-                    obj.min = unsignedLEB128();
-                    obj.max = unsignedLEB128();
-                } else if (limit == 0x00) {
-                    obj.min = unsignedLEB128();
-                }
-            } else if (type == 0x02) {
-                let limit = data.getUint8(off++);
-                let min = null;
-                let max = null;
-                if (limit == 0x01) {
-                    obj.min = unsignedLEB128();
-                    obj.max = unsignedLEB128();
-                    obj.shared = false;
-                } else if (limit == 0x00) {
-                    obj.min = unsignedLEB128();
-                    obj.shared = false;
-                } else if (limit == 0x02) {
-                    obj.min = unsignedLEB128();
-                    obj.shared = true;
-                } else if (limit == 0x03) {     // can't find this anywhere in spec, but wat2wasm seams indicate shared memory by using limit of type 3
-                    obj.min = unsignedLEB128();
-                    obj.max = unsignedLEB128();
-                    obj.shared = true;              
-                }
-            } else if (type == 0x03) {
-                let t = unsignedLEB128();
-                obj.globaltype = type_name(t);
-                obj.mutable = data.getUint8(off++);
-            } else {
-                console.error("found memory limit of type %d", type);
-            }
-            results.push(obj);
-        }
-        console.log("import vector count: %d", cnt);
-        console.log(results);
-        // TODO: map every existing module-name
-    }
-
-    
-    function decodeFuncSection(section, len) {
-        let end = off + len;
-        let cnt = unsignedLEB128();
-        let results = [];
-        while (off < end) {
-            let typeidx = unsignedLEB128();
-            results.push(typeidx);
-        }
-        console.log("function vector count: %d", cnt);
-        console.log(results);
-    }
-
-    function decodeTableSection(section, len) {
-        let end = off + len;
-        let cnt = unsignedLEB128();
-        let results = [];
-        //while (off < end) {
-            //let typeidx = unsignedLEB128();
-            //results.push(typeidx);
-        //}
-        console.log("table vector count: %d", cnt);
-        console.log(undefined);
-    }
-
-    function decodeMemorySection(section, len) {
-        let end = off + len;
-        let cnt = unsignedLEB128();
-        let results = [];
-        while (off < end) {
-            let type = data.getUint8(off++);
-            let min = null;
-            let max = null;
-            if (type == 0x01) {
-                min = unsignedLEB128();
-                max = unsignedLEB128();
-            } else if (type == 0x00) {
-                min = unsignedLEB128();
-            }
-            results.push({
-                min: min,
-                max: max
-            });
-        }
-        console.log("memory vector count: %d", cnt);
-        console.log(results);
-    }
-
-    function decodeGlobalSection(section, len) {
-        let end = off + len;
-        let cnt = unsignedLEB128();
-        let results = [];
-        while (off < end) {
-            let type = data.getUint8(off++);
-            let mut = data.getUint8(off++);
-            let optcode = decodeByteCode(u8, data, off);
-            results.push({
-                type: type_name(type),
-                mutable: (mut === 1),
-                expr: optcode.optcodes,
-            });
-            off = optcode.end;
-        }
-        console.log("global vector count: %d", cnt);
-        console.log(results);
-    }
-
-    function decodeExportSection(section, len) {
-        let end = off + len;
-        let cnt = unsignedLEB128();
-        let results = [];
-        while (off < end) {
-            let nlen = unsignedLEB128();
-            let name = UTF8ArrayToString(u8, off, nlen);
-            off += nlen;
-            let type = data.getUint8(off++);
-            let idx = unsignedLEB128();
-            results.push({
-                name: name,
-                type: export_type_name(type),
-                index: idx,
-            });
-        }
-        console.log("export vector count: %d", cnt);
-        console.log(results);
-    }
-
-    function decodeStartSection(section, len) {
-        let funcidx = unsignedLEB128();
-        console.log("start section entry-fn-idx: %d", funcidx);
-    }
-
-    function decodeElementSection(section, len) {
-        let end = off + len;
-        let cnt = unsignedLEB128();
-        console.log("element section vector count: %d", cnt);
-    }
-
-    function decodeCodeSection(section, len) {
-        let end = off + len;
-        let cnt = unsignedLEB128();
-        let results = [];
-        while (off < end) {
-            let bytesz = unsignedLEB128();
-            let tmp = off;
-            let lcnt = unsignedLEB128();
-            let locals = lcnt > 0 ? [] : null;
-            for(let i = 0;i < lcnt;i++) {
-                let n = unsignedLEB128();
-                let t = data.getUint8(off++);
-                locals.push({count: n, type: type_name(t)});
-            }
-            let optcode_start = off;
-            let optcode_end = tmp + bytesz;
-            if (results.length == 14) {
-                decodeByteCode(u8, data, optcode_start, optcode_end);
-            }
-            results.push({
-                locals: locals,
-                optcode_start: optcode_start,
-                optcode_end: optcode_end,
-            });
-            off = optcode_end;
-        }
-        console.log("code vector count: %d", cnt);
-        console.log(results);
-    }
-
-    function decodeDataSection(section, len) {
-        let end = off + len;
-        let cnt = unsignedLEB128();
-        let results = [];
-        while (off < end) {
-            let kind = unsignedLEB128();
-            if (kind == 0x00) {
-                let inst = decodeByteCode(u8, data, off);
-                let data_start = inst.end;
-                off = inst.end;
-                let datasz = unsignedLEB128();
-                results.push({
-                    memidx: 0,
-                    inst: inst,
-                    offset: data_start,
-                    size: datasz,
-                });
-                off += datasz;
-            } else if (kind == 0x01) {
-                console.warn("data segment of type `init b*, mode passive` is not implemented");
-                break;
-            } else if (kind == 0x02) {
-                console.warn("data segment of type `init b*, mode active {memory, offset }` is not implemented");
-                let memidx = unsignedLEB128();
-                break;
-            } else {
-                console.warn("undefined data-segment mode!");
-                break;
-            }
-        }
-        console.log("data vector count: %d", cnt);
-        console.log(results);
-    }
-
-    function decodeCustomSection(section, len) {
-        let end = off + len;
-        let results = [];
-        let nlen = data.getUint8(off++);
-        let name = UTF8ArrayToString(u8, off, nlen);
-        let start = off + nlen;
-        //let datasz = unsignedLEB128();
-        results.push({
-            name: name,
-            start: start,
-            end : end,
-        });
-        console.log("custom section name: %s", name);
-        section.name = name;
-        console.log(results);
-
-        if (name == "producers") {
-            off += nlen;
-            let info = decodeCustomProducers(start, end);
-        } else if (name == "name") {
-            off += nlen;
-            let info = decodeCustomName(start, end);
-        }
-
-        // .debug_info
-        // .debug_loc
-        // .debug_ranges
-        // .debug_abbrev
-        // .debug_line
-        // .debug_str
-        // 
-        // are actually embedded DWARF debugging information.
-        // 
-        // https://github.com/WebAssembly/tool-conventions/blob/main/Debugging.md
-    }
-
-    // known custom sections.
-    
-    // https://github.com/WebAssembly/tool-conventions/blob/main/ProducersSection.md
-    function decodeCustomProducers(start, end) {
-        let count = unsignedLEB128();
-        console.log("count: %d", count);
-        let dict = {};
-        for (let i = 0; i < len; i++) {
-            let nlen = unsignedLEB128();
-            let key = UTF8ArrayToString(u8, off, nlen);
-            off += nlen;
-
-            let vcnt = unsignedLEB128();
-            if (vcnt == 1) {
-                let vlen = unsignedLEB128();
-                let val = UTF8ArrayToString(u8, off, vlen);
-                off += vlen;
-                vlen = unsignedLEB128(); // version string.
-                if (vlen > 0) {
-                    let verv = UTF8ArrayToString(u8, off, vlen);
-                    dict[key] = {value: val, version: verv};
-                    off += vlen;
-                } else {
-                    dict[key] = val;
-                }
-                
-            } else if (vcnt > 0) {
-                let values = [];
-                for (let x = 0; x < vcnt; x++) {
-                    let vlen = unsignedLEB128();
-                    let val = UTF8ArrayToString(u8, off, vlen);
-                    off += vlen;
-                    vlen = unsignedLEB128(); // version string.
-                    if (vlen > 0) {
-                        let verv = UTF8ArrayToString(u8, off, vlen);
-                        values.push({value: val, version: verv});
-                        off += vlen;
-                    } else {
-                        values.push(val);
-                    }
-                }
-                dict[key] = values;
-            }
-        }
-
-        console.log(dict);
-        return dict;
-    }
-
-    function decode_name_map(start, end) {
-
-        let cnt = unsignedLEB128();
-        let map = new Map();
-        while (off < end) {
-            let idx = unsignedLEB128();
-            let nlen = unsignedLEB128();
-            let name = UTF8ArrayToString(u8, off, nlen);
-            off += nlen;
-            map.set(idx, name);
-        }
-
-        return map;
-    }
-
-    // https://webassembly.github.io/spec/core/appendix/custom.html
-    // https://github.com/WebAssembly/extended-name-section/blob/main/document/core/appendix/custom.rst
-    function decodeCustomName(start, end) {
-
-        while (off < end) {
-
-            let id = data.getUint8(off++);
-            let sz = unsignedLEB128();
-            let substart = off;
-            if (id == 0x01) {
-
-                console.log("id %d size: %d", id, sz);
-                let map = decode_name_map(off, substart + sz);
-                console.log(map);
-
-            } else if (id == 0x00) {
-                console.log("id %d size: %d", id, sz);
-                off = substart + sz;
-            } else if (id == 0x02) {
-                console.log("id %d size: %d", id, sz);
-                off = substart + sz;
-            } else if (id == 0x07) {
-
-                console.log("id %d size: %d", id, sz);
-                let map = decode_name_map(off, substart + sz);
-                console.log(map);
-                off = substart + sz;
-
-            } else if (id == 0x09) {
-
-                console.log("id %d size: %d", id, sz);
-                let map = decode_name_map(off, substart + sz);
-                console.log(map);
-                off = substart + sz;
-            } else {
-                console.warn("id %d size: %d", id, sz);
-                off = substart + sz;
-            }
-        }
-    }
+    data.offset = 8;
+    let end = buf.byteLength;
 
     let results = [];
     let chunks = [];
 
+    while (data.offset < end) {
+        let start = data.offset;
+        let type = data.readUint8();
+        let tmp = data.offset;
+        let size = data.readULEB128();
+        let name = undefined;
+        tmp = data.offset - tmp;
+        console.log("type: %d (%s) size: %d offset: %d data-offset: %d", type, sectionnames[type], size, start, data.offset);
+        let chunk = {type: type, name: undefined, size: size, offset: start, dataOffset: data.offset};
+        chunks.push(chunk);
+        if (type == 0x00) {
+            let tmp = data.offset;
+            let nlen = data.readUint8();
+            chunk.name = data.readUTF8Bytes(nlen);
+            chunk.dataOffset = data.offset;
+            chunk.size = chunk.size - (data.offset - tmp);
+            data.offset = tmp;
+        } else if (type > 0x0B) {
+            console.warn("section type: %d (%s) not handled", type, sectionnames[type]);
+        }
 
+        data.offset += size;
+    }
 
-    while (off < len) {
-        let start = off;
-        let type = data.getUint8(off++);
-        let tmp = off;
-        let size = unsignedLEB128();
-        tmp = off - tmp;
-        console.log("type: %d (%s) size: %d offset: %d data-offset: %d", type, sectionnames[type], size, start, off);
-        let chunk = {type: type, name: sectionnames[type], size: size, offset: start, dataOffset: off};
-        results.push(sec);
+    console.log(chunks);
+
+    // by handling the section in a certain order:
+    // 1. type section
+    // 2. func section
+    // 3. global section
+    // 3. export section
+    // 4. import section
+    // then we can actually lookup functions and globals in export/import
+
+    let funcvec;
+    let mod = {};
+    let cnt = chunks.length;
+    for (let i = 0; i < cnt; i++) {
+        let chunk = chunks[i];
+        let type = chunk.type;
+        let size = chunk.size;
+        data.offset = chunk.dataOffset;
         switch (type) {
-            case 0x01:
-            case 0x02:
-            case 0x03:
-            case 0x04:
-            case 0x05:
-            case 0x06:
-            case 0x07:
-            case 0x08:
-            case 0x09:
-            case 0x0A:
-            case 0x0B:
+            case 0x01:  // type
+                mod.types = decodeTypeSection(data, size, mod);
                 break;
-            case 0x00: // CUSTOM
+            case 0x02:  // import
+                mod.imports = decodeImportSection(data, size, mod);
+                break;
+            case 0x03:  // function
+                funcvec = decodeFuncSection(data, size, mod);
+                break;
+            case 0x04:  // table
+                decodeTableSection(data, size, mod);
+                break;
+            case 0x05:  // memory
+                decodeMemorySection(data, size, mod);
+                break;
+            case 0x06:  // global
+                decodeGlobalSection(data, size, mod);
+                break;
+            case 0x07:  // export
+                decodeExportSection(data, size, mod);
+                break;
+            case 0x08:  // start
+                decodeStartSection(data, size, mod);
+                break;
+            case 0x09:  // element
+                decodeElementSection(data, size, mod);
+                break;
+            case 0x0A:  // code
+                decodeCodeSection(data, size, mod, funcvec);
+                break;
+            case 0x0B:  // data
+                mod.dataSegments = decodeDataSection(data, size, mod);
+                break;
+            case 0x00: // custom
             {
-                let nlen = data.getUint8(off++);
-                let name = UTF8ArrayToString(u8, off, nlen);
-                let start = off + nlen;
+                let name = chunk.name;
+                switch (name) {
+                    case 'producers':
+                        decodeCustomProducers(data, size);
+                        break;
+                    case 'name':
+                        mod.names = decodeCustomName(data, size);
+                        break;
+                    default:
+                        break;  // do nothing;
+                }
                 break;
             }
             default:
-                console.warn("section type: %d (%s) not handled", type, sectionnames[type]);
+                continue;
         }
-        off += size;
     }
 
-    while (off < len) {
-        let start = off;
-        let type = data.getUint8(off++);
-        let tmp = off;
-        let size = unsignedLEB128();
-        tmp = off - tmp;
-        console.log("type: %d (%s) size: %d offset: %d data-offset: %d", type, sectionnames[type], size, start, off);
-        let sec = {type: type, name: sectionnames[type], size: size, offset: start, dataOffset: off};
-        results.push(sec);
-        if (type == CHUNK_TYPE.TYPE) {
-            let tmp = off;
-            decodeTypeSection(sec, size);
-            off = tmp;
-        } else if (type == CHUNK_TYPE.IMPORT) {
-            let tmp = off;
-            decodeImportSection(sec, size);
-            off = tmp;
-        } else if (type == CHUNK_TYPE.FUNC) {
-            let tmp = off;
-            decodeFuncSection(sec, size);
-            off = tmp;
-        } else if (type == CHUNK_TYPE.TABLE) {
-            let tmp = off;
-            decodeTableSection(sec, size);
-            off = tmp;
-        } else if (type == CHUNK_TYPE.MEMORY) {
-            let tmp = off;
-            decodeMemorySection(sec, size);
-            off = tmp;
-        } else if (type == CHUNK_TYPE.GLOBAL) {
-            let tmp = off;
-            decodeGlobalSection(sec, size);
-            off = tmp;
-        } else if (type == CHUNK_TYPE.EXPORT) {
-            let tmp = off;
-            decodeExportSection(sec, size);
-            off = tmp;
-        } else if (type == CHUNK_TYPE.START) {
-            let tmp = off;
-            decodeStartSection(sec, size);
-            off = tmp;
-        } else if (type == CHUNK_TYPE.ELEMENT) {
-            let tmp = off;
-            decodeElementSection(sec, size);
-            off = tmp;
-        } else if (type == CHUNK_TYPE.BYTECODE) {
-            let tmp = off;
-            decodeCodeSection(sec, size);
-            off = tmp;
-        } else if (type == CHUNK_TYPE.DATA) {
-            let tmp = off;
-            decodeDataSection(sec, size);
-            off = tmp;
-        } else if (type == CHUNK_TYPE.CUSTOM) {
-            let tmp = off;
-            decodeCustomSection(sec, size);
-            off = tmp;
-        } else {
-            console.warn("section type: %d (%s) not handled", type, sectionnames[type]);
-        }
-        off += size;
-    }
+    mod.sections = chunks;
 
-    return results;
+    console.log(mod);
+
+    return mod;
 }
