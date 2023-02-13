@@ -1,0 +1,402 @@
+
+nav.topnav {
+    display: flex;
+    justify-content: space-between;
+    align-content: space-around;
+    flex-direction: row;
+}
+
+nav.topnav > span.tab-item
+{
+    display: block;
+    user-select: none;
+    cursor: pointer;
+}
+
+.accordion-list {
+    list-style-type: none;
+    padding-left: 0px;
+}
+
+.accordion-list > .accordion-header {
+	padding: 3px 6px;
+    background-color: #f4f4f4;
+    border-radius: 5px;
+    margin-bottom: 5px;
+    border: 1px solid #ccc;
+    font-family: system-ui;
+    font-size: small;
+}
+
+.accordion-list > .accordion-body {
+	padding: 3px 6px;
+    border-radius: 5px;
+    margin-bottom: 5px;
+    border: 1px solid #ccc;
+    font-family: system-ui;
+    font-size: small;
+}
+
+div#test .accordion-list {
+    padding-left: 3px;
+    padding-right: 3px;
+}
+
+.accordion-list > .accordion-header.open {
+	border-radius: 5px 5px 0px 0px;
+	margin-bottom: 0px;
+}
+
+.accordion-list > .accordion-body.open {
+    border-radius: 0px 0px 5px 5px;
+    border-top: none;
+}
+
+table.wasm-functions td.wasm-stack-signature {
+    white-space: nowrap;
+}
+
+table.wasm-functions td.wasm-funcidx {
+    background-color: #ffc400;
+}
+
+table.wasm-functions td.wasm-typeidx {
+    background-color: #ffc400;
+}
+
+table.wasm-functions span.index-badge {
+    background-color: #ffc400;
+    padding: 1px 0.5em;
+    border-radius: 3px;
+}
+
+.pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.pagination > a,
+.pagination > span {
+    background-color: #fff;
+    color: #06c;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 13px;
+    margin: 0 -1px 5px;
+    min-width: 20px;
+    padding: 0 6px;
+    height: 28px;
+    text-decoration: none;
+    border: solid 1px #ddd;
+    position: relative;
+    font-family: Helvetica, Arial, sans-serif;
+    user-select: none;
+    cursor: pointer;
+}
+.pagination > span.page-dots {
+    pointer-events: none;
+}
+.pagination svg {
+    height: 24px;
+    width: 24px;
+}
+.pagination > span:hover {
+    background-color: #f7f7f7;
+}
+.pagination > span.page-active {
+    background-color: #07639d;
+    color: #fff;
+    border: solid 1px #07639d;
+    width: 3rem;
+}
+.pagination > span:first-child {
+    border-radius: 5px 0 0 5px;
+}
+.pagination > span:last-child {
+    border-radius: 0 5px 5px 0;
+}
+
+/**
+ *
+ */
+.wasm-input-file {
+    padding: 3px 6px;
+    background-color: #f4f4f4;
+    border-radius: 5px;
+    margin-bottom: 5px;
+    border: 1px solid #ccc;
+    font-family: system-ui;
+    font-size: small;
+}
+
+/**
+ * Editorial like UI
+ */
+ ul.workflow-ui
+ {
+     list-style-type: none;
+     padding-inline-start: 0px;
+     margin: 1rem 1rem 1rem;
+ }
+ 
+ ul.workflow-ui > li.workflow-action
+ {
+     display: flex;
+     background-image: linear-gradient(180deg, #DADADA 0%, #CCCDCD 100%);
+     box-shadow: 0 1px 2px 0 rgba(0,0,0,0.25), inset 0 1px 0 0 rgba(255,255,255,0.25);
+     border: 1px solid rgba(0,0,0,0.20);
+     border-radius: 3px;
+     min-height: 45px;
+     margin-bottom: 10px;
+     box-sizing: border-box;
+ 
+     color: #464646;
+     font-family: monospace;
+ 
+     flex-direction: row;
+     align-items: stretch;
+ }
+ 
+ ul.workflow-ui > li.workflow-action:first-child
+ {
+     ;
+ }
+ 
+ ul.workflow-ui > li.workflow-action div.action-header
+ {
+     padding: 8px 7px 7px 5px;
+ }
+ 
+ ul.workflow-ui > li.workflow-action div.action-body
+ {
+     padding: 8px 7px 7px 5px;
+ }
+ 
+ ul.workflow-ui > li.workflow-action > div.content:empty
+ {
+     display: none;
+ }
+ 
+ ul.workflow-ui > li.workflow-action > div.more
+ {
+     display: block;
+     width: 32px;
+     border-left: 1px solid #ccc;
+ }
+ 
+ ul.workflow-ui > li.workflow-action span.title
+ {
+     font-weight: bold;
+     display: block;
+ }
+ 
+ ul.workflow-ui > li.workflow-action span.subtitle
+ {
+     font-size: small;
+ }
+ 
+ .param-comment
+ {
+     font-size: x-small;
+     font-family: sans-serif;
+     margin-bottom: 1rem;
+ }
+ 
+ div.plain-text-editor
+ {
+     white-space: pre;
+     background-color: #fff;
+     margin: 0em;
+     padding: 6px;
+     border-radius: 3px;
+     border: 1px solid #b3b3b3;
+     min-height: 1em;
+     color: #595959;
+     font-family: "DejaVu Sans Mono", monospace;
+     font-size: 13px;
+ }
+ 
+ div.plain-text-editor:empty
+ {
+     content: attr(placeholder);
+ }
+ 
+ span.action-text-token {
+     background-color: #cfddf5;
+     border: 1px solid #b2bedf;
+     border-radius: 3px;
+     padding: 0 5px 0 5px;
+     user-select: none;
+ }
+
+ ul.workflow-ui > li.workflow-action {
+    background-image: none;
+    background-color: #f3f3f3;
+    box-shadow: none;
+    border: 1px solid #ccc;
+}
+
+/**
+ * Upload Box ... 
+ */
+
+.box.has-advanced-upload
+{
+    outline: 2px dashed #92b0b3;
+    outline-offset: -10px;
+    -webkit-transition: outline-offset .15s ease-in-out, background-color .15s linear;
+    transition: outline-offset .15s ease-in-out, background-color .15s linear;
+    text-align: center;
+}
+
+.box
+{
+    display: flex;
+    justify-content: center;
+    align-items: center;
+
+    font-size: 1.25rem; /* 20 */
+    background-color: #c8dadf;
+    position: relative;
+}
+
+.box.has-advanced-upload
+{
+    outline: 2px dashed #92b0b3;
+    outline-offset: -10px;
+
+    -webkit-transition: outline-offset .15s ease-in-out, background-color .15s linear;
+    transition: outline-offset .15s ease-in-out, background-color .15s linear;
+}
+
+.box.has-advanced-upload input[type="file"]
+{
+    display: none;
+}
+
+.box.is-dragover
+{
+    outline-offset: -20px;
+    outline-color: #c8dadf;
+    background-color: #fff;
+}
+
+.box__dragndrop,
+.box__icon
+{
+    display: none;
+}
+
+.box.has-advanced-upload .box__dragndrop
+{
+    display: inline;
+}
+
+.box.has-advanced-upload .box__icon
+{
+    width: 100%;
+    height: 80px;
+    fill: #92b0b3;
+    display: block;
+    margin-bottom: 40px;
+}
+
+.box.is-uploading .box__input,
+.box.is-success .box__input,
+.box.is-error .box__input
+{
+    visibility: hidden;
+}
+
+.box__uploading,
+.box__success,
+.box__error
+{
+    display: none;
+}
+
+.box.is-uploading .box__uploading,
+.box.is-success .box__success,
+.box.is-error .box__error
+{
+    display: block;
+    position: absolute;
+    top: 50%;
+    right: 0;
+    left: 0;
+
+    -webkit-transform: translateY( -50% );
+    transform: translateY( -50% );
+}
+
+.box__uploading
+{
+    font-style: italic;
+}
+
+.box__success
+{
+    -webkit-animation: appear-from-inside .25s ease-in-out;
+    animation: appear-from-inside .25s ease-in-out;
+}
+
+@-webkit-keyframes appear-from-inside
+{
+    from	{ -webkit-transform: translateY( -50% ) scale( 0 ); }
+    75%		{ -webkit-transform: translateY( -50% ) scale( 1.1 ); }
+    to		{ -webkit-transform: translateY( -50% ) scale( 1 ); }
+}
+
+@keyframes appear-from-inside
+{
+    from	{ transform: translateY( -50% ) scale( 0 ); }
+    75%		{ transform: translateY( -50% ) scale( 1.1 ); }
+    to		{ transform: translateY( -50% ) scale( 1 ); }
+}
+
+.box__restart
+{
+    font-weight: 700;
+}
+.box__restart:focus,
+.box__restart:hover
+{
+    color: #39bfd3;
+}
+
+.js .box__file
+{
+    width: 0.1px;
+    height: 0.1px;
+    opacity: 0;
+    overflow: hidden;
+    position: absolute;
+    z-index: -1;
+}
+.js .box__file + label
+{
+    max-width: 80%;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+    display: inline-block;
+    overflow: hidden;
+}
+.js .box__file + label:hover strong,
+.box__file:focus + label strong,
+.box__file.has-focus + label strong
+{
+    color: #39bfd3;
+}
+.js .box__file:focus + label,
+.js .box__file.has-focus + label
+{
+    outline: 1px dotted #000;
+    outline: -webkit-focus-ring-color auto 5px;
+}
+.js .box__file + label *
+{
+    /* pointer-events: none; */ /* in case of FastClick lib use */
+}

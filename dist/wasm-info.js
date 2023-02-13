@@ -4097,10 +4097,16 @@ function decodeTableSection(data, len, mod) {
     console.log(tables);
 }
 
-function decodeMemorySection(data, len) {
+function decodeMemorySection(data, len, mod) {
     let end = data.offset + len;
     let cnt = data.readULEB128();
-    let results = [];
+    let mems;
+    if (!mod.memory) {
+        mems = [];
+        mod.memory = mems;
+    } else {
+        mems = mod.memory;
+    }
     while (data.offset < end) {
         let limit = data.readUint8();
         let obj = {};
@@ -4119,10 +4125,10 @@ function decodeMemorySection(data, len) {
             obj.max = data.readULEB128();
             obj.shared = true;              
         }
-        results.push(obj);
+        mems.push(obj);
     }
     console.log("memory vector count: %d", cnt);
-    console.log(results);
+    console.log(mems);
 }
 
 function decodeGlobalSection(data, len, mod) {
@@ -4531,6 +4537,10 @@ function decodeDataSection(data, len, mod) {
     console.log(results);
 
     return results;
+}
+
+function encodeDataSection(mod, section) {
+    // check script.js at extractDataSegmentsAction
 }
 
 function decodeCustomSection(data, section, size) {
