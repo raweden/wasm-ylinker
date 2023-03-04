@@ -3841,6 +3841,15 @@ class ImportedGlobal {
     }
 };
 
+class WasmMemory {
+
+    constructor() {
+        this.min = null;
+        this.max = null;
+        this.shared = false;
+    }
+};
+
 function decodeImportSection(data, len, m) {
     let end = data.offset + len;
     let cnt = data.readULEB128();
@@ -4109,7 +4118,7 @@ function decodeMemorySection(data, len, mod) {
     }
     while (data.offset < end) {
         let limit = data.readUint8();
-        let obj = {};
+        let obj = new WasmMemory();
         if (limit == 0x01) {
             obj.min = data.readULEB128();
             obj.max = data.readULEB128();

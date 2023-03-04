@@ -238,6 +238,65 @@ table.wasm-functions span.index-badge {
     border: 1px solid #ccc;
 }
 
+ul > li.workflow-action.workflow-input-file > .file-label,
+ul > li.workflow-action.workflow-output-file > .file-label
+{
+    border-right: 1px solid #ccc;
+}
+
+ul > li.workflow-action.workflow-input-file > .file-picker-button,
+ul > li.workflow-action.workflow-output-file > .file-picker-button
+{
+    border-left: 1px solid #ccc;
+}
+
+.wasm-memory-view
+{
+    display: flex;
+    flex-direction: row;
+}
+
+.wasm-memory-index 
+{
+    min-width: 26px;
+    display: flex;
+    align-content: center;
+    align-items: center;
+    justify-content: center;
+    border-right: 1px solid #ccc;
+}
+
+.memory-info
+{
+    width: 100%;
+}
+
+.memory-info > .heading
+{
+    padding: 3px 6px;
+    background-color: #f4f4f4;
+    border-top: 1px solid #ccc;
+    border-bottom: 1px solid #ccc;
+    font-family: system-ui;
+    font-size: small;
+}
+
+.memory-params
+{
+    display: grid;
+    column-count: 3;
+    justify-items: start;
+    padding-bottom: 8px;
+    padding-top: 8px;
+    padding-left: 8px;
+}
+
+.initial-memory-info
+{
+    font-family: monospace;
+    padding-left: 8px;
+}
+
 /**
  * Upload Box ... 
  */
@@ -399,4 +458,23 @@ table.wasm-functions span.index-badge {
 .js .box__file + label *
 {
     /* pointer-events: none; */ /* in case of FastClick lib use */
+}
+
+.accordion-list > .accordion-body.no-padding
+{
+    padding: 0px;
+}
+
+kbd {
+    background-color: #eee;
+    border-radius: 3px;
+    border: 1px solid #b4b4b4;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.2), 0 2px 0 0 rgba(255, 255, 255, 0.7) inset;
+    color: #333;
+    display: inline-block;
+    font-size: 0.85em;
+    font-weight: 700;
+    line-height: 1;
+    padding: 2px 4px;
+    white-space: nowrap;
 }

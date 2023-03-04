@@ -126,11 +126,26 @@ function humanFileSize(bytes, si, dp) {
 }
 
 function showWasmInfoStats(mod, sections) {
-	let container = document.querySelector("div#wasm-info");
+	let container = document.querySelector("div#wasm-modules-stats");
+
+	if (container.lastChild) {
+		container.removeChild(container.lastChild);
+	}
 
 	let ul = document.createElement("ul");
 	ul.classList.add("accordion-list");
 	container.appendChild(ul);
+
+	let customSectionCategories = {
+		'.debug_info': {format: "DWARF5", category: "debug"},
+		'.debug_loc': {format: "DWARF5", category: "debug"},
+		'.debug_ranges': {format: "DWARF5", category: "debug"},
+		'.debug_abbrev': {format: "DWARF5", category: "debug"},
+		'.debug_line': {format: "DWARF5", category: "debug"},
+		'.debug_str': {format: "DWARF5", category: "debug"},
+	}
+
+	let sizeSummary = {};
 
 	let len = sections.length;
 	for (let i = 0;i < len;i++) {
@@ -139,11 +154,7 @@ function showWasmInfoStats(mod, sections) {
 		let li = document.createElement("li");
 		li.classList.add("accordion-header")
 		ul.appendChild(li);
-		if (section.type == 0) {
-			let span = document.createElement("code");
-			span.textContent = typename;
-			li.appendChild(span);
-		} else if (section.type == SECTION_TYPE.EXPORT) {
+		if (section.type == SECTION_TYPE.EXPORT) {
 
 			let span = document.createTextNode(typename + '\x20');
 			li.appendChild(span);
@@ -151,6 +162,27 @@ function showWasmInfoStats(mod, sections) {
 			span = document.createElement("span");
 			span.textContent = String(mod.exports.length) + "\x20item(s)"
 			li.appendChild(span);
+
+		} else if (section.type == SECTION_TYPE.CUSTOM) {
+
+			let span = document.createTextNode(typename + '\x20');
+			li.appendChild(span);
+
+			span = document.createElement("span");
+			span.textContent = section.name;
+			li.appendChild(span);
+
+			if (customSectionCategories.hasOwnProperty(section.name)) {
+				let category = customSectionCategories[section.name].category;
+				if (sizeSummary.hasOwnProperty(category)) {
+					let sum = sizeSummary[category];
+					sum += section.size;
+					sizeSummary[category] = sum;
+				} else {
+					sizeSummary[category] = section.size;
+				}
+			}
+
 		} else {
 			let span = document.createTextNode(typename);
 			li.appendChild(span);
@@ -158,6 +190,13 @@ function showWasmInfoStats(mod, sections) {
 
 		let tn = document.createTextNode("\x20" + humanFileSize(section.size, true));
 		li.appendChild(tn);
+	}
+
+	for (var cat in sizeSummary) {
+		let size = sizeSummary[cat];
+		let element = document.createElement("div");
+		element.textContent = cat + ':\x20' + humanFileSize(size, true);
+		container.appendChild(element);
 	}
 }
 
@@ -765,6 +804,19 @@ function extractDataSegmentsAction(mod, options) {
 		name += ".data.wasm";
 		window.showSaveFilePicker({suggestedName: name, types: [{description: "WebAssembly Files", accept: {"application/wasm": [".wasm"]}}]}).then(function(file) {
 
+			let elements = document.querySelectorAll(".workflow-ui .workflow-output-file");
+			if (elements.length > 0) {
+				let element = elements.item(0);
+				let label = element.querySelector(".action-body");
+				label.textContent = file.name;
+				let totsz = 0;
+				let len = buffers.length;
+				for (let i = 0; i < len; i++) {
+					totsz += buffers[i].byteLength;
+				}
+				label.textContent += '\x20' + humanFileSize(totsz, true);
+			}
+
 			file.createWritable().then(function(writable) {
 
 				let blob = new Blob(buffers, { type: "application/wasm" });
@@ -903,6 +955,19 @@ function outputAction(mod, options) {
 
 	window.showSaveFilePicker({suggestedName: targetFilename, types: [{description: "WebAssembly Files", accept: {"application/wasm": [".wasm"]}}]}).then(function(file) {
 
+		let elements = document.querySelectorAll(".workflow-ui .workflow-output-file");
+		if (elements.length > 0) {
+			let element = elements.item(1);
+			let label = element.querySelector(".action-body");
+			label.textContent = file.name;
+			let totsz = 0;
+			let len = buffers.length;
+			for (let i = 0; i < len; i++) {
+				totsz += buffers[i].byteLength;
+			}
+			label.textContent += '\x20' + humanFileSize(totsz, true);
+		}
+
 		file.createWritable().then(function(writable) {
 
 			let blob = new Blob(buffers, { type: "application/wasm" });
@@ -977,6 +1042,96 @@ function postOptimizeWasm(mod) {
 			name: "wasm_atomic_fence",
 			handler: function(inst, index, arr) {
 				return {opcode: 0xFE03, memidx: 0};
+			}
+		}, {
+			name: "atomic_load8",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE12, 0, 0);
+			}
+		}, {
+			name: "atomic_store8",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE19, 0, 0);
+			}
+		}, {
+			name: "atomic_add8",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE20, 0, 0);
+			}
+		}, {
+			name: "atomic_sub8",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE27, 0, 0);
+			}
+		}, {
+			name: "atomic_and8",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE2E, 0, 0);
+			}
+		},{
+			name: "atomic_or8",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE35, 0, 0);
+			}
+		}, {
+			name: "atomic_xor8",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE3C, 0, 0);
+			}
+		}, {
+			name: "atomic_xchg8",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE43, 0, 0);
+			}
+		}, {
+			name: "atomic_cmpxchg8",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE4A, 0, 0);
+			}
+		},  {
+			name: "atomic_load16",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE13, 0, 0);
+			}
+		}, {
+			name: "atomic_store16",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE1A, 0, 0);
+			}
+		}, {
+			name: "atomic_add16",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE21, 0, 0);
+			}
+		}, {
+			name: "atomic_sub16",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE28, 0, 0);
+			}
+		}, {
+			name: "atomic_and16",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE2F, 0, 0);
+			}
+		},{
+			name: "atomic_or16",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE36, 0, 0);
+			}
+		}, {
+			name: "atomic_xor16",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE3D, 0, 0);
+			}
+		}, {
+			name: "atomic_xchg16",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE44, 0, 0);
+			}
+		}, {
+			name: "atomic_cmpxchg16",
+			handler: function(inst, index, arr) {
+				return new AtomicInst(0xFE4B, 0, 0);
 			}
 		}, {
 			name: "atomic_load32",
@@ -1432,6 +1587,64 @@ function convertToImportedGlobal(mod, oldGlobal, newGlobal) {
 
 let __uiInit = false;
 
+function createMemidxInfo() {
+
+	let section = document.createElement("section");
+	section.id = "wasm-memory";
+
+	let table = document.createElement("table");
+	let tbody = document.createElement("tbody");
+	let tr = document.createElement("tr");
+	let td = document.createElement("td");
+	td.textContent = "Minimum";
+	tr.appendChild(td);
+	td = document.createElement("td");
+	let input = document.createElement("input");
+	input.type = "number";
+	input.classList.add("memory-min");
+	td.appendChild(input);
+	tr.appendChild(td);
+	td = document.createElement("td");
+	td.classList.add("output");
+	tr.appendChild(td);
+	tbody.appendChild(tr);
+
+	tr = document.createElement("tr");
+	td = document.createElement("td");
+	td.textContent = "Maximum";
+	tr.appendChild(td);
+	td = document.createElement("td");
+	input = document.createElement("input");
+	input.type = "number";
+	input.classList.add("memory-max");
+	td.appendChild(input);
+	tr.appendChild(td);
+	td = document.createElement("td");
+	td.classList.add("output");
+	tr.appendChild(td);
+	tbody.appendChild(tr);
+
+	tr = document.createElement("tr");
+	td = document.createElement("td");
+	td.textContent = "Shared";
+	tr.appendChild(td);
+	td = document.createElement("td");
+	input = document.createElement("input");
+	input.type = "checkbox";
+	input.classList.add("memory-shared");
+	td.appendChild(input);
+	tr.appendChild(td);
+	td = document.createElement("td");
+	td.classList.add("output");
+	tr.appendChild(td);
+	tbody.appendChild(tr);
+
+	table.appendChild(tbody);
+	section.appendChild(table);
+
+	return section;
+}
+
 function setupUI() {
 	let container = document.querySelector("#wasm-memory");
 	let minInput = container.querySelector("#memory-min");
@@ -1464,6 +1677,28 @@ function setupUI() {
 	if (typeof selectedAction.onselect == "function") {
 		selectedAction.onselect(actionInfo, selectedAction);
 	}
+
+	// support for multi-memory
+	let memContainers = document.createElement("div");
+	container.parentElement.insertBefore(memContainers, container);
+	let memContainer = document.createElement("div");
+	memContainer.classList.add("wasm-memory-view");
+	let memIndexLabel = document.createElement("div");
+	memIndexLabel.classList.add("wasm-memory-index")
+	memIndexLabel.textContent = "0";
+	memContainer.appendChild(memIndexLabel);
+	let memoryInfoContainer = document.createElement("div");
+	memoryInfoContainer.classList.add("memory-info");
+	memoryInfoContainer.appendChild(container);
+	let memInitalTitle = document.createElement("div");
+	memInitalTitle.textContent = "Initial Memory";
+	memInitalTitle.classList.add("heading");
+	memoryInfoContainer.appendChild(memInitalTitle);
+	container.classList.add("memory-params");
+	memContainer.appendChild(memoryInfoContainer);
+	memContainers.appendChild(memContainer);
+	memContainers.parentElement.classList.add("no-padding")
+
 
 		
 	let runWorkflowBtn = document.querySelector("#run-workflow");
@@ -1499,26 +1734,40 @@ function showMemoryParamEditor(container, memory) {
 	let maxInput = container.querySelector("#memory-max");
 	let minInput = container.querySelector("#memory-min");
 	minInput.value = memory.min;
-	let minOutput = container.querySelector("output[for=memory-min]");
+	let minOutput = minInput.parentElement.parentElement.querySelector(".output");
 	minOutput.textContent = humanFileSize(memory.min * 65536, true);
+	let maxOutput = maxInput.parentElement.parentElement.querySelector(".output");
 	if (memory.max !== null) {
-		let maxOutput = container.querySelector("output[for=memory-max]");
 		maxInput.value = memory.max;
 		maxOutput.textContent = humanFileSize(memory.max * 65536, true);
 	} else {
-		let row = container.querySelector("#memory-max").parentElement;
+		let row = maxInput.parentElement.parentElement;
 		row.style.opacity = "0.5";
+		maxOutput.textContent = "unlimited";
 	}
 
 	minInput.addEventListener("change", function(evt) {
 		memory.min = parseInt(minInput.value);
-		let sec = findModuleByType(targetModule, SECTION_TYPE.IMPORT);
+		let sec = (memory instanceof ImportedMemory) ? findModuleByType(targetModule, SECTION_TYPE.IMPORT) : findModuleByType(targetModule, SECTION_TYPE.MEMORY);
 		sec._isDirty = true;
 	});
 
 	maxInput.addEventListener("change", function(evt) {
-		memory.max = parseInt(maxInput.value);
-		let sec = findModuleByType(targetModule, SECTION_TYPE.IMPORT);
+		let value = maxInput.value.trim();
+		if (value.length == 0) {
+			memory.max = null;
+			let row = maxInput.parentElement.parentElement;
+			row.style.opacity = "0.5";
+			maxOutput.textContent = "unlimited";
+		} else {
+			let row = maxInput.parentElement.parentElement;
+			if (row.style.opacity == "0.5") {
+				row.style.opacity = null;
+			}
+			memory.max = parseInt(maxInput.value);
+		}
+		
+		let sec = (memory instanceof ImportedMemory) ? findModuleByType(targetModule, SECTION_TYPE.IMPORT) : findModuleByType(targetModule, SECTION_TYPE.MEMORY);
 		sec._isDirty = true;
 	});
 
@@ -1526,9 +1775,122 @@ function showMemoryParamEditor(container, memory) {
 	input.checked = memory.shared;
 	input.addEventListener("change", function(evt) {
 		memory.shared = input.checked;
-		let sec = findModuleByType(targetModule, SECTION_TYPE.IMPORT);
+		let sec = (memory instanceof ImportedMemory) ? findModuleByType(targetModule, SECTION_TYPE.IMPORT) : findModuleByType(targetModule, SECTION_TYPE.MEMORY);
 		sec._isDirty = true;
 	});
+
+	//showInitialMemory();
+	let heading = container.parentElement.querySelector(".heading");
+	let dataContainer = heading.parentElement.querySelector(".initial-memory-info");
+	if (!dataContainer) {
+		dataContainer = document.createElement("div");
+		dataContainer.classList.add("initial-memory-info")
+		heading.parentElement.appendChild(dataContainer);
+	}
+	showInitialMemory(dataContainer, memory)
+}
+
+function showInitialMemory(container, mem) {
+
+	let tbl, tbody;
+
+	tbl = container.querySelector("table.initial-memory-table");
+	if (!tbl) {
+		tbl = document.createElement("table");
+		tbl.classList.add("initial-memory-table")
+		let thead = document.createElement("thead");
+		let tr = document.createElement("tr");
+		let th = document.createElement("th");
+		th.textContent = "seg. no.";
+		tr.appendChild(th);
+		th = document.createElement("th");
+		th.textContent = "name";
+		tr.appendChild(th);
+		th = document.createElement("th");
+		th.style.setProperty("min-width", "10ch");
+		th.textContent = "offset";
+		tr.appendChild(th);
+		th = document.createElement("th");
+		th.textContent = "size";
+		tr.appendChild(th);
+		th = document.createElement("th");
+		th.textContent = "uninitialized data";
+		tr.appendChild(th);
+		thead.appendChild(tr);
+		tbl.appendChild(thead);
+		container.appendChild(tbl);
+
+		tbody = document.createElement("tbody");
+		tbl.appendChild(tbody);
+	} else {
+		tbody = tbl.querySelector("tbody");
+		while (tbody.lastChild) {
+			tbody.removeChild(tbody.lastChild);
+		}
+	}
+	
+	let dataSegments = targetModule.dataSegments;
+	let names = targetModule.names && targetModule.names.data ? targetModule.names.data : null;
+	let len = dataSegments.length;
+	for (let i = 0;i < len;i++) {
+		let dataSeg = dataSegments[i];
+		let name, allzeros = false;
+		
+		let tr = document.createElement("tr");
+		let td = document.createElement("td");
+		td.textContent = i.toString();
+		tr.appendChild(td);
+		td = document.createElement("td");
+		tr.appendChild(td);
+
+		if (names && names.has(i)) {
+			name = names.get(i);
+		}
+
+		if (name) {
+
+			let node = document.createElement("code");
+			node.textContent = names.get(i);
+			td.appendChild(node);
+		} else {
+			let node = document.createTextNode("segment\x20");
+			td.appendChild(node);
+
+			node = document.createElement("code");
+			node.textContent = "N/A";
+			td.appendChild(node);
+		}
+
+		if (name === ".bss") {
+			allzeros = isZeroFill(dataSeg);
+		}
+
+		let dataOffset = undefined;
+
+		if (dataSeg.inst.opcodes[0].opcode == 0x41 && dataSeg.inst.opcodes[1].opcode == 0x0B) {
+			dataOffset = dataSeg.inst.opcodes[0].value;
+		}
+
+		td = document.createElement("td");
+		td.textContent = dataOffset === undefined ? "N/A" : dataOffset;
+		tr.appendChild(td);
+
+		td = document.createElement("td");
+		let sztxt = humanFileSize(dataSeg.size, true);
+		if (!sztxt.endsWith("bytes")) {
+			sztxt = dataSeg.size + "\x20bytes\x20(" + sztxt + ")";
+		}
+		td.textContent = sztxt;
+		tr.appendChild(td);
+
+		td = document.createElement("td");
+		td.textContent = allzeros ? "YES" : "NO";
+		tr.appendChild(td);
+		tbody.appendChild(tr);
+
+		//let tn = document.createTextNode("\x20" + humanFileSize(section.size, true));
+		//li.appendChild(tn);
+	}
 }
 
 function wasmStyleTypeString(functype) {
@@ -1566,12 +1928,95 @@ function wasmStyleTypeString(functype) {
     return arg + " -> " + ret;
 }
 
+class WasmGlobalsInspectorView {
+
+	constructor (header, body) {
+
+	}
+
+	search(string, opts) {
+
+	}
+
+	render() {
+
+	}
+
+	set data(value) {
+
+	}
+
+	get data() {
+		return this._data;
+	}
+}
+
+class WasmFunctionsInspectorView {
+
+	constructor (header, body) {
+
+	}
+
+	search(string, opts) {
+
+	}
+
+	render() {
+		
+	}
+
+	set data(value) {
+
+	}
+
+	get data() {
+		return this._data;
+	}
+}
+
+class WasmTablesInspectorView {
+
+	constructor (header, body) {
+
+	}
+
+	search(string, opts) {
+
+	}
+
+	render() {
+		
+	}
+
+	set data(value) {
+
+	}
+
+	get data() {
+		return this._data;
+	}
+}
+
 const inspectorUI = {
 	'globals': function(header, body) {
 		let findInput = document.createElement("input");
 		findInput.type = "text";
 		findInput.placeholder = "find";
 		body.appendChild(findInput);
+
+		let findOptions = document.createElement("select");
+		findOptions.innerHTML = "<option value=\"starts-with\">Starts with</option><option value=\"ends-with\">Ends with</option><option value=\"contains\">Contains</option><option value=\"regexp\">Regexp</option>";
+		findOptions.selectedIndex = 2;
+		body.appendChild(findOptions);
+
+		let findCS = document.createElement("input");
+		findCS.type = "checkbox";
+		findCS.id = "case-sensetive";
+		body.appendChild(findCS);
+		let labelCS = document.createElement("label");
+		labelCS.for = "case-sensetive";
+		labelCS.textContent = "Case Sensetive";
+		body.appendChild(labelCS);
 
 		let table = document.createElement("table");
 		let thead = document.createElement("thead");
@@ -1593,13 +2038,71 @@ const inspectorUI = {
 			if (!gmap)
 				gmap = namedGlobalsMap(targetModule);
 
-			let val_lc = value.toLowerCase();
+
+			let cis = findCS.value !== "off";
 			let match = [];
-			for (let p in gmap) {
-				if (p.toLowerCase().indexOf(val_lc) !== -1) {
-					match.push({name: p, global: gmap[p]});
+			let searchType = findOptions.selectedOptions.item(0).value;
+			switch (searchType) {
+				case "starts-with":
+					if (cis) {
+						let lc = value.toLowerCase();
+						for (let p in gmap) {
+							if (p.toLowerCase().startsWith(lc)) {
+								match.push({name: p, global: gmap[p]});
+							}
+						}
+					} else {
+						for (let p in gmap) {
+							if (p.startsWith(value)) {
+								match.push({name: p, global: gmap[p]});
+							}
+						}
+					}
+					break;
+				case "ends-with":
+					if (cis) {
+						let lc = value.toLowerCase();
+						for (let p in gmap) {
+							if (p.toLowerCase().endsWith(lc)) {
+								match.push({name: p, global: gmap[p]});
+							}
+						}
+					} else {
+						for (let p in gmap) {
+							if (p.endsWith(value)) {
+								match.push({name: p, global: gmap[p]});
+							}
+						}
+					}
+					break;
+				case "contains":
+					if (cis) {
+						let lc = value.toLowerCase();
+						for (let p in gmap) {
+							if (p.toLowerCase().includes(lc)) {
+								match.push({name: p, global: gmap[p]});
+							}
+						}
+					} else {
+						for (let p in gmap) {
+							if (p.includes(value)) {
+								match.push({name: p, global: gmap[p]});
+							}
+						}
+					}
+					break;
+				case "regexp": {
+					let regexp = new Regexp(value);
+					for (let p in gmap) {
+						if (p.search(regexp)) {
+							match.push({name: p, global: gmap[p]});
+						}
+					}
+					break;
 				}
-			}
+				default:
+					break;
+			}			
 
 			return match;
 		}
@@ -1691,17 +2194,22 @@ const inspectorUI = {
 			body.appendChild(paginator);
 		}
 
-		findInput.addEventListener("change", function(evt) {
-			let value = findInput.value;
-			listResults(value);
-		});
-
-		findInput.addEventListener("change", function(evt) {
+		findOptions.addEventListener("change", function(evt) {
 			let value = findInput.value;
 			let results = doFreeTextSearch(value);
 			collection = results;
 			pageIndex = 0;
 			listResults();
+		});
+
+		findInput.addEventListener("keyup", function(evt) {
+			if (evt.key == "Enter") {
+				let value = findInput.value;
+				let results = doFreeTextSearch(value);
+				collection = results;
+				pageIndex = 0;
+				listResults();
+			}
 		});
 
 		gmap = namedGlobalsMap(targetModule);
@@ -1720,6 +2228,20 @@ const inspectorUI = {
 		findInput.type = "text";
 		findInput.placeholder = "find";
 		body.appendChild(findInput);
+
+		let findOptions = document.createElement("select");
+		findOptions.innerHTML = "<option value=\"starts-with\">Starts with</option><option value=\"ends-with\">Ends with</option><option value=\"contains\">Contains</option><option value=\"regexp\">Regexp</option>";
+		findOptions.selectedIndex = 2;
+		body.appendChild(findOptions);
+
+		let findCS = document.createElement("input");
+		findCS.type = "checkbox";
+		findCS.id = "case-sensetive";
+		body.appendChild(findCS);
+		let labelCS = document.createElement("label");
+		labelCS.for = "case-sensetive";
+		labelCS.textContent = "Case Sensetive";
+		body.appendChild(labelCS);
 
 		let findResults = document.createElement("ul");
 		body.appendChild(findResults);
@@ -1741,13 +2263,71 @@ const inspectorUI = {
 		let pageRowCount = 25;
 
 		function doFreeTextSearch(value) {
-			let val_lc = value.toLowerCase();
-			let match = [];
+
 			let names = targetModule.names.functions;
-			for (const [idx, name] of names) {
-				if (name.toLowerCase().indexOf(val_lc) !== -1) {
-					match.push({funcidx: idx, name: name});
+			let cis = findCS.value !== "off";
+			let match = [];
+			let searchType = findOptions.selectedOptions.item(0).value;
+			switch (searchType) {
+				case "starts-with":
+					if (cis) {
+						let lc = value.toLowerCase();
+						for (const [idx, name] of names) {
+							if (name.toLowerCase().startsWith(lc)) {
+								match.push({funcidx: idx, name: name});
+							}
+						}
+					} else {
+						for (const [idx, name] of names) {
+							if (name.startsWith(value)) {
+								match.push({funcidx: idx, name: name});
+							}
+						}
+					}
+					break;
+				case "ends-with":
+					if (cis) {
+						let lc = value.toLowerCase();
+						for (const [idx, name] of names) {
+							if (name.toLowerCase().endsWith(lc)) {
+								match.push({funcidx: idx, name: name});
+							}
+						}
+					} else {
+						for (const [idx, name] of names) {
+							if (name.endsWith(value)) {
+								match.push({funcidx: idx, name: name});
+							}
+						}
+					}
+					break;
+				case "contains":
+					if (cis) {
+						let lc = value.toLowerCase();
+						for (const [idx, name] of names) {
+							if (name.toLowerCase().includes(lc)) {
+								match.push({funcidx: idx, name: name});
+							}
+						}
+					} else {
+						for (const [idx, name] of names) {
+							if (name.includes(value)) {
+								match.push({funcidx: idx, name: name});
+							}
+						}
+					}
+					break;
+				case "regexp": {
+					let regexp = new Regexp(value);
+					for (const [idx, name] of names) {
+						if (name.search(regexp)) {
+							match.push({funcidx: idx, name: name});
+						}
+					}
+					break;
 				}
+				default:
+					break;
 			}
 
 			return match;
@@ -1857,12 +2437,22 @@ const inspectorUI = {
 			body.appendChild(paginator);
 		}
 
-		findInput.addEventListener("change", function(evt) {
+		findOptions.addEventListener("change", function(evt) {
 			let value = findInput.value;
 			let results = doFreeTextSearch(value);
 			collection = results;
 			pageIndex = 0;
 			listResults();
+		});
+
+		findInput.addEventListener("keyup", function(evt) {
+			if (evt.key == "Enter") {
+				let value = findInput.value;
+				let results = doFreeTextSearch(value);
+				collection = results;
+				pageIndex = 0;
+				listResults();
+			}
 		});
 
 		defaultCollection = [];
@@ -1886,6 +2476,20 @@ const inspectorUI = {
 		findInput.placeholder = "find";
 		body.appendChild(findInput);
 
+		let findOptions = document.createElement("select");
+		findOptions.innerHTML = "<option value=\"starts-with\">Starts with</option><option value=\"ends-with\">Ends with</option><option value=\"contains\">Contains</option><option value=\"regexp\">Regexp</option>";
+		findOptions.selectedIndex = 2;
+		body.appendChild(findOptions);
+
+		let findCS = document.createElement("input");
+		findCS.type = "checkbox";
+		findCS.id = "case-sensetive";
+		body.appendChild(findCS);
+		let labelCS = document.createElement("label");
+		labelCS.for = "case-sensetive";
+		labelCS.textContent = "Case Sensetive";
+		body.appendChild(labelCS);
+
 		let findResults = document.createElement("ul");
 		body.appendChild(findResults);
 
@@ -1906,15 +2510,85 @@ const inspectorUI = {
 		let pageRowCount = 25;
 
 		function doFreeTextSearch(value) {
-			let val_lc = value.toLowerCase();
-			let matches = [];
+
 			let len = defaultCollection.length;
-			for (let i = 0; i < len; i++) {
-				let item = defaultCollection[i];
-				let name = item.name;
-				if (name.toLowerCase().indexOf(val_lc) !== -1) {
-					matches.push(item);
+			let cis = findCS.value !== "off";
+			let matches = [];
+			let searchType = findOptions.selectedOptions.item(0).value;
+			switch (searchType) {
+				case "starts-with":
+					if (cis) {
+						let lc = value.toLowerCase();
+						for (let i = 0; i < len; i++) {
+							let item = defaultCollection[i];
+							let name = item.name;
+							if (name.toLowerCase().startsWith(lc)) {
+								matches.push(item);
+							}
+						}
+					} else {
+						for (let i = 0; i < len; i++) {
+							let item = defaultCollection[i];
+							let name = item.name;
+							if (name.startsWith(value)) {
+								matches.push(item);
+							}
+						}
+					}
+					break;
+				case "ends-with":
+					if (cis) {
+						let lc = value.toLowerCase();
+						for (let i = 0; i < len; i++) {
+							let item = defaultCollection[i];
+							let name = item.name;
+							if (name.toLowerCase().endsWith(lc)) {
+								matches.push(item);
+							}
+						}
+					} else {
+						for (let i = 0; i < len; i++) {
+							let item = defaultCollection[i];
+							let name = item.name;
+							if (name.endsWith(value)) {
+								matches.push(item);
+							}
+						}
+					}
+					break;
+				case "contains":
+					if (cis) {
+						let lc = value.toLowerCase();
+						for (let i = 0; i < len; i++) {
+							let item = defaultCollection[i];
+							let name = item.name;
+							if (name.toLowerCase().includes(lc)) {
+								matches.push(item);
+							}
+						}
+					} else {
+						for (let i = 0; i < len; i++) {
+							let item = defaultCollection[i];
+							let name = item.name;
+							if (name.includes(value)) {
+								matches.push(item);
+							}
+						}
+					}
+					break;
+				case "regexp": {
+					let regexp = new Regexp(value);
+					for (let i = 0; i < len; i++) {
+						let item = defaultCollection[i];
+						let name = item.name;
+						if (name.search(regexp)) {
+							matches.push(item);
+						}
+					}
+					break;
 				}
+				default:
+					break;
 			}
 
 			return matches;
@@ -2027,12 +2701,22 @@ const inspectorUI = {
 			body.appendChild(paginator);
 		}
 
-		findInput.addEventListener("change", function(evt) {
+		findOptions.addEventListener("change", function(evt) {
 			let value = findInput.value;
 			let results = doFreeTextSearch(value);
 			collection = results;
 			pageIndex = 0;
 			listResults();
+		});
+
+		findInput.addEventListener("keyup", function(evt) {
+			if (evt.key == "Enter") {
+				let value = findInput.value;
+				let results = doFreeTextSearch(value);
+				collection = results;
+				pageIndex = 0;
+				listResults();
+			}
 		});
 
 		defaultCollection = [];
@@ -2124,7 +2808,7 @@ function populateWebAssemblyInfo(mod) {
 	}
 
 	let con2 = document.querySelector("#test");
-	let headers = con2.querySelectorAll("ul li.accordion-header");
+	let headers = con2.querySelectorAll("#wasm-modules-inspect ul > li.accordion-header");
 	len = headers.length;
 	for (let i = 0; i < len; i++) {
 		let li = headers.item(i);
@@ -2270,7 +2954,7 @@ function setupTargetPanel(container) {
 	let inputPicker = document.createElement("li");
 	inputPicker.classList.add("workflow-action", "workflow-input-file");
 	let header = document.createElement("div");
-	header.classList.add("action-header");
+	header.classList.add("action-header", "file-label");
 	header.textContent = "Input";
 	inputPicker.appendChild(header);
 	let body = document.createElement("div");
@@ -2279,7 +2963,7 @@ function setupTargetPanel(container) {
 	body.textContent = "body";
 	inputPicker.appendChild(body);
 	let options = document.createElement("div");
-	options.classList.add("action-header");
+	options.classList.add("action-header", "file-picker-button");
 	options.textContent = "chose";
 	inputPicker.appendChild(options);
 	workflowUl.appendChild(inputPicker);
@@ -2304,6 +2988,7 @@ function setupTargetPanel(container) {
 
 		let label = inputPicker.querySelector(".action-body");
 		label.textContent = files[0].name;
+		label.textContent += '\x20' + humanFileSize(files[0].size, true);
 		appendFiles(files);
 
 		event.preventDefault();
@@ -2312,9 +2997,9 @@ function setupTargetPanel(container) {
 	// output data
 
 	let outputPicker = document.createElement("li");
-	outputPicker.classList.add("workflow-action");
+	outputPicker.classList.add("workflow-action", "workflow-output-file");
 	header = document.createElement("div");
-	header.classList.add("action-header");
+	header.classList.add("action-header", "file-label");
 	header.textContent = "Output";
 	outputPicker.appendChild(header);
 	body = document.createElement("div");
@@ -2323,7 +3008,7 @@ function setupTargetPanel(container) {
 	body.textContent = "body";
 	outputPicker.appendChild(body);
 	options = document.createElement("div");
-	options.classList.add("action-header");
+	options.classList.add("action-header", "file-picker-button");
 	options.textContent = "chose";
 	outputPicker.appendChild(options);
 	workflowUl.appendChild(outputPicker);
@@ -2353,9 +3038,9 @@ function setupTargetPanel(container) {
 	// output binary
 
 	let outputDataPicker = document.createElement("li");
-	outputDataPicker.classList.add("workflow-action");
+	outputDataPicker.classList.add("workflow-action", "workflow-output-file");
 	header = document.createElement("div");
-	header.classList.add("action-header");
+	header.classList.add("action-header", "file-label");
 	header.textContent = "Output";
 	outputDataPicker.appendChild(header);
 	body = document.createElement("div");
@@ -2364,7 +3049,7 @@ function setupTargetPanel(container) {
 	body.textContent = "body";
 	outputDataPicker.appendChild(body);
 	options = document.createElement("div");
-	options.classList.add("action-header");
+	options.classList.add("action-header", "file-picker-button");
 	options.textContent = "chose";
 	outputDataPicker.appendChild(options);
 	workflowUl.appendChild(outputDataPicker);
@@ -2619,7 +3304,7 @@ function setupMainUI() {
 	let inspectorContainer = document.querySelector("div#test");
 	inspectorContainer.style.display = "none";
 	{
-		let wasmInfo = document.querySelector("#wasm-info");
+		let wasmInfo = document.querySelector("#wasm-modules-stats");
 		if (wasmInfo)
 			inspectorContainer.insertBefore(wasmInfo, inspectorContainer.firstElementChild);
 	}
