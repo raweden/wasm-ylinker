@@ -624,9 +624,9 @@ class StoreInst extends Inst {
 
 class CallInst extends Inst {
 
-    constructor(opcode, funcidx) {
+    constructor(opcode, func) {
         super(opcode);
-        this.funcidx = funcidx;
+        this.func = func;
     }
 }
 
@@ -665,10 +665,10 @@ class BranchTableInst extends Inst {
 
 class IndirectCallInst extends Inst {
 
-    constructor(opcode, tableidx, typeidx) {
+    constructor(opcode, table, type) {
         super(opcode);
-        this.tableidx = tableidx;
-        this.typeidx = typeidx;
+        this.table = table;
+        this.type = type;
     }
 }
 
@@ -807,10 +807,14 @@ function isValidValueType(type) {
     return type == 0x7F || type == 0x7E || type == 0x7D || type == 0x7C || type == 0x7B  || type == 0x70 || type == 0x6F;
 }
 
-function byteCodeComputeByteLength(opcodes, genloc) {
+function byteCodeComputeByteLength(mod, opcodes, genloc) {
     genloc = genloc === true;
     let sz = 0;
-    
+
+
+    let functions = mod.functions;
+    let types = mod.types;
+
     let len = opcodes.length;
     for (let i = 0; i < len; i++) {
         let inst = opcodes[i];
@@ -880,13 +884,16 @@ function byteCodeComputeByteLength(opcodes, genloc) {
                 sz += 1;
                 break;
             case 0x10: // call
+            {
                 sz += 1;
-                sz += lengthULEB128(inst.funcidx);
+                let funcidx = 
+                sz += lengthULEB128(inst.func._index);
                 break;
+            }
             case 0x11: // call_indirect
                 sz += 1;
-                sz += lengthULEB128(inst.tableidx);
-                sz += lengthULEB128(inst.typeidx);
+                sz += lengthULEB128(inst.table._index);
+                sz += lengthULEB128(inst.type.typeidx);
                 //opcodes.push({opcode: op_code, tableidx: data.readULEB128(), typeidx: data.readULEB128()});
                 break;
             case 0x41: // i32.const
@@ -1625,6 +1632,9 @@ function decodeByteCode(data, mod) {
     let topInsts = [];
     let opcodes = topInsts;
     let blkstack = [{opcodes: topInsts}]; // holds the nesting for block, loop and if/else
+    let functions = mod.functions;
+    let types = mod.types;
+    let tables = mod.tables;
 
     while(brk == false) {
         let op_code = data.readUint8();
@@ -1648,7 +1658,7 @@ function decodeByteCode(data, mod) {
                     data.offset--; // rewind
                     type = data.readSLEB128();
                     if (type > 0) {
-                        inst.type = mod.types[type];
+                        inst.type = types[type];
                     } else {
                         throw new RangeError("block typeidx is invalid");
                     }
@@ -1671,7 +1681,7 @@ function decodeByteCode(data, mod) {
                     data.offset--; // rewind
                     type = data.readSLEB128();
                     if (type > 0) {
-                        inst.type = mod.types[type];
+                        inst.type = types[type];
                     } else {
                         throw new RangeError("if typeidx is invalid");
                     }
@@ -1729,12 +1739,19 @@ function decodeByteCode(data, mod) {
                 opcodes.push(new ReturnInst(op_code));
                 break;
             case 0x10: // call          [t1] -> [t2]
-                opcodes.push(new CallInst(op_code, data.readULEB128()));
+            {
+                let funcidx = data.readULEB128();
+                opcodes.push(new CallInst(op_code, functions[funcidx]));
                 break;
+            }
             case 0x11: // call_indirect [t1 i32] -> [t2]
-                opcodes.push(new IndirectCallInst(op_code, data.readULEB128(), data.readULEB128()));
+            {
+                let tableidx = data.readULEB128();
+                let typeidx = data.readULEB128();
+                opcodes.push(new IndirectCallInst(op_code, tables[tableidx], types[typeidx]));
                 //opcodes.push({opcode: op_code, tableidx: data.readULEB128(), typeidx: data.readULEB128()});
                 break;
+            }
             case 0x41: // i32.const     [] -> [i32]
                 opcodes.push({opcode: op_code, value: data.readSLEB128()});
                 break;
@@ -2364,7 +2381,7 @@ function decodeByteCode(data, mod) {
                     case 0x03: // atomic.fence 0x00
                     {
                         let memidx = data.readULEB128();
-                        opcodes.push({opcode: (op_code << 8) | sub, memidx: memidx});
+                        opcodes.push({opcode: (op_code << 8) | sub, memidx: memidx}); // TODO: replace memidx with memory ref
                         break;
                     }
                     case 0x10: // i32.atomic.load m         [i32] -> [i32]
@@ -2528,15 +2545,18 @@ function encodeByteCode(data, opcodes) {
                 data.writeUint8(b1);
                 break;
             case 0x10: // call
+            {
                 data.writeUint8(b1);
-                data.writeULEB128(inst.funcidx);
+                data.writeULEB128(inst.func._index);
                 break;
+            }
             case 0x11: // call_indirect
+            {
                 data.writeUint8(b1);
-                data.writeULEB128(inst.tableidx);
-                data.writeULEB128(inst.typeidx);
-                //opcodes.push({opcode: op_code, tableidx: data.readULEB128(), typeidx: data.readULEB128()});
+                data.writeULEB128(inst.table._index);
+                data.writeULEB128(inst.type.typeidx);
                 break;
+            }
             case 0x41: // i32.const
                 data.writeUint8(b1);
                 data.writeSLEB128(inst.value);
@@ -3801,6 +3821,10 @@ function decodeTypeSection(data, len) {
     return functypes;
 }
 
+function encodeTypeSection(types) {
+    // TODO!
+}
+
 class ImportedFunction {
 
     constructor() {
@@ -4053,32 +4077,34 @@ function encodeImportSection(imports) {
 function decodeFuncSection(data, len, mod) {
     let end = data.offset + len;
     let cnt = data.readULEB128();
-    let results = [];
-    let arr;
+
+    let functions;
     let funcidx = 0;
     if (!mod.functions) {
         mod.functions = [];
     }
 
-    let functypes = mod.types;
+    let types = mod.types;
     /*let len2 = functypes.length;
     for (let i = 0; i < len2; i++) {
         functypes[i].count = 0;
     }*/
 
-    arr = mod.functions;
+    functions = mod.functions;
     while (data.offset < end) {
         let typeidx = data.readULEB128();
         let fn = new WasmFunction();
-        let functype = functypes[typeidx];
-        fn.type = functype;
+        let type = types[typeidx];
+        fn.type = type;
         fn.funcidx = funcidx++;
-        functype.count++;
-        arr.push(fn);
-        results.push(fn);
+        type.count++;
+        functions.push(fn);
     }
     console.log("function vector count: %d", cnt);
-    return results;
+}
+
+function encodeFuncSection(mod) {
+    // TODO:
 }
 
 function decodeTableSection(data, len, mod) {
@@ -4104,6 +4130,10 @@ function decodeTableSection(data, len, mod) {
 
     console.log("table vector count: %d", cnt);
     console.log(tables);
+}
+
+function encodeTableSection(tables) {
+    // TODO:
 }
 
 function decodeMemorySection(data, len, mod) {
@@ -4138,6 +4168,10 @@ function decodeMemorySection(data, len, mod) {
     }
     console.log("memory vector count: %d", cnt);
     console.log(mems);
+}
+
+function encodeMemorySection(memory) {
+    // TODO:
 }
 
 function decodeGlobalSection(data, len, mod) {
@@ -4180,7 +4214,7 @@ function encodeGlobalSection(mod) {
     len = arr.length;
     for (let i = 0; i < len; i++) {
         let glob = arr[i];
-        secsz += byteCodeComputeByteLength(glob.init);
+        secsz += byteCodeComputeByteLength(mod, glob.init);
         secsz += 2;
     }
 
@@ -4355,23 +4389,51 @@ function decodeStartSection(data, len) {
     console.log("start section entry-fn-idx: %d", funcidx);
 }
 
+function encodeStartSection(mod) {
+    // TODO:
+}
+
 function decodeElementSection(data, secsz, mod) {
     let end = data.offset + secsz;
     let cnt = data.readULEB128();
+    let functions = mod.functions;
+    let elements = [];
+    mod.elements = elements;
     for (let i = 0; i < cnt; i++) {
         let prefix = data.readULEB128();
         if (prefix == 0x00) {
             let expr = decodeByteCode(data, mod);
-            let idx = expr.opcodes[0].value;
+            let idx;
+            if (expr.opcodes.length == 2 && expr.opcodes[0].opcode == 0x41 && expr.opcodes[1].opcode == 0x0B) {
+                idx = expr.opcodes[0].value;
+            } else {
+                throw new TypeError("only static offset expressions supported ATM");
+            }
+            console.log(expr);
             let vlen = data.readULEB128();
-            let vec = [undefined];
-            vec.length = idx + vlen;
+            let tableidx = 0;
+            let table;
+            if (Array.isArray(mod.tables[tableidx].contents)) {
+                table = mod.tables[0].contents;
+            } else {
+                table = [undefined];
+                mod.tables[0].contents = table;
+            }
+            let vec = [];
+            //vec.length = idx + vlen;
             for (let x = 0; x < vlen; x++) {
                 let funcidx = data.readULEB128();
-                vec[idx++] = funcidx;
+                let fn = functions[funcidx];
+                table[idx++] = fn;
+                vec.push(fn);
             }
 
-            mod.tables[0].contents = vec;
+            let element = {};
+            element.prefix = prefix;
+            element.opcodes = expr.opcodes;
+            element.vector = vec;
+            element.count = vlen;
+            elements.push(element);
 
             //console.log("prefix: %d expr: %o vec(funcidx) %o", prefix, expr, vec);
         }
@@ -4380,11 +4442,17 @@ function decodeElementSection(data, secsz, mod) {
     //console.log("element section vector count: %d", cnt);
 }
 
-function decodeCodeSection(data, len, mod, funcvec) {
+function encodeElementSection(mod) {
+
+}
+
+function decodeCodeSection(data, len, mod, start) {
     let end = data.offset + len;
     let cnt = data.readULEB128();
     let idx = 0;
-    let results = [];
+
+    let functions = mod.functions;
+
     for (let y = 0; y < cnt; y++) {
         let tmp1 = data.offset;
         let bytesz = data.readULEB128();
@@ -4399,15 +4467,52 @@ function decodeCodeSection(data, len, mod, funcvec) {
         let opcode_start = data.offset;
         let opcode_end = tmp + bytesz;
         let opcodes = decodeByteCode(data, mod);
-        let fn = funcvec[y];
-        fn.locals = locals;
-        fn.codeStart = tmp1;
-        fn.opcode_start = opcode_start;
-        fn.opcode_end = opcode_end;
-        fn.opcodes = opcodes.opcodes;
+        let func = functions[start++];
+        func.locals = locals;
+        func.codeStart = tmp1;
+        func.opcode_start = opcode_start;
+        func.opcode_end = opcode_end;
+        func.opcodes = opcodes.opcodes;
         data.offset = opcode_end;
     }
     console.log("code vector count: %d", cnt);
+}
+
+function prepareModuleEncode(mod) {
+    let vector = mod.types;
+    let len = vector.length;
+    for (let i = 0; i < len; i++) {
+        let type = vector[i];
+        type.typeidx = i;
+    }
+
+    vector = mod.globals;
+    len = vector.length;
+    for (let i = 0; i < len; i++) {
+        let glob = vector[i];
+        glob._index = i;
+    }
+
+    vector = mod.tables;
+    len = vector.length;
+    for (let i = 0; i < len; i++) {
+        let table = vector[i];
+        table._index = i;
+    }
+
+    vector = mod.memory;
+    len = vector.length;
+    for (let i = 0; i < len; i++) {
+        let mem = vector[i];
+        mem._index = i;
+    }
+
+    vector = mod.functions;
+    len = vector.length;
+    for (let i = 0; i < len; i++) {
+        let func = vector[i];
+        func._index = i;
+    }
 }
 
 function encodeCodeSection(mod, section, funcvec) {
@@ -4468,7 +4573,7 @@ function encodeCodeSection(mod, section, funcvec) {
                 subsz += 1;
             }
 
-            let opcodesz = byteCodeComputeByteLength(func.opcodes);
+            let opcodesz = byteCodeComputeByteLength(mod, func.opcodes);
             let totsz = subsz + opcodesz;
             totsz += lengthULEB128(subsz + opcodesz);
             let buf = new ArrayBuffer(totsz);
@@ -4646,6 +4751,10 @@ function decodeCustomProducers(data, size) {
     return dict;
 }
 
+function encodeCustomProducers(producers) {
+    // TODO:
+}
+
 function decode_name_map(data, size) {
 
     let end = data.offset + size;
@@ -4675,7 +4784,7 @@ function decode_name_map(data, size) {
 // 7    global names
 // 8    element segment names
 // 9    data segment names
-function decodeCustomName(data, size) {
+function decodeCustomName(data, size, mod) {
 
     let results = {};
 
@@ -4685,21 +4794,31 @@ function decodeCustomName(data, size) {
         let id = data.readUint8();
         let subsz = data.readULEB128();
         let substart = data.offset;
-        if (id == 0x01) {
+        if (id == 0x01) { // function names
 
             //console.log("id %d size: %d", id, subsz);
-            let map = decode_name_map(data, subsz);
+            let functions = mod.functions;
+            let cnt = data.readULEB128();
+            let map = new Map();
+            for (let i = 0; i < cnt; i++) {
+                let idx = data.readULEB128();
+                let nlen = data.readULEB128();
+                let name = data.readUTF8Bytes(nlen);
+                let func = functions[idx];
+                map.set(func, name);
+            }
+
             //console.log(map);
             data.offset = substart + subsz;
             results.functions = map;
 
-        } else if (id == 0x00) {
-            //console.log("id %d size: %d", id, subsz);
+        } else if (id == 0x00) { // module name
+            console.log("id %d size: %d", id, subsz);
             data.offset = substart + subsz;
-        } else if (id == 0x02) {
-            //console.log("id %d size: %d", id, subsz);
+        } else if (id == 0x02) { // local names
+            console.log("id %d size: %d", id, subsz);
             data.offset = substart + subsz;
-        } else if (id == 0x07) {
+        } else if (id == 0x07) { // global names
 
             //console.log("id %d size: %d", id, subsz);
             let map = decode_name_map(data, subsz);
@@ -4707,7 +4826,7 @@ function decodeCustomName(data, size) {
             data.offset = substart + subsz;
             results.globals = map;
 
-        } else if (id == 0x09) {
+        } else if (id == 0x09) { // data segment names
 
             //console.log("id %d size: %d", id, subsz);
             let map = decode_name_map(data, subsz);
@@ -4715,7 +4834,7 @@ function decodeCustomName(data, size) {
             data.offset = substart + subsz;
             results.data = map;
         } else {
-            //console.warn("id %d size: %d", id, subsz);
+            console.warn("id %d size: %d", id, subsz);
             data.offset = substart + subsz;
         }
     }
@@ -4723,8 +4842,16 @@ function decodeCustomName(data, size) {
     return results;
 }
 
+function encodeCustomNameSection(names) {
+
+}
+
 function isValidSectionType(type) {
 
+}
+
+function encodeWebAssemblyBinary(mod, options) {
+    // check script.js for impl.
 }
 
 // https://webassembly.github.io/spec/core/binary/modules.html#binary-version
@@ -4798,6 +4925,7 @@ function parseWebAssemblyBinary(buf) {
         }
     }
 
+    let impfncnt = 0;
     let funcvec;
     let mod = {};
     cnt = filtered.length;
@@ -4812,9 +4940,10 @@ function parseWebAssemblyBinary(buf) {
                 break;
             case 0x02:  // import
                 mod.imports = decodeImportSection(data, size, mod);
+                impfncnt = mod.functions ? mod.functions.length : 0;
                 break;
             case 0x03:  // function
-                funcvec = decodeFuncSection(data, size, mod);
+                decodeFuncSection(data, size, mod);
                 break;
             case 0x04:  // table
                 decodeTableSection(data, size, mod);
@@ -4835,7 +4964,7 @@ function parseWebAssemblyBinary(buf) {
                 decodeElementSection(data, size, mod);
                 break;
             case 0x0A:  // code
-                decodeCodeSection(data, size, mod, funcvec);
+                decodeCodeSection(data, size, mod, impfncnt);
                 break;
             case 0x0B:  // data
                 mod.dataSegments = decodeDataSection(data, size, mod);
@@ -4845,10 +4974,10 @@ function parseWebAssemblyBinary(buf) {
                 let name = chunk.name;
                 switch (name) {
                     case 'producers':
-                        decodeCustomProducers(data, size);
+                        mod.producers = decodeCustomProducers(data, size);
                         break;
                     case 'name':
-                        mod.names = decodeCustomName(data, size);
+                        mod.names = decodeCustomName(data, size, mod);
                         break;
                     default:
                         break;  // do nothing;

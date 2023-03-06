@@ -8,6 +8,8 @@
 // reqognize objc method names.
 // objc-abi inspector.
 // headless workflows 
+// 
+// https://hacks.mozilla.org/2017/07/webassembly-table-imports-what-are-they/
 
 const SECTION_TYPE = {
     TYPE: 1,
@@ -230,337 +232,390 @@ function isZeroFill(dataSeg) {
 let importIsModified = false;
 let moduleBuffer;
 let targetModule;
-let moduleWorkflows = [{
-	name: "Export Selected (Save as)",
-	onselect: function(container, action) {
+let moduleWorkflows = [
+	{
+		name: "Export Selected (Save as)",
+		onselect: function(container, action) {
 
-		const mandatory = [];
-		let checkboxes = [];
-		let exported = [];
+			const mandatory = [];
+			let checkboxes = [];
+			let exported = [];
 
 
-		function onCheckboxChange(evt) {
-			let target = evt.currentTarget;
-			let idx = checkboxes.indexOf(target);
-			exported[idx] = target.checked;
-			console.log(exported);
-		}
-
-		let ul = document.createElement("ul");
-		ul.classList.add("accordion-list");
-		container.appendChild(ul);
-		let sections = targetModule.sections;
-		let len = sections.length;
-		for (let i = 0;i < len;i++) {
-			let section = sections[i];
-			let typename = sectionnames[section.type];
-			let li = document.createElement("li");
-			li.classList.add("accordion-header");
-			let checkbox = document.createElement("input");
-			checkbox.addEventListener("change", onCheckboxChange);
-			checkbox.type = "checkbox";
-			checkbox.checked = true;
-			li.appendChild(checkbox)
-			ul.appendChild(li);
-			if (section.type == 0) {
-				let span = document.createElement("code");
-				span.textContent = typename + '\t';
-				li.appendChild(span);
-				span = document.createElement("code");
-				span.textContent = section.name;
-				li.appendChild(span);
-			} else {
-				let span = document.createTextNode(typename);
-				li.appendChild(span);
+			function onCheckboxChange(evt) {
+				let target = evt.currentTarget;
+				let idx = checkboxes.indexOf(target);
+				exported[idx] = target.checked;
+				console.log(exported);
 			}
 
-			exported.push(true);
-			checkboxes.push(checkbox);
-
-			let tn = document.createTextNode("\x20" + humanFileSize(section.size, true));
-			li.appendChild(tn);
-		}
-
-		action.exported = exported;
-	},
-	onrun: function(container, action) {
-
-		let exported = action.exported;
-		let sections = targetModule.sections;
-		let len = sections.length;
-		let buffers = [];
-		targetModule._buffer = moduleBuffer;
-
-		let magic = moduleBuffer.slice(0, 8);
-		buffers.push(magic);
-
-		for (let i = 0;i < len;i++) {
-			let section = sections[i];
-			let isExported = exported[i];
-			let type = section.type;
-			if (!isExported) {
-				//
-				if (type == SECTION_TYPE.DATA) {
-					let buf = new Uint8Array(3);
-					buf[0] = SECTION_TYPE.DATA;
-					buf[1] = 1;
-					buf[2] = 0;
-					buffers.push(buf.buffer);
+			let ul = document.createElement("ul");
+			ul.classList.add("accordion-list");
+			container.appendChild(ul);
+			let sections = targetModule.sections;
+			let len = sections.length;
+			for (let i = 0;i < len;i++) {
+				let section = sections[i];
+				let typename = sectionnames[section.type];
+				let li = document.createElement("li");
+				li.classList.add("accordion-header");
+				let checkbox = document.createElement("input");
+				checkbox.addEventListener("change", onCheckboxChange);
+				checkbox.type = "checkbox";
+				checkbox.checked = true;
+				li.appendChild(checkbox)
+				ul.appendChild(li);
+				if (section.type == 0) {
+					let span = document.createElement("code");
+					span.textContent = typename + '\t';
+					li.appendChild(span);
+					span = document.createElement("code");
+					span.textContent = section.name;
+					li.appendChild(span);
 				} else {
-					continue;
+					let span = document.createTextNode(typename);
+					li.appendChild(span);
 				}
-			} else if (type == SECTION_TYPE.IMPORT && section._isDirty === true) {
-				let sub = encodeImportSection(targetModule.imports);
-				buffers.push(sub);
-			} else if (type == SECTION_TYPE.GLOBAL && section._isDirty === true) {
-				let sub = encodeGlobalSection(targetModule);
-				buffers.push(sub);
-			} else if (type == SECTION_TYPE.EXPORT && section._isDirty === true) {
-				let sub = encodeExportSection(targetModule);
-				buffers.push(sub);
-			} else if (type == SECTION_TYPE.CODE) {
-				let sub = encodeCodeSection(targetModule, section, targetModule.functions);
-				if (Array.isArray(sub)) {
-					let xlen = sub.length;
-					for (let x = 0; x < xlen; x++) {
-						buffers.push(sub[x]);
+
+				exported.push(true);
+				checkboxes.push(checkbox);
+
+				let tn = document.createTextNode("\x20" + humanFileSize(section.size, true));
+				li.appendChild(tn);
+			}
+
+			action.exported = exported;
+		},
+		onrun: function(container, action) {
+
+			let exported = action.exported;
+			let sections = targetModule.sections;
+			let len = sections.length;
+			let buffers = [];
+			targetModule._buffer = moduleBuffer;
+
+			let magic = moduleBuffer.slice(0, 8);
+			buffers.push(magic);
+
+			prepareModuleEncode(targetModule);
+
+			for (let i = 0;i < len;i++) {
+				let section = sections[i];
+				let isExported = exported[i];
+				let type = section.type;
+				if (!isExported) {
+					//
+					if (type == SECTION_TYPE.DATA) {
+						let buf = new Uint8Array(3);
+						buf[0] = SECTION_TYPE.DATA;
+						buf[1] = 1;
+						buf[2] = 0;
+						buffers.push(buf.buffer);
+					} else {
+						continue;
+					}
+				} else if (type == SECTION_TYPE.IMPORT && section._isDirty === true) {
+					let sub = encodeImportSection(targetModule.imports);
+					buffers.push(sub);
+				} else if (type == SECTION_TYPE.GLOBAL && section._isDirty === true) {
+					let sub = encodeGlobalSection(targetModule);
+					buffers.push(sub);
+				} else if (type == SECTION_TYPE.EXPORT && section._isDirty === true) {
+					let sub = encodeExportSection(targetModule);
+					buffers.push(sub);
+				} else if (type == SECTION_TYPE.CODE) {
+					let sub = encodeCodeSection(targetModule, section, targetModule.functions);
+					if (Array.isArray(sub)) {
+						let xlen = sub.length;
+						for (let x = 0; x < xlen; x++) {
+							buffers.push(sub[x]);
+						}
+					} else {
+						buffers.push(sub);
 					}
 				} else {
+					let end = section.dataOffset + section.size;
+					let sub = moduleBuffer.slice(section.offset, end);
 					buffers.push(sub);
 				}
-			} else {
-				let end = section.dataOffset + section.size;
-				let sub = moduleBuffer.slice(section.offset, end);
-				buffers.push(sub);
 			}
-		}
 
-		let filename = url.split('/').pop();
-		saveAsFile(new Blob(buffers, { type: "application/octet-stream"}), filename);
-	},
-}, {
-	name: "Extract Data Section (Save as)",
-	onselect: function(container, action) {
-		const mandatory = [];
-		let checkboxes = [];
-		let exported = [];
+			let filename = url.split('/').pop();
+			saveAsFile(new Blob(buffers, { type: "application/octet-stream"}), filename);
+		},
+	}, {
+		name: "Extract Data Section (Save as)",
+		onselect: function(container, action) {
+			const mandatory = [];
+			let checkboxes = [];
+			let exported = [];
 
 
-		function onCheckboxChange(evt) {
-			let target = evt.currentTarget;
-			let idx = checkboxes.indexOf(target);
-			exported[idx] = target.checked;
-			console.log(exported);
-		}
+			function onCheckboxChange(evt) {
+				let target = evt.currentTarget;
+				let idx = checkboxes.indexOf(target);
+				exported[idx] = target.checked;
+				console.log(exported);
+			}
 
-		let tbl = document.createElement("table");
-		let thead = document.createElement("thead");
-		let tr = document.createElement("tr");
-		let th = document.createElement("th");
-		th.textContent = "seg. no.";
-		tr.appendChild(th);
-		th = document.createElement("th");
-		th.textContent = "name";
-		tr.appendChild(th);
-		th = document.createElement("th");
-		th.textContent = "size";
-		tr.appendChild(th);
-		th = document.createElement("th");
-		th.textContent = "rle";
-		tr.appendChild(th);
-		th = document.createElement("th");
-		th.textContent = "uninitialized data";
-		tr.appendChild(th);
-		thead.appendChild(tr);
-		tbl.appendChild(thead);
-		container.appendChild(tbl);
-
-		let tbody = document.createElement("tbody");
-		tbl.appendChild(tbody);
-		
-		let dataSegments = targetModule.dataSegments;
-		let names = targetModule.names && targetModule.names.data ? targetModule.names.data : null;
-		let len = dataSegments.length;
-		for (let i = 0;i < len;i++) {
-			let dataSeg = dataSegments[i];
-			let name, allzeros = false;
-			
+			let tbl = document.createElement("table");
+			let thead = document.createElement("thead");
 			let tr = document.createElement("tr");
-			let td = document.createElement("td");
-			td.textContent = i.toString();
-			tr.appendChild(td);
-			td = document.createElement("td");
-			tr.appendChild(td);
+			let th = document.createElement("th");
+			th.textContent = "seg. no.";
+			tr.appendChild(th);
+			th = document.createElement("th");
+			th.textContent = "name";
+			tr.appendChild(th);
+			th = document.createElement("th");
+			th.textContent = "size";
+			tr.appendChild(th);
+			th = document.createElement("th");
+			th.textContent = "rle";
+			tr.appendChild(th);
+			th = document.createElement("th");
+			th.textContent = "uninitialized data";
+			tr.appendChild(th);
+			thead.appendChild(tr);
+			tbl.appendChild(thead);
+			container.appendChild(tbl);
 
-			if (names && names.has(i)) {
-				name = names.get(i);
+			let tbody = document.createElement("tbody");
+			tbl.appendChild(tbody);
+			
+			let dataSegments = targetModule.dataSegments;
+			let names = targetModule.names && targetModule.names.data ? targetModule.names.data : null;
+			let len = dataSegments.length;
+			for (let i = 0;i < len;i++) {
+				let dataSeg = dataSegments[i];
+				let name, allzeros = false;
+				
+				let tr = document.createElement("tr");
+				let td = document.createElement("td");
+				td.textContent = i.toString();
+				tr.appendChild(td);
+				td = document.createElement("td");
+				tr.appendChild(td);
+
+				if (names && names.has(i)) {
+					name = names.get(i);
+				}
+
+				if (name) {
+
+					let node = document.createElement("code");
+					node.textContent = names.get(i);
+					td.appendChild(node);
+				} else {
+					let node = document.createTextNode("segment\x20");
+					td.appendChild(node);
+
+					node = document.createElement("code");
+					node.textContent = "N/A";
+					td.appendChild(node);
+				}
+
+				if (name === ".bss") {
+					allzeros = isZeroFill(dataSeg);
+				}
+
+				td = document.createElement("td");
+				td.textContent = humanFileSize(dataSeg.size, true);
+				tr.appendChild(td);
+
+				td = document.createElement("td");
+				tr.appendChild(td);
+
+				let checkbox = document.createElement("input");
+				checkbox.addEventListener("change", onCheckboxChange);
+				checkbox.type = "checkbox";
+				checkbox.checked = false;
+				td.appendChild(checkbox);
+
+				td = document.createElement("td");
+				td.textContent = allzeros ? "YES" : "NO";
+				tr.appendChild(td);
+
+				exported.push(true);
+				checkboxes.push(checkbox);
+				tbody.appendChild(tr);
+
+				//let tn = document.createTextNode("\x20" + humanFileSize(section.size, true));
+				//li.appendChild(tn);
 			}
 
-			if (name) {
-
-				let node = document.createElement("code");
-				node.textContent = names.get(i);
-				td.appendChild(node);
-			} else {
-				let node = document.createTextNode("segment\x20");
-				td.appendChild(node);
-
-				node = document.createElement("code");
-				node.textContent = "N/A";
-				td.appendChild(node);
+			action.exported = exported;
+		},
+		onrun: function(container, action) {
+			let mod = targetModule;
+			let segments = mod.dataSegments;
+			if (!segments || segments.length == 0)
+				return;
+			// TODO: get names.
+			let tot = 0;
+			let len = segments.length;
+			for (let i = 0; i < len; i++) {
+				let seg = segments[i];
+				tot += seg.size;
 			}
 
-			if (name === ".bss") {
-				allzeros = isZeroFill(dataSeg);
+			let src = new Uint8Array(moduleBuffer);
+			let buffer = new Uint8Array(tot + (len * 8)); // {dst-offset, size}
+			let data = new DataView(buffer.buffer);
+			let off = 0;
+			for (let i = 0; i < len; i++) {
+				let seg = segments[i];
+				let memdst;
+				if (seg.inst.opcodes.length == 2 && seg.inst.opcodes[0].opcode == 65)
+					memdst = seg.inst.opcodes[0].value;
+				if (!memdst)
+					throw TypeError("memdst must be set");
+				data.setUint32(off, memdst, true);
+				off += 4;
+				data.setUint32(off, seg.size, true);
+				off += 4;
+				u8_memcpy(src, seg.offset, seg.size, buffer, off);
+				off += seg.size;
 			}
 
-			td = document.createElement("td");
-			td.textContent = humanFileSize(dataSeg.size, true);
-			tr.appendChild(td);
+			saveAsFile(buffer, "data.seg", "application/octet-stream");
 
-			td = document.createElement("td");
-			tr.appendChild(td);
-
-			let checkbox = document.createElement("input");
-			checkbox.addEventListener("change", onCheckboxChange);
-			checkbox.type = "checkbox";
-			checkbox.checked = false;
-			td.appendChild(checkbox);
-
-			td = document.createElement("td");
-			td.textContent = allzeros ? "YES" : "NO";
-			tr.appendChild(td);
-
-			exported.push(true);
-			checkboxes.push(checkbox);
-			tbody.appendChild(tr);
-
-			//let tn = document.createTextNode("\x20" + humanFileSize(section.size, true));
-			//li.appendChild(tn);
-		}
-
-		action.exported = exported;
-	},
-	onrun: function(container, action) {
-		let mod = targetModule;
-		let segments = mod.dataSegments;
-		if (!segments || segments.length == 0)
-			return;
-		// TODO: get names.
-		let tot = 0;
-		let len = segments.length;
-		for (let i = 0; i < len; i++) {
-			let seg = segments[i];
-			tot += seg.size;
-		}
-
-		let src = new Uint8Array(moduleBuffer);
-		let buffer = new Uint8Array(tot + (len * 8)); // {dst-offset, size}
-		let data = new DataView(buffer.buffer);
-		let off = 0;
-		for (let i = 0; i < len; i++) {
-			let seg = segments[i];
-			let memdst;
-			if (seg.inst.opcodes.length == 2 && seg.inst.opcodes[0].opcode == 65)
-				memdst = seg.inst.opcodes[0].value;
-			if (!memdst)
-				throw TypeError("memdst must be set");
-			data.setUint32(off, memdst, true);
-			off += 4;
-			data.setUint32(off, seg.size, true);
-			off += 4;
-			u8_memcpy(src, seg.offset, seg.size, buffer, off);
-			off += seg.size;
-		}
-
-		saveAsFile(buffer, "data.seg", "application/octet-stream");
-
-	},
-}, {
-	name: "Run optimization (freebsd binary)",
-}, {
-	name: "Run objc_msgSend optimization",
-	// go trough every objc_msgSend and generate conditional call block for every objc defined method.
-}, {
-	name: "Run objc optimization",
-	// 1. find function with name "__wasm_call_ctors"
-	// 2. remove repeated calls to ".objcv2_load_function" which only needs to be called once.
-}, {
-	name: "Post optimize for objc dylib/NSBundle",
-}, {
-	name: "Post optimize for dylib",
-}, {
-	name: "Dump import functions",
-	onselect: function(container, action) {
-
-	},
-	onrun: function(container, action) {
-		let mod = targetModule;
-		let types = mod.types;
-		let imports = mod.imports;
-		let len = imports.length;
-		let lines = [];
-		for (let i = 0; i < len; i++) {
-			let imp = imports[i];
-			if (!(imp instanceof ImportedFunction)) {
-				continue;
-			}
-			let functype = types[imp.typeidx];
-			let sign = functype_toString(functype);
-			let idx = sign.indexOf('(');
-			let str = sign.substring(0, idx) + imp.module + '.' + imp.name + sign.substring(idx);
-			lines.push(str);
-
-		}
-
-		console.log(lines.join('\n'));
-	},
-}];
-
-let _workflowActions = {
-	postOptimizeWasm: postOptimizeWasm,
-	postOptimizeAtomicInst: console.error,
-	postOptimizeMemInst: console.error,
-	convertToImportedGlobal: console.error,
-	convertMemory: convertMemoryAction,
-	extractDataSegments: extractDataSegmentsAction,
-	output: outputAction,
-};
-
-let _freebsdWorkflow = [
-	{
-		action: "convertMemory",
-		options: {
-			type: "import", 	// no value leaves the type as is.
-			memidx: 0,
-			// min: 			// no value leaves the min as is.
-			max: 1954,
-			shared: true,
-		}
+		},
 	}, {
-		action: "postOptimizeWasm",
-		options: undefined,
+		name: "Run optimization (freebsd binary)",
 	}, {
-		action: "extractDataSegments",
-		options: {
-			format: "wasm",
-			consume: true,
-		}
+		name: "Run objc_msgSend optimization",
+		// go trough every objc_msgSend and generate conditional call block for every objc defined method.
 	}, {
-		action: "output",
-		options: {
-			exclude: [{type: 0x0B}, 
-					  {type: 0x00, name: ".debug_info"},
-					  {type: 0x00, name: ".debug_loc"},
-					  {type: 0x00, name: ".debug_ranges"}, 
-					  {type: 0x00, name: ".debug_abbrev"},
-					  {type: 0x00, name: ".debug_line"},
-					  {type: 0x00, name: ".debug_str"}]
-		}
+		name: "Run objc optimization",
+		// 1. find function with name "__wasm_call_ctors"
+		// 2. remove repeated calls to ".objcv2_load_function" which only needs to be called once.
+	}, {
+		name: "Post optimize for objc dylib/NSBundle",
+	}, {
+		name: "Post optimize for dylib",
+	}, {
+		name: "Dump import functions",
+		onselect: function(container, action) {
+
+		},
+		onrun: function(container, action) {
+			let mod = targetModule;
+			let types = mod.types;
+			let imports = mod.imports;
+			let len = imports.length;
+			let lines = [];
+			for (let i = 0; i < len; i++) {
+				let imp = imports[i];
+				if (!(imp instanceof ImportedFunction)) {
+					continue;
+				}
+				let functype = types[imp.typeidx];
+				let sign = functype_toString(functype);
+				let idx = sign.indexOf('(');
+				let str = sign.substring(0, idx) + imp.module + '.' + imp.name + sign.substring(idx);
+				lines.push(str);
+
+			}
+
+			console.log(lines.join('\n'));
+		},
 	}
 ];
 
-function runWorkflowActions(mod, actions) {
+let _workflowActions = {
+	postOptimizeWasm: postOptimizeWasmAction,
+	postOptimizeAtomicInst: console.error,
+	postOptimizeMemInst: console.error,
+	convertToImportedGlobal: convertToImportedGlobalAction,
+	getGlobalInitialValue: getGlobalInitialValueAction,
+	postOptimizeKernMain: postOptimizeKernMainAction,
+	postOptimizeKernSide: postOptimizeKernSideAction,
+	convertMemory: convertMemoryAction,
+	extractDataSegments: extractDataSegmentsAction,
+	output: outputAction,
+	objc_optimize_objc_msgSend: objcOptimizeObjcMsgSendAction,
+	objc_optimize_wasm_call_ctors: objcOptimizeCtorsAction,
+	objc_optimize_dylib: objcOptimizeDylibAction,
+	gnustepEmbedPlist: gnustepEmbedInfoPlistAction,
+	postOptimizeWasmDylib: postOptimizeWasmDylibAction,
+	dumpImportedFn: dumpImportedFnAction,
+};
+
+let _freebsdWorkflow = {
+	name: "tinybsd 14.0 main-binary workflow",
+	actions: [
+		{
+			action: "convertMemory",
+			options: {
+				type: "import", 	// no value leaves the type as is.
+				memidx: 0,
+				// min: 			// no value leaves the min as is.
+				max: 1954,
+				shared: true,
+			}
+		}/*, {
+			action: "getGlobalInitialValue",
+			options: {
+				name: "__stack_pointer",
+				variable: "__stack_pointer"
+			}
+		}, {
+			action: "getGlobalInitialValue",
+			options: {
+				name: "thread0_st",
+				variable: "thread0_st"
+			}
+		}, {
+			action: "convertToImportedGlobal",
+			options: {
+				srcname: "__stack_pointer",
+				dstname: {
+					module: "kern",
+					name: undefined,
+				},
+				mutable: undefined,
+			}
+		}, {
+			action: "convertToImportedGlobal",
+			options: {
+				srcname: "__curthread",
+				dstname: {
+					module: "kern",
+					name: undefined,
+				},
+				mutable: undefined,
+			}
+		}*/, {
+			action: "postOptimizeWasm",
+			options: undefined,
+		}, {
+			action: "postOptimizeKernMain",
+			options: undefined,
+		}, {
+			action: "extractDataSegments",
+			options: {
+				format: "wasm",
+				consume: true,
+			}
+		}, {
+			action: "output",
+			options: {
+				exclude: [{type: 0x0B}, 
+						  {type: 0x00, name: ".debug_info"},
+						  {type: 0x00, name: ".debug_loc"},
+						  {type: 0x00, name: ".debug_ranges"}, 
+						  {type: 0x00, name: ".debug_abbrev"},
+						  {type: 0x00, name: ".debug_line"},
+						  {type: 0x00, name: ".debug_str"}]
+			}
+		}
+	]
+};
+
+const _workflows = [_freebsdWorkflow];
+
+function runWorkflowActions(mod, actions, ctxmap) {
 
 	/*
 	let len = actions.length;
@@ -589,18 +644,24 @@ function runWorkflowActions(mod, actions) {
 			resolveFn();
 			return;
 		}
+		let ctx;
 		let actionData;
 		let returnPromise;
 		for (let i = index; i < actions.length; i++) {
 			let ret;
 			actionData = actions[i];
+			if (ctxmap && ctxmap.has(actionData)) {
+				ctx = ctxmap.get(actionData);
+			} else {
+				ctx = null;
+			}
 			let name = actionData.action;
 			let fn = _workflowActions[name];
 			let options = typeof actionData.options == "object" && actionData.options !== null ? actionData.options : undefined;
 			if (options) {
-				ret = fn(mod, options);
+				ret = fn(ctx, mod, options);
 			} else {
-				ret = fn(mod);
+				ret = fn(ctx, mod);
 			}
 			if (ret instanceof Promise) {
 				returnPromise = ret;
@@ -641,7 +702,7 @@ function runWorkflowActions(mod, actions) {
 	return p;
 }
 
-function convertMemoryAction(mod, options) {
+function convertMemoryAction(ctx, mod, options) {
 
 	let mem;
 	let exp;
@@ -714,7 +775,61 @@ function convertMemoryAction(mod, options) {
 	}
 }
 
-function extractDataSegmentsAction(mod, options) {
+function convertToImportedGlobalAction(ctx, mod, options) {
+
+	let oldglob;
+	let newglob;
+
+	if (typeof options.srcname == "string") {
+		oldglob = _namedGlobals[name];
+	} else if (typeof options.srcidx == "number") {
+		oldglob = mod.globals[options.srcidx]; // TODO: cache original global-vector..
+	}
+
+	newglob = new ImportedGlobal();
+
+	if (typeof options.dstname.module == "string") {
+		newglob.module = options.dstname.module;
+	}
+
+	if (typeof options.dstname.name == "string") {
+		newglob.name = options.dstname.name;
+	} else {
+		newglob.name = options.srcname;
+	}
+
+	if (typeof options.mutable == "boolean") {
+		newglob.mutable = options.mutable;
+	} else {
+		newglob.name = oldglob.mutable;
+	}
+
+	newglob.type = oldglob.type;
+
+	convertToImportedGlobal(mod, oldglob, newglob);
+	mod.imports.push(newglob);
+	removeExportFor(mod, oldglob);
+
+	let sec = findModuleByType(mod, SECTION_TYPE.IMPORT);
+	sec._isDirty = true;
+	sec = findModuleByType(mod, SECTION_TYPE.EXPORT);
+	sec._isDirty = true;
+	sec = findModuleByType(mod, SECTION_TYPE.GLOBAL);
+	sec._isDirty = true;
+
+	return true;
+}
+
+function getGlobalInitialValueAction(ctx, mod, options) {
+
+	if (!_namedGlobals)
+		_namedGlobals = namedGlobalsMap(mod);
+	let name = options.name;
+	let glob = _namedGlobals[name];
+	console.log("%s = %d", name, glob.init[0].value);
+}
+
+function extractDataSegmentsAction(ctx, mod, options) {
 	let segments = mod.dataSegments;
 	if (!segments || segments.length == 0)
 		return;
@@ -762,7 +877,7 @@ function extractDataSegmentsAction(mod, options) {
 			for (let i = 0; i < len; i++) {
 				let seg = segments[i];
 				tot += lengthULEB128(0); // seg.kind (not implemented)
-				tot += byteCodeComputeByteLength(seg.inst.opcodes);
+				tot += byteCodeComputeByteLength(mod, seg.inst.opcodes);
 				tot += lengthULEB128(seg.size);
 				tot += seg.size;
 			}
@@ -863,7 +978,7 @@ function extractDataSegmentsAction(mod, options) {
 	//saveAsFile(buffer, "data.seg", "application/octet-stream");
 }
 
-function outputAction(mod, options) {
+function outputAction(ctx, mod, options) {
 
 	let exported = [];
 	let sections = targetModule.sections;
@@ -905,6 +1020,8 @@ function outputAction(mod, options) {
 	let magic = moduleBuffer.slice(0, 8);
 	buffers.push(magic);
 
+	prepareModuleEncode(targetModule);
+
 	for (let i = 0;i < len;i++) {
 		let section = sections[i];
 		let isExported = exported[i];
@@ -928,6 +1045,21 @@ function outputAction(mod, options) {
 			buffers.push(sub);
 		} else if (type == SECTION_TYPE.EXPORT && section._isDirty === true) {
 			let sub = encodeExportSection(targetModule);
+			buffers.push(sub);
+		} else if (type == SECTION_TYPE.TABLE && section._isDirty === true) {
+			let sub = encodeTableSection(targetModule.tables);
+			buffers.push(sub);
+		} else if (type == SECTION_TYPE.ELEMENT && section._isDirty === true) {
+			let sub = encodeElementSection(targetModule);
+			buffers.push(sub);
+		} else if (type == SECTION_TYPE.MEMORY && section._isDirty === true) {
+			let sub = encodeMemorySection(targetModule.memory);
+			buffers.push(sub);
+		} else if (type == SECTION_TYPE.CUSTOM && section.name == "name" && section._isDirty === true) {
+			let sub = encodeCustomNameSection(targetModule.names);
+			buffers.push(sub);
+		} else if (type == SECTION_TYPE.CUSTOM && section.name == "producers" && section._isDirty === true) {
+			let sub = encodeCustomProducers(targetModule.producers);
 			buffers.push(sub);
 		} else if (type == SECTION_TYPE.CODE) {
 			let sub = encodeCodeSection(targetModule, section, targetModule.functions);
@@ -984,6 +1116,354 @@ function outputAction(mod, options) {
 	//saveAsFile(new Blob(buffers, { type: "application/octet-stream"}), filename);
 }
 
+function postOptimizeWasmAction(ctx, mod, options) {
+	return postOptimizeWasm(mod);
+}
+
+
+function makeIndirectCallable(mod, tableidx, func) {
+	let tbl = mod.tables[tableidx].contents;
+	if (!tbl)
+		throw TypeError("invalid tableidx");
+	let idx = tbl.indexOf(func);
+	if (idx !== -1) {
+		return idx;
+	}
+	idx = tbl.length;
+	tbl.push(func);
+	return idx;
+}
+
+function indexOfFuncType(mod, argv, retv) {
+	let types = mod.types;
+	let len = types.length;
+	let argc = Array.isArray(argv) ? argv.length : 0;
+	let retc = Array.isArray(retv) ? retv.length : 0;
+	for (let i = 0; i < len; i++) {
+		let type = types[i];
+		if (argc != type.argc || retc != type.retc) {
+			continue;
+		}
+
+		if (argc != 0) {
+			let match = true;
+			for (let x = 0; x < argc; x++) {
+				if (argv[x] != type.argv[x]) {
+					match = false;
+					break;
+				}
+			}
+
+			if (!match)
+				continue;
+		}
+
+		if (retc != 0) {
+			let match = true;
+			for (let x = 0; x < retc; x++) {
+				if (retv[x] != type.retv[x]) {
+					match = false;
+					break;
+				}
+			}
+
+			if (!match)
+				continue;
+		}
+
+		// if we reached here it matching.
+		return i;
+	}
+
+	return -1;
+}
+
+function postOptimizeKernMainAction(ctx, mod, options) {
+
+	let opcodes = [
+	    {"opcode": 0x02, "type": 64},						// block
+	    {"opcode": 0x41, "value": 0}, 						// i32.const
+	    {"opcode": 0x28, "offset": 10732288, "align": 2},	// i32.load  	(__curthread)
+	    {"opcode": 0x41, "value": 0},						// i32.const
+	    {"opcode": 0x28, "offset": 10732292, "align": 2},	// i32.load 	(__mainthread)
+	    {"opcode": 0x47}, 									// i32.ne 		(should be eq)
+	    {"opcode": 0x0d, "labelidx": 0}, 					// br_if
+	    {"opcode": 0x41, "value": 123},						// i32.const 	(value returned)
+	    {"opcode": 0x0f}, 									// return
+	    {"opcode": 0x0b},									// end
+	    {"opcode": 0x41, "value": 1448},					// i32.const 	(1448 should be replaced by the table index of the current funct)
+	    // we need to stack our args here..
+	    {"opcode": 0x10, "funcidx": 14}, 					// call
+	    {"opcode": 0x41, "value": 321},						// i32.const 	(value returned)
+	    {"opcode": 0x0b}									// end (end of function)
+	];
+
+	let kthrmain_dispatch_list = [
+		"G_PART_ADD",
+		"G_PART_ADD_ALIAS",
+		"G_PART_BOOTCODE",
+		"G_PART_CREATE",
+		"G_PART_DESTROY",
+		"G_PART_DUMPCONF",
+		"G_PART_DUMPTO",
+		"G_PART_FULLNAME",
+		"G_PART_IOCTL",
+		"G_PART_MODIFY",
+		"G_PART_NEW_PROVIDER",
+		"G_PART_RESIZE",
+		"G_PART_NAME",
+		"G_PART_PRECHECK",
+		"G_PART_PROBE",
+		"G_PART_READ",
+		"G_PART_RECOVER",
+		"G_PART_SETUNSET",
+		"G_PART_TYPE",
+		"G_PART_WRITE",
+		"G_PART_GETATTR",
+		"ISA_ADD_CONFIG",
+		"ISA_SET_CONFIG_CALLBACK",
+		"ISA_PNP_PROBE",
+		"BUS_PRINT_CHILD",
+		"BUS_PROBE_NOMATCH",
+		"BUS_READ_IVAR",
+		"BUS_WRITE_IVAR",
+		"BUS_CHILD_DELETED",
+		"BUS_CHILD_DETACHED",
+		"BUS_DRIVER_ADDED",
+		"BUS_ADD_CHILD",
+		"BUS_RESCAN",
+		"BUS_ALLOC_RESOURCE",
+		"BUS_ACTIVATE_RESOURCE",
+		"BUS_MAP_RESOURCE",
+		"BUS_UNMAP_RESOURCE",
+		"BUS_DEACTIVATE_RESOURCE",
+		"BUS_ADJUST_RESOURCE",
+		"BUS_TRANSLATE_RESOURCE",
+		"BUS_RELEASE_RESOURCE",
+		"BUS_SETUP_INTR",
+		"BUS_TEARDOWN_INTR",
+		"BUS_SUSPEND_INTR",
+		"BUS_RESUME_INTR",
+		"BUS_SET_RESOURCE",
+		"BUS_GET_RESOURCE",
+		"BUS_DELETE_RESOURCE",
+		"BUS_GET_RESOURCE_LIST",
+		"BUS_CHILD_PRESENT",
+		"BUS_CHILD_PNPINFO",
+		"BUS_CHILD_LOCATION",
+		"BUS_BIND_INTR",
+		"BUS_CONFIG_INTR",
+		"BUS_DESCRIBE_INTR",
+		"BUS_HINTED_CHILD",
+		"BUS_GET_DMA_TAG",
+		"BUS_GET_BUS_TAG",
+		"BUS_HINT_DEVICE_UNIT",
+		"BUS_NEW_PASS",
+		"BUS_REMAP_INTR",
+		"BUS_SUSPEND_CHILD",
+		"BUS_RESUME_CHILD",
+		"BUS_GET_DOMAIN",
+		"BUS_GET_CPUS",
+		"BUS_RESET_PREPARE",
+		"BUS_RESET_POST",
+		"BUS_RESET_CHILD",
+		"BUS_GET_PROPERTY",
+		"BUS_GET_DEVICE_PATH",
+		"CLOCK_GETTIME",
+		"CLOCK_SETTIME",
+		"CPUFREQ_SET",
+		"CPUFREQ_GET",
+		"CPUFREQ_LEVELS",
+		"CPUFREQ_DRV_SET",
+		"CPUFREQ_DRV_GET",
+		"CPUFREQ_DRV_SETTINGS",
+		"CPUFREQ_DRV_TYPE",
+		"DEVICE_PROBE",
+		"DEVICE_IDENTIFY",
+		"DEVICE_ATTACH",
+		"DEVICE_DETACH",
+		"DEVICE_SHUTDOWN",
+		"DEVICE_SUSPEND",
+		"DEVICE_RESUME",
+		"DEVICE_QUIESCE",
+		"DEVICE_REGISTER",
+		"LINKER_LOOKUP_SYMBOL",
+		"LINKER_LOOKUP_DEBUG_SYMBOL",
+		"LINKER_SYMBOL_VALUES",
+		"LINKER_DEBUG_SYMBOL_VALUES",
+		"LINKER_SEARCH_SYMBOL",
+		"LINKER_EACH_FUNCTION_NAME",
+		"LINKER_EACH_FUNCTION_NAMEVAL",
+		"LINKER_LOOKUP_SET",
+		"LINKER_UNLOAD",
+		"LINKER_CTF_GET",
+		"LINKER_SYMTAB_GET",
+		"LINKER_STRTAB_GET",
+		"LINKER_LOAD_FILE",
+		"LINKER_LINK_PRELOAD",
+		"LINKER_LINK_PRELOAD_FINISH",
+		"MSI_ALLOC_MSI",
+		"MSI_RELEASE_MSI",
+		"MSI_ALLOC_MSIX",
+		"MSI_RELEASE_MSIX",
+		"MSI_MAP_MSI",
+		"MSI_IOMMU_INIT",
+		"MSI_IOMMU_DEINIT",
+		"PIC_ACTIVATE_INTR",
+		"PIC_BIND_INTR",
+		"PIC_DISABLE_INTR",
+		"PIC_ENABLE_INTR",
+		"PIC_MAP_INTR",
+		"PIC_DEACTIVATE_INTR",
+		"PIC_SETUP_INTR",
+		"PIC_TEARDOWN_INTR",
+		"PIC_POST_FILTER",
+		"PIC_POST_ITHREAD",
+		"PIC_PRE_ITHREAD",
+		"PIC_INIT_SECONDARY",
+		"PIC_IPI_SEND",
+		"PIC_IPI_SETUP",
+		"SERDEV_IHAND",
+		"SERDEV_IPEND",
+		"SERDEV_SYSDEV",
+		"CRYPTODEV_PROBESESSION",
+		"CRYPTODEV_NEWSESSION",
+		"CRYPTODEV_FREESESSION",
+		"CRYPTODEV_PROCESS",
+	];
+	let elementsIsDirty = false;
+	let typesIsDirty = false;
+
+	let tableidx = 0;
+	let table = mod.tables[tableidx].contents;
+	let dispatchTypeMap = new Map();
+	let types = [];
+	let items = [];
+	let notfound = [];
+	let names = mod.names.functions;
+	let map = {};
+	let len = kthrmain_dispatch_list.length;
+	for (let i = 0; i < len; i++) {
+		let str = kthrmain_dispatch_list[i];
+		let found = false;
+		for (const [func, name] of names) {
+			if (str == name) {
+				found = true;
+				let obj = {func: func, name: name};
+				let idx = table.indexOf(func);
+				if (idx == -1) {
+					idx = makeIndirectCallable(mod, tableidx, func);
+					elementsIsDirty = true;
+				}
+				obj.indirectIndex = idx;
+				items.push(obj);
+				let type = func.type;
+				if (types.indexOf(type) == -1)
+					types.push(type);
+			}
+		}
+		if (!found)
+			notfound.push(str);
+	}
+
+	let new_imports = [];
+
+	len = types.length;
+	for (let i = 0; i < len; i++) {
+		let type = types[i];
+		let argv = Array.isArray(type.argv) ? type.argv.slice(0) : [];
+		argv.unshift(127); // unshift i32 for funcidx
+		let typeidx = indexOfFuncType(mod, argv, type.retv);
+		if (typeidx == -1) {
+			typeidx = mod.types.length;
+			let newtype = new FuncType();
+	        newtype.argc = argv.length;
+	        newtype.argv = argv;
+	        newtype.retc = type.retc;
+	        newtype.retv = Array.isArray(type.retv) ? type.retv.slice(0) : null;
+	        newtype.typeidx = typeidx;
+	        newtype.count = 1;
+			mod.types.push(newtype);
+			typesIsDirty = true;
+		} else {
+
+		}
+
+		let dtype = mod.types[typeidx];
+		dispatchTypeMap.set(type, dtype);
+		let typestr = emccStyleTypeString(dtype);
+
+		console.log("ftype: %d dtype: %d %s", type.typeidx, typeidx, wasmStyleTypeString(type));
+		console.log("kthread_dispatch_sync_%s", typestr);
+
+		let newfn = new ImportedFunction();
+		newfn.module = "kern";
+		let suffix = typestr.indexOf('_') == 1 ? typestr.replace('_', '') : typestr;
+		newfn.name = "kthrmain_dispatch_sync_" + suffix;
+		newfn.type = dtype;
+
+		new_imports.push(newfn);
+	}
+
+	let lastimp = 0;
+	let functions = mod.functions;
+	let imports = mod.imports;
+	len = imports.length;
+	for (let i = 0; i < len; i++) {
+		let imp = imports[i];
+		if (imp instanceof ImportedFunction) {
+			lastimp++;
+		}
+	}
+
+	len = new_imports.length;
+	for (let i = 0; i < len; i++) {
+		let imp = new_imports[i];
+		functions.splice(lastimp, 0, imp);
+		lastimp++;
+	}
+
+	len = new_imports.length;
+	for (let i = 0; i < len; i++) {
+		let imp = new_imports[i];
+		imports.push(imp);
+	}
+
+	console.log(items);
+	console.log(types);
+	console.log(dispatchTypeMap);
+	console.log(new_imports);
+	console.log(notfound);
+}
+
+function postOptimizeKernSideAction(ctx, module, options) {
+
+}
+
+function objcOptimizeObjcMsgSendAction(ctx, module, options) {
+
+}
+
+function objcOptimizeCtorsAction(ctx, module, options) {
+	
+}
+
+function objcOptimizeDylibAction(ctx, module, options) {
+	
+}
+
+function postOptimizeWasmDylibAction(ctx, module, options) {
+	
+}
+
+function dumpImportedFnAction(ctx, module, options) {
+	
+}
+
+function gnustepEmbedInfoPlistAction(ctx, module, options) {
+
+}
+
 function removeExportFor(mod, obj) {
 
 	if (obj instanceof WasmFunction) {
@@ -1030,219 +1510,219 @@ function postOptimizeWasm(mod) {
 	const inst_replace = [
 		{ 	// atomic operations.
 			name: "atomic_notify",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE00, 0, 0);
 			}
 		}, {
 			name: "atomic_wait32",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE01, 0, 0);
 			}
 		}, {
 			name: "wasm_atomic_fence",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return {opcode: 0xFE03, memidx: 0};
 			}
 		}, {
 			name: "atomic_load8",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE12, 0, 0);
 			}
 		}, {
 			name: "atomic_store8",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE19, 0, 0);
 			}
 		}, {
 			name: "atomic_add8",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE20, 0, 0);
 			}
 		}, {
 			name: "atomic_sub8",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE27, 0, 0);
 			}
 		}, {
 			name: "atomic_and8",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE2E, 0, 0);
 			}
 		},{
 			name: "atomic_or8",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE35, 0, 0);
 			}
 		}, {
 			name: "atomic_xor8",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE3C, 0, 0);
 			}
 		}, {
 			name: "atomic_xchg8",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE43, 0, 0);
 			}
 		}, {
 			name: "atomic_cmpxchg8",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE4A, 0, 0);
 			}
 		},  {
 			name: "atomic_load16",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE13, 0, 0);
 			}
 		}, {
 			name: "atomic_store16",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE1A, 0, 0);
 			}
 		}, {
 			name: "atomic_add16",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE21, 0, 0);
 			}
 		}, {
 			name: "atomic_sub16",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE28, 0, 0);
 			}
 		}, {
 			name: "atomic_and16",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE2F, 0, 0);
 			}
 		},{
 			name: "atomic_or16",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE36, 0, 0);
 			}
 		}, {
 			name: "atomic_xor16",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE3D, 0, 0);
 			}
 		}, {
 			name: "atomic_xchg16",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE44, 0, 0);
 			}
 		}, {
 			name: "atomic_cmpxchg16",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE4B, 0, 0);
 			}
 		}, {
 			name: "atomic_load32",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE10, 0, 0);
 			}
 		}, {
 			name: "atomic_store32",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE17, 0, 0);
 			}
 		}, {
 			name: "atomic_add32",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE1E, 0, 0);
 			}
 		}, {
 			name: "atomic_sub32",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE25, 0, 0);
 			}
 		}, {
 			name: "atomic_and32",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE2C, 0, 0);
 			}
 		},{
 			name: "atomic_or32",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE33, 0, 0);
 			}
 		}, {
 			name: "atomic_xor32",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE3A, 0, 0);
 			}
 		}, {
 			name: "atomic_xchg32",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE41, 0, 0);
 			}
 		}, {
 			name: "atomic_cmpxchg32",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE48, 0, 0);
 			}
 		}, {
 			name: "atomic_wait64",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE02, 0, 0);
 			}
 		}, {
 			name: "atomic_load64",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE11, 0, 0);
 			}
 		}, {
 			name: "atomic_store64",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE18, 0, 0);
 			}
 		}, {
 			name: "atomic_add64",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE1F, 0, 0);
 			}
 		}, {
 			name: "atomic_sub64",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE26, 0, 0);
 			}
 		}, {
 			name: "atomic_and64",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE2D, 0, 0);
 			}
 		}, {
 			name: "atomic_or64",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE34, 0, 0);
 			}
 		}, {
 			name: "atomic_xor64",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE3B, 0, 0);
 			}
 		}, {
 			name: "atomic_xchg64",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE42, 0, 0);
 			}
 		},{
 			name: "atomic_cmpxchg64",
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				return new AtomicInst(0xFE49, 0, 0);
 			}
 		}, { 							// memory operations.
 			name: "memcpy",
-			handler: memcpyReplaceHandler
+			replace: memcpyReplaceHandler
 		}, {
 			name: "__memcpy",
-			handler: memcpyReplaceHandler
+			replace: memcpyReplaceHandler
 		}, {
 			name: "memcpy_early",
-			handler: memcpyReplaceHandler
+			replace: memcpyReplaceHandler
 		}/*, {
 			name: "memset",
 			// replacing memset vs. memory.fill is where it gets complicated, memset returns which the 
 			// memory.fill instruction does not. check for drop instruction but if not found we must fake
 			// the return of memset 
-			handler: function(inst, index, arr) {
+			replace: function(inst, index, arr) {
 				let peek = arr[index + 1];
 				if (peek.opcode == 0x1A) { // drop
 					arr[index] = {opcode: 0xfc0b, memidx: 0};
@@ -1261,26 +1741,25 @@ function postOptimizeWasm(mod) {
 		return;
 	}
 
-	let indexes = [];
-	let nmap = mod.names.functions;
+	let funcmap = [];
+	let names = mod.names.functions;
 	let len = inst_replace.length;
 	for (let i = 0; i < len; i++) {
-		let func = inst_replace[i];
+		let handler = inst_replace[i];
 		let name = func.name;
-		let funcidx = undefined;
+		let match;
 
-		for (const [key, value] of nmap) {
+		for (const [func, value] of names) {
 			if (value == name) {
-				funcidx = key;
+				match = func;
 				break;
 			}
 		}
 
-		if (funcidx !== undefined) {
-			func.funcidx = funcidx;
-			func.count = 0;
-			opsopt.push(func);
-			indexes.push(funcidx);
+		if (match) {
+			handler.funcidx = funcidx;
+			handler.count = 0;
+			funcmap.set(match, handler);
 		}
 	}
 
@@ -1300,13 +1779,14 @@ function postOptimizeWasm(mod) {
 	for (let y = start; y < ylen; y++) {
 		let func = functions[y];
 		let opcodes = func.opcodes;
-		for (let x = 0; x < opcodes.length; x++) { // do get opcodes.length to local as handlers might alter opcode around them.
+		// NOTE: don't try to optimize the opcodes.length, handlers might alter instructions around them.
+		for (let x = 0; x < opcodes.length; x++) {
 			let op = opcodes[x];
 			if (op.opcode == 0x10) {
-				let idx = indexes.indexOf(op.funcidx);
-				if (idx !== -1) {
-					opsopt[idx].count++;
-					let res = opsopt[idx].handler(op, x, opcodes);
+				if (funcmap.has(op.func)) {
+					let handler = funcmap.get(op.func);
+					handler.count++;
+					let res = handler.replace(op, x, opcodes);
 					if (res === op) {
 						// do nothing
 					} else if (typeof res == "boolean") {
@@ -1362,7 +1842,7 @@ function postOptimizeWasm(mod) {
 	sec = findModuleByType(targetModule, SECTION_TYPE.GLOBAL);
 	sec._isDirty = true;
 
-	console.log(opsopt);
+	console.log(funcmap);
 }
 
 function mapGlobalsUsage(mod) {
@@ -1585,6 +2065,8 @@ function convertToImportedGlobal(mod, oldGlobal, newGlobal) {
 	return true;
 }
 
+
+
 let __uiInit = false;
 
 function createMemidxInfo() {
@@ -1722,10 +2204,16 @@ function setupUI() {
 
 	let runWorkflowUIBtn = document.querySelector("#run-workflow-2");
 	runWorkflowUIBtn.addEventListener("click", function(evt) {
+		let ctxmap = null;
 		if (targetFilename == "kern.wasm") {
-			runWorkflowActions(targetModule, _freebsdWorkflow);
+			runWorkflowActions(targetModule, _freebsdWorkflow.actions, ctxmap).then(function(res) {
+				populateWebAssemblyInfo(targetModule);
+			}, function (err) {
+
+			});
+		} else {
+			console.error("not kern.wasm");
 		}
-		populateWebAssemblyInfo(targetModule);
 	});
 }
 
@@ -1928,72 +2416,894 @@ function wasmStyleTypeString(functype) {
     return arg + " -> " + ret;
 }
 
+function emcc_type_name(type) {
+    switch(type) {
+        case 0x7F: 
+            return 'i';
+        case 0x7E:
+            return 'j';
+        case 0x7D:
+            return 'f';
+        case 0x7C:
+            return 'd';
+        case 0x00:
+            return 'v';
+        // wasm 2.0
+        case 0x7b:
+            return 'v128';
+        case 0x70:
+            return 'funcref';
+        case 0x67:
+            return 'externref';
+        default:
+            return undefined;
+    }
+}
+
+function emccStyleTypeString(functype) {
+    let arg, ret;
+    let argc = functype.argc;
+    if (argc == 0) {
+        arg = "v";
+    } else if (argc == 1){
+    	arg = emcc_type_name(functype.argv[0]);
+    } else {
+        let argv = functype.argv;
+        arg = "";
+        for (let x = 0; x < argc; x++) {
+            arg += emcc_type_name(argv[x]);
+        }
+    }
+
+    let retc = functype.retc;
+    if (retc == 0) {
+        ret = "v";
+    } else if (retc == 1){
+    	ret = emcc_type_name(functype.retv[0]);
+    } else {
+        let retv = functype.retv;
+        ret = "";
+        for (let x = 0; x < retc; x++) {
+            ret += emcc_type_name(retv[x]);
+        }
+    }
+
+    return ret + '_' + arg;
+}
+
 class WasmGlobalsInspectorView {
 
 	constructor (header, body) {
+		let _self = this;
+		this._heading = header;
+		this._body = body;
 
+		let findInput = document.createElement("input");
+		findInput.type = "text";
+		findInput.placeholder = "find";
+		body.appendChild(findInput);
+
+		let findOptions = document.createElement("select");
+		findOptions.innerHTML = "<option value=\"starts-with\">Starts with</option><option value=\"ends-with\">Ends with</option><option value=\"contains\">Contains</option><option value=\"regexp\">Regexp</option>";
+		findOptions.selectedIndex = 2;
+		body.appendChild(findOptions);
+
+		let findCS = document.createElement("input");
+		findCS.type = "checkbox";
+		findCS.id = "case-sensetive";
+		body.appendChild(findCS);
+		let labelCS = document.createElement("label");
+		labelCS.for = "case-sensetive";
+		labelCS.textContent = "Case Sensetive";
+		body.appendChild(labelCS);
+
+		let table = document.createElement("table");
+		let thead = document.createElement("thead");
+		thead.innerHTML = "<tr><th>index</th><th>name</th><th>type</th><th>initial value</th><th>use count</th><th>import/export</th></tr>";
+		table.appendChild(thead);
+		let tbody = document.createElement("tbody");
+		table.appendChild(tbody);
+		body.appendChild(table);
+		let footer = document.createElement("span");
+		body.appendChild(footer);
+		this._footer = footer;
+		this._tbody = tbody;
+
+		this._defaultCollection;
+		this._collection;
+		this._pageIndex = 0;
+		this._pageRowCount = 25;
+
+		{
+			let paginator = document.createElement("div");
+			paginator.classList.add("pagination");
+			let first = document.createElement("span");
+			first.textContent = "First";
+			first.addEventListener("click", function (evt) {
+				_self._pageIndex = 0;
+				curr.textContent = "1";
+				_self.render();
+			});
+			paginator.appendChild(first);
+			let prev = document.createElement("span");
+			prev.innerHTML = "<svg fill=\"currentColor\"><path d=\"M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z\"/></svg>";
+			prev.addEventListener("click", function (evt) {
+				if (_self._pageIndex == 0)
+					return;
+				_self._pageIndex--;
+				curr.textContent = (_self._pageIndex + 1)
+				_self.render();
+			});
+			paginator.appendChild(prev);
+			let curr = document.createElement("span");
+			curr.classList.add("page-active");
+			curr.textContent = "1";
+			paginator.appendChild(curr);
+			let next = document.createElement("span");
+			next.innerHTML = "<svg fill=\"currentColor\"><path d=\"M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z\"/></svg>";
+			next.addEventListener("click", function (evt) {
+				let last = _self._collection.length == 0 ? 0 : Math.floor(_self._collection.length / _self._pageRowCount);
+				if (_self._pageIndex == last)
+					return;
+				_self._pageIndex++;
+				curr.textContent = (_self._pageIndex + 1);
+				_self.render();
+			});
+			paginator.appendChild(next);
+			let lastBtn = document.createElement("span");
+			lastBtn.textContent = "Last";
+			lastBtn.addEventListener("click", function (evt) {
+				_self._pageIndex = _self._collection.length == 0 ? 0 : Math.floor(_self._collection.length / _self._pageRowCount);
+				curr.textContent = (_self._pageIndex + 1);
+				_self.render();
+			});
+			paginator.appendChild(lastBtn);
+			body.appendChild(paginator);
+		}
+
+		findOptions.addEventListener("change", function(evt) {
+			let results = _self.search(findInput.value, {
+					caseSensitive: findCS.value !== "off",
+					searchType: findOptions.selectedOptions.item(0).value
+				});
+			_self._collection = results;
+			_self._pageIndex = 0;
+			_self.render();
+			_self._footer.textContent = "found " + results.length + " matches";
+		});
+
+		findCS.addEventListener("change", function(evt) {
+			let results = _self.search(findInput.value, {
+					caseSensitive: findCS.value !== "off",
+					searchType: findOptions.selectedOptions.item(0).value
+				});
+			_self._collection = results;
+			_self._pageIndex = 0;
+			_self.render();
+			_self._footer.textContent = "found " + results.length + " matches";
+		});
+
+		findInput.addEventListener("keyup", function(evt) {
+			if (evt.key == "Enter") {
+				let results = _self.search(findInput.value, {
+					caseSensitive: findCS.value !== "off",
+					searchType: findOptions.selectedOptions.item(0).value
+				});
+				_self._collection = results;
+				_self._pageIndex = 0;
+				_self.render();
+				_self._footer.textContent = "found " + results.length + " matches";
+			}
+		});
 	}
 
 	search(string, opts) {
 
+		let items = this._defaultCollection;
+		let len = items.length;
+		let cis = opts.caseSensitive !== true;
+		let matches = [];
+		let searchType = opts.searchType;
+		switch (searchType) {
+			case "starts-with":
+				if (cis) {
+					let lc = string.toLowerCase();
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.toLowerCase().startsWith(lc)) {
+							matches.push(item);
+						}
+					}
+				} else {
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.startsWith(string)) {
+							matches.push(item);
+						}
+					}
+				}
+				break;
+			case "ends-with":
+				if (cis) {
+					let lc = string.toLowerCase();
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.toLowerCase().endsWith(lc)) {
+							matches.push(item);
+						}
+					}
+				} else {
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.endsWith(string)) {
+							matches.push(item);
+						}
+					}
+				}
+				break;
+			case "contains":
+				if (cis) {
+					let lc = string.toLowerCase();
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.toLowerCase().includes(lc)) {
+							matches.push(item);
+						}
+					}
+				} else {
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.includes(string)) {
+							matches.push(item);
+						}
+					}
+				}
+				break;
+			case "regexp": {
+				let regexp = new Regexp(string);
+				for (let i = 0; i < len; i++) {
+					let item = items[i];
+					if (item.name.search(regexp)) {
+						matches.push(item);
+					}
+				}
+				break;
+			}
+			default:
+				break;
+		}			
+
+		return matches;
 	}
 
 	render() {
+		let tbody = this._tbody;
+		while (tbody.lastChild) {
+			tbody.removeChild(tbody.lastChild);
+		}
 
+		let start = this._pageIndex * this._pageRowCount;
+		let items = this._collection;
+
+		let globals = targetModule.globals;
+		let len = Math.min(items.length, start + this._pageRowCount);
+		for (let i = start; i < len; i++) {
+			let item = items[i];
+			let glob = item.global;
+
+			let tr = document.createElement("tr");
+			let td = document.createElement("td");
+			td.textContent = globals.indexOf(glob);
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.textContent = item.name;
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.textContent = type_name(glob.type);
+			tr.appendChild(td);
+			td = document.createElement("td");
+			if (glob instanceof WasmGlobal) {
+				let init = glob.init[0].value
+				td.textContent = init;
+			}
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.textContent = typeof glob.usage == "number" ? glob.usage : "";
+			tr.appendChild(td);
+			td = document.createElement("td"); // import/export
+			tr.appendChild(td);
+			tbody.appendChild(tr);
+		}
 	}
 
-	set data(value) {
-
+	set model(value) {
+		let items = [];
+		this._defaultCollection = items;
+		this._collection = items;
+		for (let p in value) {
+			items.push({name: p, global: value[p]});
+		}
+		this.render();
 	}
 
-	get data() {
-		return this._data;
+	get model() {
+		return this._defaultCollection;
 	}
 }
 
 class WasmFunctionsInspectorView {
 
 	constructor (header, body) {
+		let _self = this;
+		let findInput = document.createElement("input");
+		findInput.type = "text";
+		findInput.placeholder = "find";
+		body.appendChild(findInput);
 
+		let findOptions = document.createElement("select");
+		findOptions.innerHTML = "<option value=\"starts-with\">Starts with</option><option value=\"ends-with\">Ends with</option><option value=\"contains\">Contains</option><option value=\"regexp\">Regexp</option>";
+		findOptions.selectedIndex = 2;
+		body.appendChild(findOptions);
+
+		let findCS = document.createElement("input");
+		findCS.type = "checkbox";
+		findCS.id = "case-sensetive";
+		body.appendChild(findCS);
+		let labelCS = document.createElement("label");
+		labelCS.for = "case-sensetive";
+		labelCS.textContent = "Case Sensetive";
+		body.appendChild(labelCS);
+
+		let findResults = document.createElement("ul");
+		body.appendChild(findResults);
+
+		let table = document.createElement("table");
+		table.classList.add("data-table","wasm-functions");
+		let thead = document.createElement("thead");
+		thead.innerHTML = "<tr><th>funcidx</th><th>name</th><th><code>in -> out</code></th><th>typeidx</th><th>use count</th><th>stack usage</th><th>inst cnt</th><th>bytecode size</th></tr>";
+		table.appendChild(thead);
+		let tbody = document.createElement("tbody");
+		table.appendChild(tbody);
+		body.appendChild(table);
+		let footer = document.createElement("span");
+		body.appendChild(footer);
+
+		this._heading = header;
+		this._body = body;
+		this._tbody = tbody;
+		this._footer = footer;
+		this._defaultCollection = null;
+		this._collection = null;
+		this._pageIndex = 0;
+		this._pageRowCount = 25;
+
+		{
+			let paginator = document.createElement("div");
+			paginator.classList.add("pagination");
+			let first = document.createElement("span");
+			first.textContent = "First";
+			first.addEventListener("click", function (evt) {
+				_self._pageIndex = 0;
+				curr.textContent = "1"
+				_self.render();
+			});
+			paginator.appendChild(first);
+			let prev = document.createElement("span");
+			prev.innerHTML = "<svg fill=\"currentColor\"><path d=\"M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z\"/></svg>";
+			prev.addEventListener("click", function (evt) {
+				if (_self._pageIndex == 0)
+					return;
+				_self._pageIndex--;
+				curr.textContent = (_self._pageIndex + 1)
+				_self.render();
+			});
+			paginator.appendChild(prev);
+			let curr = document.createElement("span");
+			curr.classList.add("page-active");
+			curr.textContent = "1";
+			paginator.appendChild(curr);
+			let next = document.createElement("span");
+			next.innerHTML = "<svg fill=\"currentColor\"><path d=\"M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z\"/></svg>";
+			next.addEventListener("click", function (evt) {
+				let last = _self._collection.length == 0 ? 0 : Math.floor(_self._collection.length / _self._pageRowCount);
+				if (_self._pageIndex == last)
+					return;
+				_self._pageIndex++;
+				curr.textContent = (_self._pageIndex + 1);
+				_self.render();
+			});
+			paginator.appendChild(next);
+			let lastBtn = document.createElement("span");
+			lastBtn.textContent = "Last";
+			lastBtn.addEventListener("click", function (evt) {
+				_self._pageIndex = _self._collection.length == 0 ? 0 : Math.floor(_self._collection.length / _self._pageRowCount);
+				curr.textContent = (_self._pageIndex + 1);
+				_self.render();
+			});
+			paginator.appendChild(lastBtn);
+			body.appendChild(paginator);
+		}
+
+		findOptions.addEventListener("change", function(evt) {
+			let value = findInput.value;
+			let results = _self.search(findInput.value, {
+					caseSensitive: findCS.value !== "off",
+					searchType: findOptions.selectedOptions.item(0).value
+				});
+			_self._collection = results;
+			_self._pageIndex = 0;
+			_self.render();
+		});
+
+		findInput.addEventListener("keyup", function(evt) {
+			if (evt.key == "Enter") {
+				let value = findInput.value;
+				let results = _self.search(findInput.value, {
+					caseSensitive: findCS.value !== "off",
+					searchType: findOptions.selectedOptions.item(0).value
+				});
+				_self._collection = results;
+				_self._pageIndex = 0;
+				_self.render();
+			}
+		});
+
+		//let tbltest = document.createElement("table");
+		//tbltest.innerHTML = "<thead></tr><th>funcidx</th><th>name</th><th>typeidx</th><th>use count</th><th>stack usage</th><th>inst cnt</th><th>bytecode size</th></tr></thead><tbody><tbody>"
+		//body.appendChild(tbltest);
 	}
 
 	search(string, opts) {
+		let mod = this._module;
+		let names = mod.names.functions;
+		let items = this._defaultCollection;
+		let len = items.length;
+		let cis = opts.caseSensitive !== true;
+		let matches = [];
+		let searchType = opts.searchType;
+		switch (searchType) {
+			case "starts-with":
+				if (cis) {
+					let lc = string.toLowerCase();
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.toLowerCase().startsWith(lc)) {
+							matches.push(item);
+						}
+					}
+				} else {
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.startsWith(string)) {
+							matches.push(item);
+						}
+					}
+				}
+				break;
+			case "ends-with":
+				if (cis) {
+					let lc = string.toLowerCase();
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.toLowerCase().endsWith(lc)) {
+							matches.push(item);
+						}
+					}
+				} else {
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.endsWith(string)) {
+							matches.push(item);
+						}
+					}
+				}
+				break;
+			case "contains":
+				if (cis) {
+					let lc = string.toLowerCase();
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.toLowerCase().includes(lc)) {
+							matches.push(item);
+						}
+					}
+				} else {
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.includes(string)) {
+							matches.push(item);
+						}
+					}
+				}
+				break;
+			case "regexp": {
+				let regexp = new Regexp(string);
+				for (let i = 0; i < len; i++) {
+					let item = items[i];
+					if (item.name.search(regexp)) {
+						matches.push(item);
+					}
+				}
+				break;
+			}
+			default:
+				break;
+		}
 
+		return matches;
 	}
 
 	render() {
-		
+		let tbody = this._tbody;
+		while (tbody.lastChild) {
+			tbody.removeChild(tbody.lastChild);
+		}
+
+		let start = this._pageIndex * this._pageRowCount;
+		let items = this._collection;
+		let mod = this._module;
+
+		let len = Math.min(items.length, start + this._pageRowCount);
+		for (let i = start; i < len; i++) {
+			let item = items[i];
+			let funcidx = item.funcidx;
+			let func = item.func; //mod.functions[funcidx];
+
+			let tr = document.createElement("tr");
+			let td = document.createElement("td");
+			td.classList.add("wasm-funcidx");
+			//let span = document.createElement("span");
+			//span.classList.add("index-badge")
+			//span.textContent = item.funcidx;
+			//td.appendChild(span);
+			td.textContent = item.funcidx;
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.textContent = item.name;
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.classList.add("wasm-stack-signature");
+			let sign = wasmStyleTypeString(func.type);
+			sign = sign.replace("->", "→");
+			td.textContent = sign;
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.classList.add("wasm-typeidx");
+			let typeidx = mod.types.indexOf(func.type);
+			//span = document.createElement("span");
+			//span.classList.add("index-badge")
+			//span.textContent = typeidx;
+			//td.appendChild(span);
+			td.textContent = typeidx;
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.textContent = typeof func.usage == "number" ? func.usage : "";
+			tr.appendChild(td);
+			td = document.createElement("td"); // stack usage
+			if (typeof func.stackUsage == "number")
+				td.textContent = func.stackUsage;
+			tr.appendChild(td);
+			td = document.createElement("td"); // instruction count
+			td.textContent = (func instanceof WasmFunction) ? func.opcodes.length : "";
+			tr.appendChild(td);
+			td = document.createElement("td"); // bytecode size
+			td.textContent = (func instanceof WasmFunction) ? (func.opcode_end - func.codeStart) : "";
+			tr.appendChild(td);
+			tbody.appendChild(tr);
+		}
+
+		this._footer.textContent = "found " + this._collection.length + " matches";	
 	}
 
-	set data(value) {
+	set module(mod) {
+		let items = [];
+		this._defaultCollection = items;
+		this._collection = items;
+		this._module = mod;
+		if (mod.names && mod.names.functions) {
+			let functions = mod.functions;
+			let names = mod.names.functions;
+			for (const [func, name] of names) {
+				let funcidx = functions.indexOf(func);
+				items.push({funcidx: funcidx, func: func, name: name});
+			}
+		}
 
+		this.render();
 	}
 
-	get data() {
-		return this._data;
+	get module() {
+		return this._module;
 	}
 }
 
 class WasmTablesInspectorView {
 
 	constructor (header, body) {
+		
+		let _self = this;
+		let findInput = document.createElement("input");
+		findInput.type = "text";
+		findInput.placeholder = "find";
+		body.appendChild(findInput);
 
+		let findOptions = document.createElement("select");
+		findOptions.innerHTML = "<option value=\"starts-with\">Starts with</option><option value=\"ends-with\">Ends with</option><option value=\"contains\">Contains</option><option value=\"regexp\">Regexp</option>";
+		findOptions.selectedIndex = 2;
+		body.appendChild(findOptions);
+
+		let findCS = document.createElement("input");
+		findCS.type = "checkbox";
+		findCS.id = "case-sensetive";
+		body.appendChild(findCS);
+		let labelCS = document.createElement("label");
+		labelCS.for = "case-sensetive";
+		labelCS.textContent = "Case Sensetive";
+		body.appendChild(labelCS);
+
+		let findResults = document.createElement("ul");
+		body.appendChild(findResults);
+
+		let table = document.createElement("table");
+		table.classList.add("data-table","wasm-functions");
+		let thead = document.createElement("thead");
+		thead.innerHTML = "<tr><th>index</th><th>funcidx</th><th>name</th><th><code>in -> out</code></th><th>typeidx</th><th>use count</th><th>stack usage</th><th>inst cnt</th><th>bytecode size</th></tr>";
+		table.appendChild(thead);
+		let tbody = document.createElement("tbody");
+		table.appendChild(tbody);
+		body.appendChild(table);
+		let footer = document.createElement("span");
+		body.appendChild(footer);
+
+		this._heading = header;
+		this._body = body;
+		this._footer = footer;
+		this._tbody = tbody;
+		this._defaultCollection = null;
+		this._collection = null;
+		this._pageIndex = 0;
+		this._pageRowCount = 25;
+		this._module = null;
+
+		{
+			let paginator = document.createElement("div");
+			paginator.classList.add("pagination");
+			let first = document.createElement("span");
+			first.textContent = "First";
+			first.addEventListener("click", function (evt) {
+				_self._pageIndex = 0;
+				curr.textContent = "1"
+				_self.render();
+			});
+			paginator.appendChild(first);
+			let prev = document.createElement("span");
+			prev.innerHTML = "<svg fill=\"currentColor\"><path d=\"M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z\"/></svg>";
+			prev.addEventListener("click", function (evt) {
+				if (_self._pageIndex == 0)
+					return;
+				_self._pageIndex--;
+				curr.textContent = (_self._pageIndex + 1)
+				_self.render();
+			});
+			paginator.appendChild(prev);
+			let curr = document.createElement("span");
+			curr.classList.add("page-active");
+			curr.textContent = "1";
+			paginator.appendChild(curr);
+			let next = document.createElement("span");
+			next.innerHTML = "<svg fill=\"currentColor\"><path d=\"M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z\"/></svg>";
+			next.addEventListener("click", function (evt) {
+				let last = _self._collection.length == 0 ? 0 : Math.floor(_self._collection.length / _self._pageRowCount);
+				if (_self._pageIndex == last)
+					return;
+				_self._pageIndex++;
+				curr.textContent = (_self._pageIndex + 1);
+				_self.render();
+			});
+			paginator.appendChild(next);
+			let lastBtn = document.createElement("span");
+			lastBtn.textContent = "Last";
+			lastBtn.addEventListener("click", function (evt) {
+				_self._pageIndex = _self._collection.length == 0 ? 0 : Math.floor(_self._collection.length / _self._pageRowCount);
+				curr.textContent = (_self._pageIndex + 1);
+				_self.render();
+			});
+			paginator.appendChild(lastBtn);
+			body.appendChild(paginator);
+		}
+
+		findOptions.addEventListener("change", function(evt) {
+			let results = _self.search(findInput.value, {
+					caseSensitive: findCS.value !== "off",
+					searchType: findOptions.selectedOptions.item(0).value
+				});
+			_self._collection = results;
+			_self._pageIndex = 0;
+			_self.render();
+		});
+
+		findInput.addEventListener("keyup", function(evt) {
+			if (evt.key == "Enter") {
+				let results = _self.search(findInput.value, {
+					caseSensitive: findCS.value !== "off",
+					searchType: findOptions.selectedOptions.item(0).value
+				});
+				_self._collection = results;
+				_self._pageIndex = 0;
+				_self.render();
+			}
+		});
+
+		//let tbltest = document.createElement("table");
+		//tbltest.innerHTML = "<thead></tr><th>funcidx</th><th>name</th><th>typeidx</th><th>use count</th><th>stack usage</th><th>inst cnt</th><th>bytecode size</th></tr></thead><tbody><tbody>"
+		//body.appendChild(tbltest);
 	}
 
 	search(string, opts) {
+		let items = this._defaultCollection;
+		let len = items.length;
+		let cis = opts.caseSensitive !== true;
+		let matches = [];
+		let searchType = opts.searchType;
+		switch (searchType) {
+			case "starts-with":
+				if (cis) {
+					let lc = string.toLowerCase();
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.toLowerCase().startsWith(lc)) {
+							matches.push(item);
+						}
+					}
+				} else {
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.startsWith(string)) {
+							matches.push(item);
+						}
+					}
+				}
+				break;
+			case "ends-with":
+				if (cis) {
+					let lc = string.toLowerCase();
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.toLowerCase().endsWith(lc)) {
+							matches.push(item);
+						}
+					}
+				} else {
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.endsWith(string)) {
+							matches.push(item);
+						}
+					}
+				}
+				break;
+			case "contains":
+				if (cis) {
+					let lc = string.toLowerCase();
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.toLowerCase().includes(lc)) {
+							matches.push(item);
+						}
+					}
+				} else {
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.name.includes(string)) {
+							matches.push(item);
+						}
+					}
+				}
+				break;
+			case "regexp": {
+				let regexp = new Regexp(string);
+				for (let i = 0; i < len; i++) {
+					let item = items[i];
+					if (item.name.search(regexp)) {
+						matches.push(item);
+					}
+				}
+				break;
+			}
+			default:
+				break;
+		}
 
+		return matches;
 	}
 
 	render() {
-		
+		let tbody = this._tbody;
+		while (tbody.lastChild) {
+			tbody.removeChild(tbody.lastChild);
+		}
+
+		let start = this._pageIndex * this._pageRowCount;
+		let items = this._collection;
+		let mod = this._module;
+		let functions = mod.functions;
+		let len = Math.min(items.length, start + this._pageRowCount);
+		for (let i = start; i < len; i++) {
+			let item = items[i];
+			let func = item.func; // mod.functions[funcidx];
+			let funcidx = item.funcidx;
+
+			let tr = document.createElement("tr");
+			let td = document.createElement("td");
+			td.textContent = item.index;
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.classList.add("wasm-funcidx");
+			//let span = document.createElement("span");
+			//span.classList.add("index-badge")
+			//span.textContent = item.funcidx;
+			//td.appendChild(span);
+			td.textContent = item.funcidx;
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.textContent = item.name;
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.classList.add("wasm-stack-signature");
+			let sign = wasmStyleTypeString(func.type);
+			sign = sign.replace("->", "→");
+			td.textContent = sign;
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.classList.add("wasm-typeidx");
+			let typeidx = mod.types.indexOf(func.type);
+			//span = document.createElement("span");
+			//span.classList.add("index-badge")
+			//span.textContent = typeidx;
+			//td.appendChild(span);
+			td.textContent = typeidx;
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.textContent = typeof func.usage == "number" ? func.usage : "";
+			tr.appendChild(td);
+			td = document.createElement("td"); // stack usage
+			if (typeof func.stackUsage == "number")
+				td.textContent = func.stackUsage;
+			tr.appendChild(td);
+			td = document.createElement("td"); // instruction count
+			td.textContent = (func instanceof WasmFunction) ? func.opcodes.length : "";
+			tr.appendChild(td);
+			td = document.createElement("td"); // bytecode size
+			td.textContent = (func instanceof WasmFunction) ? (func.opcode_end - func.codeStart) : "";
+			tr.appendChild(td);
+			tbody.appendChild(tr);
+		}
+
+		this._footer.textContent = "found " + this._collection.length + " matches";	
 	}
 
-	set data(value) {
-
+	set module(mod) {
+		let items = [];
+		this._defaultCollection = items;
+		this._collection = items;
+		this._module = mod;
+		if (mod.names && mod.names.functions) {
+			let names = mod.names.functions;
+			let contents = mod.tables[0].contents;
+			let functions = mod.functions;
+			let len = contents.length;
+			for (let i = 1; i < len; i++) {
+				let func = contents[i];
+				let name = names.get(func);
+				let funcidx = functions.indexOf(func);
+				items.push({index: i, func: func, funcidx: funcidx, name: name});
+			}
+		}
+		this.render();
 	}
 
-	get data() {
-		return this._data;
+	get module() {
+		return this._module;
 	}
 }
 
@@ -2033,79 +3343,6 @@ const inspectorUI = {
 		let collection;
 		let pageIndex = 0;
 		let pageRowCount = 25;
-
-		function doFreeTextSearch(value) {
-			if (!gmap)
-				gmap = namedGlobalsMap(targetModule);
-
-
-			let cis = findCS.value !== "off";
-			let match = [];
-			let searchType = findOptions.selectedOptions.item(0).value;
-			switch (searchType) {
-				case "starts-with":
-					if (cis) {
-						let lc = value.toLowerCase();
-						for (let p in gmap) {
-							if (p.toLowerCase().startsWith(lc)) {
-								match.push({name: p, global: gmap[p]});
-							}
-						}
-					} else {
-						for (let p in gmap) {
-							if (p.startsWith(value)) {
-								match.push({name: p, global: gmap[p]});
-							}
-						}
-					}
-					break;
-				case "ends-with":
-					if (cis) {
-						let lc = value.toLowerCase();
-						for (let p in gmap) {
-							if (p.toLowerCase().endsWith(lc)) {
-								match.push({name: p, global: gmap[p]});
-							}
-						}
-					} else {
-						for (let p in gmap) {
-							if (p.endsWith(value)) {
-								match.push({name: p, global: gmap[p]});
-							}
-						}
-					}
-					break;
-				case "contains":
-					if (cis) {
-						let lc = value.toLowerCase();
-						for (let p in gmap) {
-							if (p.toLowerCase().includes(lc)) {
-								match.push({name: p, global: gmap[p]});
-							}
-						}
-					} else {
-						for (let p in gmap) {
-							if (p.includes(value)) {
-								match.push({name: p, global: gmap[p]});
-							}
-						}
-					}
-					break;
-				case "regexp": {
-					let regexp = new Regexp(value);
-					for (let p in gmap) {
-						if (p.search(regexp)) {
-							match.push({name: p, global: gmap[p]});
-						}
-					}
-					break;
-				}
-				default:
-					break;
-			}			
-
-			return match;
-		}
 
 		function listResults(value) {
 			while (tbody.lastChild) {
@@ -2745,6 +3982,8 @@ const inspectorUI = {
 	},
 };
 
+const _inspectorViews = {};
+
 function namedGlobalsMap(mod) {
 	let arr1 = [];
 	let arr2 = [];
@@ -2820,19 +4059,44 @@ function populateWebAssemblyInfo(mod) {
 		li.parentElement.insertBefore(body, li.nextElementSibling);
 		let txt = li.textContent.trim().toLowerCase();
 		if (txt == "globals") {
-			inspectorUI.globals(li, body);
+			let view;
+			//inspectorUI.globals(li, body);
+			if (!_inspectorViews[txt]) {
+				view = new WasmGlobalsInspectorView(li, body);
+				_inspectorViews[txt] = view;
+			} else {
+				view = _inspectorViews[txt];
+			}
+			if (!_namedGlobals)
+				_namedGlobals = namedGlobalsMap(mod);
+			view.model = _namedGlobals;
+
 		} else if (txt == "functions") {
-			inspectorUI.functions(li, body);
+			//inspectorUI.functions(li, body);
+			let view;
+			if (!_inspectorViews[txt]) {
+				view = new WasmFunctionsInspectorView(li, body);
+				_inspectorViews[txt] = view;
+			} else {
+				view = _inspectorViews[txt];
+			}
+			view.module = mod;
 		} else if (txt == "tables") {
-			inspectorUI.tables(li, body);
+			//inspectorUI.tables(li, body);
+			let view;
+			if (!_inspectorViews[txt]) {
+				view = new WasmTablesInspectorView(li, body);
+				_inspectorViews[txt] = view;
+			} else {
+				view = _inspectorViews[txt];
+			}
+			view.module = mod;
 		} else if (txt == "data") {
 			inspectorUI.data_segments(li, body);
 		} else if (txt == "custom sections") {
 			inspectorUI.custom_sections(li, body);
 		}
 	}
-
-	namedGlobalsMap(mod);
 
 	console.log(headers);
 
@@ -2968,6 +4232,10 @@ function setupTargetPanel(container) {
 	inputPicker.appendChild(options);
 	workflowUl.appendChild(inputPicker);
 
+	options.addEventListener("click", function(evt) {
+		console.log("should pick file for input-file");
+	});
+
 	inputPicker.addEventListener("dragenter", function(evt) {
 		event.preventDefault();
 	});
@@ -3013,6 +4281,10 @@ function setupTargetPanel(container) {
 	outputPicker.appendChild(options);
 	workflowUl.appendChild(outputPicker);
 
+	options.addEventListener("click", function(evt) {
+		console.log("should pick file for output-data");
+	});
+
 	outputPicker.addEventListener("dragenter", function(evt) {
 		event.preventDefault();
 	});
@@ -3053,6 +4325,10 @@ function setupTargetPanel(container) {
 	options.textContent = "chose";
 	outputDataPicker.appendChild(options);
 	workflowUl.appendChild(outputDataPicker);
+
+	options.addEventListener("click", function(evt) {
+		console.log("should pick file for output-wasm");
+	});
 
 	outputDataPicker.addEventListener("dragenter", function(evt) {
 		event.preventDefault();
@@ -3175,6 +4451,7 @@ function findInputFiles(files) {
 		//loadWebAssemblyBinary(buf);
 		loadFilePairs(wasmFiles[0].binary, wasmFiles[0].symbolMapFile).then(function(res) {
 			if (file.name == "kern.wasm") {
+				postOptimizeKernMainAction(null, targetModule, {});
 				inspectFreeBSDBinary(moduleBuffer, targetModule);
 			}
 		});
@@ -3600,8 +4877,8 @@ function inspectFreeBSDBinary(buf, mod) {
 	console.log(old);
 
 	let table = mod.tables[0];
-	let oldtable = table.contents;
-	let newtable = [undefined];
+	let indirectTable = table.contents;
+	/*let newtable = [undefined];
 	let functions = mod.functions;
 	len = oldtable.length;
 
@@ -3609,7 +4886,7 @@ function inspectFreeBSDBinary(buf, mod) {
 		let funcidx = oldtable[i];
 		let func = functions[funcidx];
 		newtable.push(func);
-	}
+	}*/
 
 	let first;
 	let types = [];
@@ -3623,18 +4900,16 @@ function inspectFreeBSDBinary(buf, mod) {
 			console.error("invalid funcidx in %d", sysinit.index);
 		}
 		let funcidx = sysinit.funcidx;
-		let func = newtable[funcidx];
+		let func = indirectTable[funcidx];
 		let type = func.type;
 		if (types.indexOf(type) == -1) {
 			if (!first)
 				first = type; // we make a assumetion here that our first type is correct.
-			let idx = mod.functions.indexOf(func);
-			let fn = mod.names.functions.get(idx);
+			let fn = mod.names.functions.get(func);
 			console.log("sysinit index = %d (init %d) funcidx (table1) = %d fn: %s added type: %o", sysinit.index, i, sysinit.funcidx, fn, type);
 			types.push(type);
 		} else if (type != first) {
-			let idx = mod.functions.indexOf(func);
-			let fn = mod.names.functions.get(idx);
+			let fn = mod.names.functions.get(func);
 			console.log("fn %s of type", fn, type);
 		}
 	}
@@ -3667,8 +4942,8 @@ function generateCallCount(mod) {
 		for (let x = 0; x < xlen; x++) {
 			let inst = opcodes[x];
 			if (inst.opcode == 0x10) {
-				let f2 = functions[inst.funcidx];
-				f2.usage++;
+				let fn = inst.func;
+				fn.usage++;
 			}
 		}
 	}

@@ -1231,11 +1231,11 @@ fetch(url).then(function(res) {
 
 		moduleBuffer = buf;
 		let mod = parseWebAssemblyBinary(buf);
-        let fn = mod.functions[933];
+        let fn = mod.functions[5589];
 		//let fn = mod.functions[1463];
         //let fn = mod.functions[178];
 		let opcodes = fn.opcodes;
-		byteCodeComputeByteLength(opcodes, true);
+		byteCodeComputeByteLength(mod, opcodes, true);
 		renderAsmView(opcodes, fn, mod);
 
 	}, console.error);
