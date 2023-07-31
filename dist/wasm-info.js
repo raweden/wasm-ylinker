@@ -3840,7 +3840,7 @@ class ByteArray {
                     byte = (byte | 0x80);
                 }
                 u8[off++] = byte;
-            } while (value != 0n);
+            } while (value > 0n);
 
             // pad with 0x80 and emit a nyll byte at the end.
             if (cnt < padTo) {
@@ -3869,7 +3869,7 @@ class ByteArray {
             }
             u8[off++] = byte;
 
-        } while (value != 0);
+        } while (value > 0);
 
         // pad with 0x80 and emit a nyll byte at the end.
         if (cnt < padTo) {
@@ -4046,7 +4046,7 @@ function lengthULEB128(value, padTo) {
                 return cnt;
             }
 
-        } while (value != 0n);
+        } while (value > 0n);
 
         throw TypeError("should never get here!");
     }
@@ -4062,7 +4062,7 @@ function lengthULEB128(value, padTo) {
             return cnt;
         }
 
-    } while (value != 0);
+    } while (value > 0);
 
     throw TypeError("should never get here!");
 }
