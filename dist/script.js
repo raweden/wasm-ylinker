@@ -2,15 +2,17 @@
 // 1954 (1953.125) wasm-pages are about 128mb of memory
 // 
 // TODO:
-// drag & drop
-// - support for loading and saving to file system, reduces copying
-// import name section from emscripten symbolmap
-// reqognize objc method names.
-// objc-abi inspector.
-// headless workflows 
+// - drag & drop
+//   - support for loading and saving to file system, reduces copying @done
+// - import name section from emscripten symbolmap
+// - reqognize objc method names.
+// - objc-abi inspector.
+// - headless workflows 
+// - more expressive filterig of table based content, could use filter per column. This only requires some data-type notation per column.
 // 
 // https://hacks.mozilla.org/2017/07/webassembly-table-imports-what-are-they/
 
+const WASM_PAGE_SIZE = (1 << 16);
 const SECTION_TYPE = {
     TYPE: 1,
     IMPORT: 2,
@@ -26,6 +28,8 @@ const SECTION_TYPE = {
     DATA_COUNT: 0x0C,
     CUSTOM: 0x00
 };
+
+const moreIcon = `<svg aria-hidden="true" focusable="false" role="img" class="octicon octicon-kebab-horizontal" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="display: inline-block; user-select: none; vertical-align: text-bottom; overflow: visible;"><path d="M8 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM1.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm13 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path></svg>`;
 
 function u8_memcpy(src, sidx, slen, dst, didx) {
     // TODO: remove this assert at later time. (should be a debug)
@@ -138,6 +142,15 @@ function showWasmInfoStats(mod, sections) {
 	ul.classList.add("accordion-list");
 	container.appendChild(ul);
 
+	let table = document.createElement("table");
+	table.classList.add("data-table");
+	container.appendChild(table);
+	let thead = document.createElement("thead");
+	thead.innerHTML = "<tr><th>magic</th><th>name</th><th>count</th><th>size</th><th>weight</th></tr>";
+	table.appendChild(thead);
+	let tbody = document.createElement("tbody");
+	table.appendChild(tbody);
+
 	let customSectionCategories = {
 		'.debug_info': {format: "DWARF5", category: "debug"},
 		'.debug_loc': {format: "DWARF5", category: "debug"},
@@ -148,57 +161,137 @@ function showWasmInfoStats(mod, sections) {
 	}
 
 	let sizeSummary = {};
+	let totalBytes = moduleBuffer.byteLength;
 
 	let len = sections.length;
 	for (let i = 0;i < len;i++) {
 		let section = sections[i];
 		let typename = sectionnames[section.type];
-		let li = document.createElement("li");
-		li.classList.add("accordion-header")
-		ul.appendChild(li);
-		if (section.type == SECTION_TYPE.EXPORT) {
+		let tr = document.createElement("tr");
+		tbody.appendChild(tr);
+		let sectionSize, sectionCount;
+		let nameStr, countStr, sizeStr, weightStr, magic = section.type;
 
-			let span = document.createTextNode(typename + '\x20');
-			li.appendChild(span);
+		if (section instanceof WebAssemblySection) {
+			sectionSize = section._cache.size;
+		} else {
+			sectionSize = section.size;
+		}
 
-			span = document.createElement("span");
-			span.textContent = String(mod.exports.length) + "\x20item(s)"
-			li.appendChild(span);
+		if (section.type == SECTION_TYPE.CUSTOM) {
 
-		} else if (section.type == SECTION_TYPE.CUSTOM) {
-
-			let span = document.createTextNode(typename + '\x20');
-			li.appendChild(span);
-
-			span = document.createElement("span");
-			span.textContent = section.name;
-			li.appendChild(span);
+			nameStr = section.name;
 
 			if (customSectionCategories.hasOwnProperty(section.name)) {
 				let category = customSectionCategories[section.name].category;
 				if (sizeSummary.hasOwnProperty(category)) {
 					let sum = sizeSummary[category];
-					sum += section.size;
+					sum += sectionSize;
 					sizeSummary[category] = sum;
 				} else {
-					sizeSummary[category] = section.size;
+					sizeSummary[category] = sectionSize;
 				}
 			}
 
 		} else {
-			let span = document.createTextNode(typename);
-			li.appendChild(span);
+			nameStr = typename;
+
+			switch (section.type) {
+				case 0x01:
+					sectionCount = mod.types.length;
+					break;
+				case 0x02:
+					sectionCount = mod.imports.length;
+					break;
+				case 0x03:
+					sectionCount = mod.functions.length;
+					break;
+				case 0x04:
+					sectionCount = mod.tables.length;
+					break;
+				case 0x05:
+					sectionCount = mod.memory.length;
+					break;
+				case 0x06:
+					sectionCount = mod.globals.length;
+					break;
+				case 0x07:
+					sectionCount = mod.exports.length;
+					break;
+				case 0x08:
+					sectionCount = "";
+					break;
+				case 0x09:
+					sectionCount = mod.elementSegments.length;
+					break;
+				case 0x0A:
+					sectionCount = mod.imports.length;
+					break;
+				case 0x0B:
+					sectionCount = mod.dataSegments.length;
+					break;
+			};
 		}
 
-		let tn = document.createTextNode("\x20" + humanFileSize(section.size, true));
-		li.appendChild(tn);
+		sizeStr = humanFileSize(sectionSize, true);
+		if (!sizeStr.endsWith("bytes")) {
+			sizeStr = sectionSize + "\x20bytes" + "\x20(" + sizeStr + ")";
+		}
+
+		let weight = sectionSize / totalBytes;
+		weightStr = String((weight * 100).toFixed(2)) + "%";
+
+		
+
+		let td = document.createElement("td");
+		td.textContent = "0x" + magic.toString(16).padStart(2, '0');
+		tr.appendChild(td);
+		td = document.createElement("td");
+		td.textContent = nameStr;
+		tr.appendChild(td);
+		td = document.createElement("td");
+		td.textContent = sectionCount;
+		tr.appendChild(td);
+		td = document.createElement("td");
+		td.textContent = sizeStr;
+		tr.appendChild(td);
+		td = document.createElement("td");
+		td.textContent = weightStr;
+		tr.appendChild(td);
+
+	}
+
+	if (sizeSummary.debug) {
+		let debugsz = sizeSummary.debug;
+		sizeSummary["size excl. debug info"] = totalBytes - debugsz;
 	}
 
 	for (var cat in sizeSummary) {
 		let size = sizeSummary[cat];
-		let element = document.createElement("div");
-		element.textContent = cat + ':\x20' + humanFileSize(size, true);
-		container.appendChild(element);
+		let tr = document.createElement("tr");
+		tr.classList.add("sum-row");
+		let td = document.createElement("td"); // empty
+		tr.appendChild(td);
+		td = document.createElement("td");
+		td.setAttribute("colspan", 2);
+		td.textContent = cat;
+		tr.appendChild(td);
+		let sizeStr = humanFileSize(size, true);
+		if (!sizeStr.endsWith("bytes")) {
+			sizeStr = size + "\x20bytes" + "\x20(" + sizeStr + ")";
+		}
+
+		td = document.createElement("td");
+		td.textContent = sizeStr;
+		tr.appendChild(td);
+
+		let weight = size / totalBytes;
+		weightStr = String((weight * 100).toFixed(2)) + "%";
+
+		td = document.createElement("td");
+		td.textContent = weightStr;
+		tr.appendChild(td);
+		tbody.appendChild(tr);
 	}
 }
 
@@ -229,6 +322,10 @@ function isZeroFill(dataSeg) {
 	return true;
 }
 
+let _db, _appData, _openFiles;
+let _workflowParameters;
+let _workflowParamViews;
+let _workflowParamValues;
 let importIsModified = false;
 let moduleBuffer;
 let targetModule;
@@ -359,6 +456,7 @@ let moduleWorkflows = [
 			}
 
 			let tbl = document.createElement("table");
+			tbl.classList.add("data-table");
 			let thead = document.createElement("thead");
 			let tr = document.createElement("tr");
 			let th = document.createElement("th");
@@ -383,6 +481,7 @@ let moduleWorkflows = [
 			let tbody = document.createElement("tbody");
 			tbl.appendChild(tbody);
 			
+			let nsym = WebAssemblyModule.Name;
 			let dataSegments = targetModule.dataSegments;
 			let names = targetModule.names && targetModule.names.data ? targetModule.names.data : null;
 			let len = dataSegments.length;
@@ -397,14 +496,11 @@ let moduleWorkflows = [
 				td = document.createElement("td");
 				tr.appendChild(td);
 
-				if (names && names.has(i)) {
-					name = names.get(i);
-				}
-
-				if (name) {
+				let customName = dataSeg[nsym];
+				if (customName) {
 
 					let node = document.createElement("code");
-					node.textContent = names.get(i);
+					node.textContent = customName;
 					td.appendChild(node);
 				} else {
 					let node = document.createTextNode("segment\x20");
@@ -415,7 +511,7 @@ let moduleWorkflows = [
 					td.appendChild(node);
 				}
 
-				if (name === ".bss") {
+				if (customName === ".bss") {
 					allzeros = isZeroFill(dataSeg);
 				}
 
@@ -524,26 +620,83 @@ let moduleWorkflows = [
 ];
 
 let _workflowActions = {
-	postOptimizeWasm: postOptimizeWasmAction,
-	postOptimizeAtomicInst: console.error,
-	postOptimizeMemInst: console.error,
-	convertToImportedGlobal: convertToImportedGlobalAction,
-	getGlobalInitialValue: getGlobalInitialValueAction,
-	postOptimizeKernMain: postOptimizeKernMainAction,
-	postOptimizeKernSide: postOptimizeKernSideAction,
-	convertMemory: convertMemoryAction,
-	extractDataSegments: extractDataSegmentsAction,
-	output: outputAction,
-	objc_optimize_objc_msgSend: objcOptimizeObjcMsgSendAction,
-	objc_optimize_wasm_call_ctors: objcOptimizeCtorsAction,
-	objc_optimize_dylib: objcOptimizeDylibAction,
-	gnustepEmbedPlist: gnustepEmbedInfoPlistAction,
-	postOptimizeWasmDylib: postOptimizeWasmDylibAction,
-	dumpImportedFn: dumpImportedFnAction,
+	postOptimizeWasm: {
+		handler: postOptimizeWasmAction
+	},
+	postOptimizeAtomicInst: {
+		handler: postOptimizeAtomicInst
+	},
+	postOptimizeMemInst: {
+		handler: postOptimizeMemInstAction
+	},
+	generateNetbsdWebAssembly: {
+		handler: generateNetbsdWebAssembly
+	},
+	convertToImportedGlobal: {
+		handler: convertToImportedGlobalAction
+	},
+	getGlobalInitialValue: {
+		handler: getGlobalInitialValueAction
+	},
+	postOptimizeKernMain: {
+		handler: postOptimizeKernMainAction
+	},
+	postOptimizeKernSide: {
+		handler: postOptimizeKernSideAction
+	},
+	analyzeForkEntryPoint: {
+		handler: analyzeForkEntryPoint
+	},
+	postOptimizeTinybsdUserBinary: {
+		handler: postOptimizeTinybsdUserBinaryAction
+	},
+	convertMemory: {
+		handler: convertMemoryAction
+	},
+	generateBindingsTemplate: {
+		handler: console.error
+	}, // TODO: generate step which alters the kthread.js
+	extractDataSegments: {
+		params: [{name: "initial-data", type: "file", role: "output", types: [{description: "WebAssembly Files", accept: {"application/wasm": [".wasm"]}}]}],
+		handler: extractDataSegmentsAction
+	},
+	output: {
+		params: [{name: "wasm-binary", type: "file", role: "output", types: [{description: "WebAssembly Files", accept: {"application/wasm": [".wasm"]}}]}],
+		handler: outputAction
+	},
+	objc_optimize_objc_msgSend: {
+		handler: objcOptimizeObjcMsgSendAction
+	},
+	objc_optimize_wasm_call_ctors: {
+		handler: objcOptimizeCtorsAction
+	},
+	objc_optimize_dylib: {
+		handler: objcOptimizeDylibAction
+	},
+	gnustepEmbedPlist: {
+		handler: gnustepEmbedInfoPlistAction
+	},
+	postOptimizeWasmDylib: {
+		handler: postOptimizeWasmDylibAction
+	},
+	dumpImportedFn: {
+		handler: dumpImportedFnAction
+	},
+	configureBindingTemplate: {
+		params: [{name: "script", type: "file", role: "output", types: [{description: "JavaScript Files", accept: {"application/javascript": [".js"]}}]}],
+		handler: configureBindingTemplateAction
+	},
+	configureBootParameters : {
+		handler: configureBootParameters,
+	},
+	generateModinfo : {
+		handler: generateKLDModuleInfo,
+	}
 };
 
-let _freebsdWorkflow = {
-	name: "tinybsd 14.0 main-binary workflow",
+let _freebsdKernMainWorkflow = {
+	name: "tinybsd 14.0 Kernel Main Binary (workflow)",
+	id: "tinybsd_14_0.kern-main-binary",
 	actions: [
 		{
 			action: "convertMemory",
@@ -551,6 +704,7 @@ let _freebsdWorkflow = {
 				type: "import", 	// no value leaves the type as is.
 				memidx: 0,
 				// min: 			// no value leaves the min as is.
+				min: 1954,
 				max: 1954,
 				shared: true,
 			}
@@ -587,16 +741,105 @@ let _freebsdWorkflow = {
 				mutable: undefined,
 			}
 		}*/, {
+			action: "generateModinfo",
+			options: undefined,
+		}, {
+			action: "configureBootParameters",
+			options: undefined,
+		}, {
 			action: "postOptimizeWasm",
 			options: undefined,
-		}, {
+		}, /*{
 			action: "postOptimizeKernMain",
 			options: undefined,
-		}, {
+		},**/{
 			action: "extractDataSegments",
 			options: {
 				format: "wasm",
 				consume: true,
+			}
+		}, {
+			action: "configureBindingTemplate",
+			options: {
+				format: "javascript",
+				handler: function (ctx, mod, text) {
+					const threadExp = /__curthread:\s*new\s*WebAssembly\.Global\(\{[^}]*}\s*,\s*(\d{1,10})\)/gm;
+					const stackExp = /__stack_pointer:\s*new\s*WebAssembly\.Global\(\{[^}]*}\s*,\s*(\d{1,10})\)/gm;
+					const kenvExp = /const\s*kenv_addr\s*=\s*(\d{1,10});/gm;
+					const wabpExp = /const\s*wabp_addr\s*=\s*(\d{1,10});/gm;
+					const opfs_ext4_exp = /const\s*OPFS_EXT4_HEAD_ADDR\s*=\s*(\d{1,10});/gm;
+
+					let stack_pointer = ctx.__stack_pointer;
+					let thread0_st = ctx.thread0_st;
+					let glob, kenv_addr, wabp_addr, opfs_ext4_head;
+
+					
+					glob = mod.getGlobalByName("static_kenv");
+					if (glob)
+						kenv_addr = glob.init[0].value;
+					
+					glob = mod.getGlobalByName("__static_wabp");
+					if (glob)
+						wabp_addr = glob.init[0].value;
+
+					glob = mod.getGlobalByName("opfs_ext4_head");
+					if (glob)
+						opfs_ext4_head = glob.init[0].value;
+
+					text = text.replace(threadExp, function(match, num, index) {
+						console.log(arguments);
+						let idx = match.lastIndexOf(num);
+						let before = match.substring(0, idx);
+						let after = match.substring(idx + num.length);
+						console.log("'%s' '%s'", before, after);
+						return before + thread0_st.toString() + after;
+					});
+
+					text = text.replace(stackExp, function(match, num, index) {
+						console.log(arguments);
+						let idx = match.lastIndexOf(num);
+						let before = match.substring(0, idx);
+						let after = match.substring(idx + num.length);
+						console.log("'%s' '%s'", before, after);
+						return before + stack_pointer.toString() + after;
+					});
+
+					text = text.replace(kenvExp, function(match, num, index) {
+						if (kenv_addr === undefined)
+							return match;
+						console.log(arguments);
+						let idx = match.lastIndexOf(num);
+						let before = match.substring(0, idx);
+						let after = match.substring(idx + num.length);
+						console.log("'%s' '%s'", before, after);
+						return before + kenv_addr.toString() + after;
+					});
+
+					text = text.replace(wabpExp, function(match, num, index) {
+						if (wabp_addr === undefined)
+							return match;
+						console.log(arguments);
+						let idx = match.lastIndexOf(num);
+						let before = match.substring(0, idx);
+						let after = match.substring(idx + num.length);
+						console.log("'%s' '%s'", before, after);
+						return before + wabp_addr.toString() + after;
+					});
+
+					text = text.replace(opfs_ext4_exp, function(match, num, index) {
+						if (opfs_ext4_head === undefined) {
+							opfs_ext4_head = 0; // unset if driver head is not in our defined memory..
+						}
+						console.log(arguments);
+						let idx = match.lastIndexOf(num);
+						let before = match.substring(0, idx);
+						let after = match.substring(idx + num.length);
+						console.log("'%s' '%s'", before, after);
+						return before + opfs_ext4_head.toString() + after;
+					});
+
+					return text;
+				}
 			}
 		}, {
 			action: "output",
@@ -613,9 +856,300 @@ let _freebsdWorkflow = {
 	]
 };
 
-const _workflows = [_freebsdWorkflow];
+let _netbsdKernMainWorkflow = {
+	name: "netbsd 10.0 Main Kernel Binary (workflow)",
+	id: "netbsd_10_0.kern-main-binary",
+	actions: [
+		{
+			action: "convertMemory",
+			options: {
+				type: "import", 	// no value leaves the type as is.
+				memidx: 0,
+				// min: 			// no value leaves the min as is.
+				min: 1954,
+				max: 1954,
+				shared: true,
+			}
+		}/*, {
+			action: "getGlobalInitialValue",
+			options: {
+				name: "__stack_pointer",
+				variable: "__stack_pointer"
+			}
+		}, {
+			action: "getGlobalInitialValue",
+			options: {
+				name: "thread0_st",
+				variable: "thread0_st"
+			}
+		}, {
+			action: "convertToImportedGlobal",
+			options: {
+				srcname: "__stack_pointer",
+				dstname: {
+					module: "kern",
+					name: undefined,
+				},
+				mutable: undefined,
+			}
+		}, {
+			action: "convertToImportedGlobal",
+			options: {
+				srcname: "__curthread",
+				dstname: {
+					module: "kern",
+					name: undefined,
+				},
+				mutable: undefined,
+			}
+		}*/, {
+			action: "generateModinfo",
+			options: undefined,
+		}, {
+			action: "generateNetbsdWebAssembly",
+			options: undefined,
+		}, {
+			action: "postOptimizeAtomicInst",
+			options: undefined,
+		}, {
+			action: "postOptimizeMemInst",
+			options: undefined,
+		}, {
+			action: "extractDataSegments",
+			options: {
+				format: "wasm",
+				consume: true,
+				exclude: [".bss"]
+			}
+		}, /*{
+			action: "configureBindingTemplate",
+			options: {
+				format: "javascript",
+				handler: function (ctx, mod, text) {
+					const threadExp = /__curlwp:\s*new\s*WebAssembly\.Global\(\{[^}]*}\s*,\s*(\d{1,10})\)/gm;
+					const stackExp = /__stack_pointer:\s*new\s*WebAssembly\.Global\(\{[^}]*}\s*,\s*(\d{1,10})\)/gm;
+					const kenvExp = /const\s*kenv_addr\s*=\s*(\d{1,10});/gm;
+					const wabpExp = /const\s*wabp_addr\s*=\s*(\d{1,10});/gm;
+					const opfs_ext4_exp = /const\s*OPFS_EXT4_HEAD_ADDR\s*=\s*(\d{1,10});/gm;
 
-function runWorkflowActions(mod, actions, ctxmap) {
+					let stack_pointer = ctx.__stack_pointer;
+					let lwp0 = ctx.lwp0;
+					let glob, kenv_addr, wabp_addr, opfs_ext4_head;
+					
+					glob = mod.getGlobalByName("static_kenv");
+					if (glob)
+						kenv_addr = glob.init[0].value;
+					
+					glob = mod.getGlobalByName("__static_wabp");
+					if (glob)
+						wabp_addr = glob.init[0].value;
+
+					glob = mod.getGlobalByName("opfs_ext4_head");
+					if (glob)
+						opfs_ext4_head = glob.init[0].value;
+
+					text = text.replace(threadExp, function(match, num, index) {
+						console.log(arguments);
+						let idx = match.lastIndexOf(num);
+						let before = match.substring(0, idx);
+						let after = match.substring(idx + num.length);
+						console.log("'%s' '%s'", before, after);
+						return before + lwp0.toString() + after;
+					});
+
+					text = text.replace(stackExp, function(match, num, index) {
+						console.log(arguments);
+						let idx = match.lastIndexOf(num);
+						let before = match.substring(0, idx);
+						let after = match.substring(idx + num.length);
+						console.log("'%s' '%s'", before, after);
+						return before + stack_pointer.toString() + after;
+					});
+
+					text = text.replace(kenvExp, function(match, num, index) {
+						if (kenv_addr === undefined)
+							return match;
+						console.log(arguments);
+						let idx = match.lastIndexOf(num);
+						let before = match.substring(0, idx);
+						let after = match.substring(idx + num.length);
+						console.log("'%s' '%s'", before, after);
+						return before + kenv_addr.toString() + after;
+					});
+
+					text = text.replace(wabpExp, function(match, num, index) {
+						if (wabp_addr === undefined)
+							return match;
+						console.log(arguments);
+						let idx = match.lastIndexOf(num);
+						let before = match.substring(0, idx);
+						let after = match.substring(idx + num.length);
+						console.log("'%s' '%s'", before, after);
+						return before + wabp_addr.toString() + after;
+					});
+
+					text = text.replace(opfs_ext4_exp, function(match, num, index) {
+						if (opfs_ext4_head === undefined) {
+							opfs_ext4_head = 0; // unset if driver head is not in our defined memory..
+						}
+						console.log(arguments);
+						let idx = match.lastIndexOf(num);
+						let before = match.substring(0, idx);
+						let after = match.substring(idx + num.length);
+						console.log("'%s' '%s'", before, after);
+						return before + opfs_ext4_head.toString() + after;
+					});
+
+					return text;
+				}
+			}
+		},*/ {
+			action: "output",
+			options: {
+				exclude: [{type: 0x0B}, 
+						  {type: 0x00, name: ".debug_info"},
+						  {type: 0x00, name: ".debug_loc"},
+						  {type: 0x00, name: ".debug_ranges"}, 
+						  {type: 0x00, name: ".debug_abbrev"},
+						  {type: 0x00, name: ".debug_line"},
+						  {type: 0x00, name: ".debug_str"}]
+			}
+		}
+	]
+};
+
+let _freebsdKernModuleWorkflow = {
+	name: "tinybsd 14.0 Kernel Module Binary (Workflow)",
+	id: "tinybsd_14_0.kern-module-binary",
+	actions: [
+		{
+			action: "convertMemory",
+			options: {
+				type: "import", 	// no value leaves the type as is.
+				memidx: 0,
+				// min: 			// no value leaves the min as is.
+				min: 1954,
+				max: 1954,
+				shared: true,
+			}
+		}, {
+			action: "generateModinfo",
+			options: undefined,
+		}, {
+			action: "postOptimizeWasm",
+			options: undefined,
+		}, {
+			action: "output",
+			options: {
+				exclude: [{type: 0x00, name: ".debug_info"},
+						  {type: 0x00, name: ".debug_loc"},
+						  {type: 0x00, name: ".debug_ranges"}, 
+						  {type: 0x00, name: ".debug_abbrev"},
+						  {type: 0x00, name: ".debug_line"},
+						  {type: 0x00, name: ".debug_str"}]
+			}
+		}
+	]
+};
+
+let _freebsdUserBinaryWorkflow = {
+	name: "tinybsd 14.0 User Binary (Workflow)",
+	id: "tinybsd_14_0.user-binary",
+	actions: [
+		/*{
+			action: "convertMemory",
+			options: {
+				type: "import", 	// no value leaves the type as is.
+				memidx: 0,
+				// min: 			// no value leaves the min as is.
+				min: 1954,
+				max: 1954,
+				shared: true,
+			}
+		},*/{
+			action: "postOptimizeTinybsdUserBinary",
+			options: undefined,
+		},/*{
+			action: "addToExports",
+			options: {exports: ["__stack_pointer"]},
+		},*/ {
+			action: "output",
+			options: {
+				exclude: [{type: 0x00, name: ".debug_info"},
+						  {type: 0x00, name: ".debug_loc"},
+						  {type: 0x00, name: ".debug_ranges"}, 
+						  {type: 0x00, name: ".debug_abbrev"},
+						  {type: 0x00, name: ".debug_line"},
+						  {type: 0x00, name: ".debug_str"}]
+			}
+		}
+	]
+};
+
+let _freebsdUserBinaryForkWorkflow = {
+	name: "tinybsd 14.0 User Binary with fork (Workflow)",
+	id: "tinybsd_14_0.user-binary+fork",
+	actions: [
+		{
+			action: "convertMemory",
+			options: {
+				type: "import", 	// no value leaves the type as is.
+				memidx: 0,
+				// min: 			// no value leaves the min as is.
+				max: 1954,
+				shared: true,
+			}
+		}, {
+			action: "postOptimizeTinybsdUserBinary",
+			options: undefined,
+		}, {
+			action: "analyzeForkEntryPoint",
+			options: undefined,
+		},/*{
+			action: "addToExports",
+			options: {exports: ["__stack_pointer"]},
+		},*/ {
+			action: "output",
+			options: {
+				exclude: [{type: 0x00, name: ".debug_info"},
+						  {type: 0x00, name: ".debug_loc"},
+						  {type: 0x00, name: ".debug_ranges"}, 
+						  {type: 0x00, name: ".debug_abbrev"},
+						  {type: 0x00, name: ".debug_line"},
+						  {type: 0x00, name: ".debug_str"}]
+			}
+		}
+	]
+};
+
+const _workflows = [_freebsdKernMainWorkflow, _netbsdKernMainWorkflow, _freebsdUserBinaryWorkflow, _freebsdUserBinaryForkWorkflow, _freebsdKernModuleWorkflow];
+
+
+function getWorkflowParameterValues() {
+
+	let obj = {};
+	let files = [];
+	let viewMap = _workflowParamViews;
+	let params = _workflowParameters;
+	let len = params.length;
+	let values = {};
+	for (let i = 0; i < len; i++) {
+		let param = params[i];
+		if (param.type == "file") {
+			let file = viewMap[param.name].file;
+			values[param.name] = file;
+			files.push(file)
+		}
+		
+	}
+
+	obj.params = values;
+	obj.files = files;
+
+	return obj;
+}
+
+function runWorkflowActions(mod, actions, ctxmap, params) {
 
 	/*
 	let len = actions.length;
@@ -630,12 +1164,16 @@ function runWorkflowActions(mod, actions, ctxmap) {
 			ret = fn(mod);
 		}
 	}*/
+
+	//let params = getWorkflowParameterValues();
+
 	let resolveFn;
 	let rejectFn;
 	let p = new Promise(function(resolve, reject) {
 		resolveFn = resolve;
 		rejectFn = reject;
 	});
+	let defaultContext = Object.assign({}, params);
 	let returnValue;
 	let index = 0;
 
@@ -656,12 +1194,13 @@ function runWorkflowActions(mod, actions, ctxmap) {
 				ctx = null;
 			}
 			let name = actionData.action;
-			let fn = _workflowActions[name];
+			let action = _workflowActions[name];
+			let fn = action.handler;
 			let options = typeof actionData.options == "object" && actionData.options !== null ? actionData.options : undefined;
 			if (options) {
-				ret = fn(ctx, mod, options);
+				ret = fn(defaultContext, mod, options);
 			} else {
-				ret = fn(ctx, mod);
+				ret = fn(defaultContext, mod);
 			}
 			if (ret instanceof Promise) {
 				returnPromise = ret;
@@ -733,13 +1272,54 @@ function convertMemoryAction(ctx, mod, options) {
 
 		if (type != options.type) {
 			console.error("needs to convert memory type! not implemented!");
-			if (type == "internal" && options.type == "import") {
 
-				if (mod.memory.length > 1 && mod.memory.indexOf(mem) != 0) {
-					// if not already the first memidx this will affect memidx in multi-memory support
-				} else {
+			if (options.type == "import") {
+
+				if (!(mem instanceof ImportedMemory)) {
+
+					let idx = mod.memory.indexOf(mem);
+					if (mod.memory.length > 1 && idx != 0) {
+						// if not already the first memidx this will affect memidx in multi-memory support
+					} else {
+
+					}
+
+					let org = mem;
+					mem = new ImportedMemory();
+					mem.module = "env";
+					mem.name = "memory";
+					mem.min = org.min;
+					mem.max = org.max;
+					mem.shared = org.shared;
+					mod.imports.push(mem);
+					mod.memory[idx] = mem;
+
+					let inexp = false;
+					let exps = mod.exports;
+					let len = exps.length;
+					for (let i = 0; i < len; i++) {
+						let exp = exps[i];
+						if (!(exp instanceof ExportedMemory)) {
+							continue;
+						}
+						if (exp.memory == org) {
+							exps.splice(i, 1);
+							inexp = true;
+							break;
+						}
+					}
+
+					if (inexp)
+						findModuleByType(mod, SECTION_TYPE.EXPORT)._isDirty = true;
+
+					findModuleByType(mod, SECTION_TYPE.MEMORY)._isDirty = true;
+					findModuleByType(mod, SECTION_TYPE.IMPORT)._isDirty = true;
+
 
 				}
+			}
+
+			if (type == "internal" && options.type == "import") {
 
 			} else if (type == "internal" && options.type == "export") {
 				
@@ -773,6 +1353,8 @@ function convertMemoryAction(ctx, mod, options) {
 			console.warn("options.min < mem.min");
 		}
 	}
+
+	console.log(mod);
 }
 
 function convertToImportedGlobalAction(ctx, mod, options) {
@@ -781,7 +1363,7 @@ function convertToImportedGlobalAction(ctx, mod, options) {
 	let newglob;
 
 	if (typeof options.srcname == "string") {
-		oldglob = _namedGlobals[name];
+		oldglob = mod.getGlobalByName(options.srcname);
 	} else if (typeof options.srcidx == "number") {
 		oldglob = mod.globals[options.srcidx]; // TODO: cache original global-vector..
 	}
@@ -806,16 +1388,16 @@ function convertToImportedGlobalAction(ctx, mod, options) {
 
 	newglob.type = oldglob.type;
 
-	convertToImportedGlobal(mod, oldglob, newglob);
+	mod.replaceGlobal(oldglob, newglob, true);
 	mod.imports.push(newglob);
-	removeExportFor(mod, oldglob);
+	mod.removeExportFor(oldglob);
 
-	let sec = findModuleByType(mod, SECTION_TYPE.IMPORT);
-	sec._isDirty = true;
-	sec = findModuleByType(mod, SECTION_TYPE.EXPORT);
-	sec._isDirty = true;
-	sec = findModuleByType(mod, SECTION_TYPE.GLOBAL);
-	sec._isDirty = true;
+	let sec = mod.findSection(SECTION_TYPE.IMPORT);
+	sec.markDirty();
+	sec = mod.findSection(SECTION_TYPE.EXPORT);
+	sec.markDirty();
+	sec = mod.findSection(SECTION_TYPE.GLOBAL);
+	sec.markDirty();
 
 	return true;
 }
@@ -831,20 +1413,80 @@ function getGlobalInitialValueAction(ctx, mod, options) {
 
 function extractDataSegmentsAction(ctx, mod, options) {
 	let segments = mod.dataSegments;
-	if (!segments || segments.length == 0)
+	if (!Array.isArray(segments) || segments.length == 0)
 		return;
+
+	if (Array.isArray(options.exclude) && options.exclude.length > 0) {
+		segments = segments.slice(); // copy the original
+
+		let excludeSegments = [];
+		let names = [];
+		let exclude = options.exclude;
+		let len = exclude.length;
+		let has_names = false;
+		for (let i = 0; i < len; i++) {
+			let segment, val = exclude[i];
+			if (typeof val == "string") {
+				names.push(val);
+			} else if (Number.isInteger(val)) {
+				if (val < 0 || val >= segments.length)
+					throw new RangeError("segment by index is out of range");
+				segment = segments[val];
+				if (excludeSegments.indexOf(segment) === -1)
+					excludeSegments.push(segment);
+			} else {
+				throw new TypeError("invalid type for data-segment exclude");
+			}
+		}
+
+		let nmap = {};
+		len = segments.length;
+		for (let i = 0; i < len; i++) {
+			let segment = segments[i];
+			if (typeof segment[__nsym] !== "string")
+				continue;
+			let name = segment[__nsym];
+			nmap[name] = segment;
+		}
+
+		len = names.length;
+		for (let i = 0; i < len; i++) {
+			let name = names[i];
+			if (!nmap.hasOwnProperty(name))
+				continue;
+			let segment = nmap[name];
+			if (excludeSegments.indexOf(segment) === -1)
+				excludeSegments.push(segment);
+		}
+
+		let results = [];
+		len = segments.length;
+		for (let i = 0; i < len; i++) {
+			let segment = segments[i];
+			if (excludeSegments.indexOf(segment) === -1)
+				results.push(segment);
+		}
+
+		segments = results;
+	}
+
+	if (segments.length == 0) {
+		console.warn("nothing to export");
+		return;
+	}
 
 	if (options.format == "wasm") {
 		// there might be more modules that are required at minimum.
 		let buffers = [];
 		let off = 0;
-		let buf = new Uint8Array(4);
+		let buf = new Uint8Array(8);
 		let data = new DataView(buf.buffer);
 		buffers.push(buf.buffer);
 		data.setUint8(0, 0x00); // \0asm
 		data.setUint8(1, 0x61);
 		data.setUint8(2, 0x73);
 		data.setUint8(3, 0x6D);
+		data.setUint32(4, 0x1, true);
 		buf = new Uint8Array(15);
 		data = new DataView(buf.buffer);
 		buffers.push(buf.buffer);
@@ -868,40 +1510,32 @@ function extractDataSegmentsAction(ctx, mod, options) {
 		data.setUint8(off++, 0x06);
 		data.setUint8(off++, 0x01);
 		data.setUint8(off++, 0x00);
-		
-		// data 0x0B
-		{
-			let secsz;
-			let tot = 0;
-			let len = segments.length;
-			for (let i = 0; i < len; i++) {
-				let seg = segments[i];
-				tot += lengthULEB128(0); // seg.kind (not implemented)
-				tot += byteCodeComputeByteLength(mod, seg.inst.opcodes);
-				tot += lengthULEB128(seg.size);
-				tot += seg.size;
-			}
-			tot += lengthULEB128(len); // vector-length
-			secsz = tot;
-			tot += lengthULEB128(tot); // section-size
-			tot += 1;				   // section-signature
 
-			let src = new Uint8Array(moduleBuffer);
-			let buffer = new Uint8Array(tot); // {dst-offset, size}
-			buffers.push(buffer.buffer);
-			let data = new ByteArray(buffer);
-			data.writeUint8(0x0B);
-			data.writeULEB128(secsz);
-			data.writeULEB128(len);
-			for (let i = 0; i < len; i++) {
-				let seg = segments[i];
-				data.writeULEB128(0); // seg.kind (not implemented)
-				encodeByteCode(data, seg.inst.opcodes);
-				data.writeULEB128(seg.size);
-				u8_memcpy(src, seg.offset, seg.size, buffer, data.offset);
-				data.offset += seg.size;
-			}
-		}
+		let tmod = new WebAssemblyModule();
+		tmod.types = [];
+		tmod.functions = [];
+		tmod.tables = [];
+		tmod.memory = [];
+		tmod.globals = [];
+		tmod.dataSegments = segments;
+		tmod._mutableDataSegments = mod._mutableDataSegments;
+		tmod.sections = [];
+		tmod.sections.push(new WebAssemblyFuncTypeSection(tmod)); // 1
+		tmod.sections.push(new WebAssemblyFunctionSection(tmod)); // 3
+		tmod.sections.push(new WebAssemblyTableSection(tmod));	// 4
+		tmod.sections.push(new WebAssemblyMemorySection(tmod));	// 5
+		tmod.sections.push(new WebAssemblyGlobalSection(tmod));	// 6
+		tmod.sections.push(new WebAssemblyDataSection(tmod));		// 0x0b
+		tmod.sections.push(new WebAssemblyCustomSectionName(tmod));	// 0x00
+		
+		buffers = tmod.encode({});
+
+		console.log(buffers);
+
+		// data 0x0B
+		let tmp = new WebAssemblyDataSection(mod); // detached 
+		buf = tmp.encode({dataSegments: segments});
+		//buffers.push(buf.buffer);
 
 		// custom:names 0x00
 		// custom:producers 0x00
@@ -913,11 +1547,7 @@ function extractDataSegmentsAction(ctx, mod, options) {
 			rejectFn = reject;
 		});
 
-		let name = targetFilename.split(".");
-		name.pop();
-		name = name.join(".");
-		name += ".data.wasm";
-		window.showSaveFilePicker({suggestedName: name, types: [{description: "WebAssembly Files", accept: {"application/wasm": [".wasm"]}}]}).then(function(file) {
+		/*window.showSaveFilePicker({suggestedName: name, types: [{description: "WebAssembly Files", accept: {"application/wasm": [".wasm"]}}]}).then(function(file) {
 
 			let elements = document.querySelectorAll(".workflow-ui .workflow-output-file");
 			if (elements.length > 0) {
@@ -940,7 +1570,33 @@ function extractDataSegmentsAction(ctx, mod, options) {
     			}, rejectFn);
 
 			}, rejectFn);
-		}, rejectFn);
+		}, rejectFn);*/
+
+		let file = ctx["initial-data"];
+
+		if (file && file instanceof FileSystemFileHandle) {
+
+			file.createWritable().then(function(writable) {
+
+				let blob = new Blob(buffers, { type: "application/wasm" });
+				writable.write(blob).then(function(val) {
+					writable.close().then(function(val) {
+						console.log("did close writable stream");
+						resolveFn(true);
+					}, rejectFn);
+				}, rejectFn);
+
+			}, rejectFn);
+
+		} else {
+			let name = targetFilename.split(".");
+			name.pop();
+			name = name.join(".");
+			name += ".data.wasm";
+			file = new File(buffers, name, { type: "application/wasm" });
+			ctx["initial-data"] = file;
+			resolveFn(file);
+		}
 		
 		return p;
 	} else {
@@ -1037,6 +1693,16 @@ function outputAction(ctx, mod, options) {
 			} else {
 				continue;
 			}
+		} else if (section instanceof WebAssemblySection) {
+			let sub = section.encode({});
+			if (Array.isArray(sub)) {
+				let xlen = sub.length;
+				for (let x = 0; x < xlen; x++) {
+					buffers.push(sub[x]);
+				}
+			} else {
+				buffers.push(sub);
+			}
 		} else if (type == SECTION_TYPE.IMPORT && section._isDirty === true) {
 			let sub = encodeImportSection(targetModule.imports);
 			buffers.push(sub);
@@ -1053,7 +1719,14 @@ function outputAction(ctx, mod, options) {
 			let sub = encodeElementSection(targetModule);
 			buffers.push(sub);
 		} else if (type == SECTION_TYPE.MEMORY && section._isDirty === true) {
-			let sub = encodeMemorySection(targetModule.memory);
+			let sub = encodeMemorySection(targetModule);
+			if (sub !== null)
+				buffers.push(sub);
+		} else if (type == SECTION_TYPE.DATA && section._isDirty === true) {
+			let sub = encodeDataSection(targetModule, section);
+			buffers.push(sub);
+		} else if (type == SECTION_TYPE.CUSTOM && (section._isDirty === true || (section.data && section.data._isDirty === true)) && section.data && typeof section.data.encode == "function") {
+			let sub = section.data.encode(targetModule);
 			buffers.push(sub);
 		} else if (type == SECTION_TYPE.CUSTOM && section.name == "name" && section._isDirty === true) {
 			let sub = encodeCustomNameSection(targetModule.names);
@@ -1085,7 +1758,25 @@ function outputAction(ctx, mod, options) {
 		rejectFn = reject;
 	});
 
-	window.showSaveFilePicker({suggestedName: targetFilename, types: [{description: "WebAssembly Files", accept: {"application/wasm": [".wasm"]}}]}).then(function(file) {
+	let file = ctx["wasm-binary"];
+
+	if (file && file instanceof FileSystemFileHandle) {
+
+		file.createWritable().then(function(writable) {
+
+			let blob = new Blob(buffers, { type: "application/wasm" });
+			writable.write(blob).then(function(val) {
+				writable.close().then(resolveFn, rejectFn);
+			}, rejectFn);
+
+		}, rejectFn);
+	} else {
+		file = new File(buffers, targetFilename, { type: "application/wasm" });
+		ctx["wasm-binary"] = file;
+		resolveFn(file);
+	}
+
+	/*window.showSaveFilePicker({suggestedName: targetFilename, types: [{description: "WebAssembly Files", accept: {"application/wasm": [".wasm"]}}]}).then(function(file) {
 
 		let elements = document.querySelectorAll(".workflow-ui .workflow-output-file");
 		if (elements.length > 0) {
@@ -1104,11 +1795,11 @@ function outputAction(ctx, mod, options) {
 
 			let blob = new Blob(buffers, { type: "application/wasm" });
 			writable.write(blob).then(function(val) {
-				writable.close(resolveFn, rejectFn);
+				writable.close().then(resolveFn, rejectFn);
 			}, rejectFn);
 
 		}, rejectFn);
-	}, rejectFn);
+	}, rejectFn);*/
 	
 	return p;
 
@@ -1116,9 +1807,149 @@ function outputAction(ctx, mod, options) {
 	//saveAsFile(new Blob(buffers, { type: "application/octet-stream"}), filename);
 }
 
-function postOptimizeWasmAction(ctx, mod, options) {
-	return postOptimizeWasm(mod);
+function configureBindingTemplateAction(ctx, mod, options) {
+
+	let resolveFn;
+	let rejectFn;
+	let p = new Promise(function(resolve, reject) {
+		resolveFn = resolve;
+		rejectFn = reject;
+	});
+
+	let bindingsFile = null;
+
+	let handle = ctx["script"];
+
+	if (handle === undefined || !(handle instanceof FileSystemFileHandle)) {
+		rejectFn(new TypeError("bindings file must be provided for configureBindingTemplateAction()"));
+		return p;
+	}
+
+	handle.getFile().then(function(file) {
+
+		file.text().then(function(text) {
+
+			console.log("loaded file data");
+
+			let ret = options.handler(ctx, mod, text);
+			if (ret instanceof Promise) {
+				ret.then(function(result) {
+
+					if (typeof result != "string") {
+						rejectFn(new TypeError("unexpected return"));
+						console.error("unexpected return");
+						return;
+					}
+
+					if (result === text) {
+						resolveFn(true);
+						return;
+					}
+
+					handle.createWritable().then(function(writable) {
+
+						let blob = new Blob([result], { type: "text/plain" });
+						writable.write(blob).then(function(val) {
+							writable.close().then(resolveFn, rejectFn);
+						}, rejectFn);
+
+					}, rejectFn);
+
+				}, rejectFn);
+			} else if (typeof ret == "string") {
+
+				if (ret === text) {
+					resolveFn(true);
+					return;
+				}
+
+				handle.createWritable().then(function(writable) {
+
+					let blob = new Blob([ret], { type: "text/plain" });
+					writable.write(blob).then(function(val) {
+						writable.close().then(resolveFn, rejectFn);
+					}, rejectFn);
+
+				}, rejectFn);
+
+			} else {
+				console.error("unexpected return");
+				rejectFn(new TypeError("unexpected return"));
+			}
+		}, rejectFn);
+	}, rejectFn);
+
+	/*window.showOpenFilePicker({multiple: false, types: [{description: "JavaScript Files", accept: {"application/javascript": [".js"]}}]}).then(function(files) {
+
+		console.log(files);
+		let handle = files[0];
+		handle.getFile().then(function(file) {
+
+			file.text().then(function(text) {
+
+				console.log("loaded file data");
+
+				let ret = options.handler(ctx, mod, text);
+				if (ret instanceof Promise) {
+					ret.then(function(result) {
+
+						if (typeof result != "string") {
+							rejectFn(new TypeError("unexpected return"));
+							console.error("unexpected return");
+							return;
+						}
+
+						if (result === text) {
+							resolveFn(true);
+							return;
+						}
+
+						handle.createWritable().then(function(writable) {
+
+							let blob = new Blob([result], { type: "text/plain" });
+							writable.write(blob).then(function(val) {
+								writable.close().then(resolveFn, rejectFn);
+							}, rejectFn);
+
+						}, rejectFn);
+
+					}, rejectFn);
+				} else if (typeof ret == "string") {
+
+					if (ret === text) {
+						resolveFn(true);
+						return;
+					}
+
+					handle.createWritable().then(function(writable) {
+
+						let blob = new Blob([ret], { type: "text/plain" });
+						writable.write(blob).then(function(val) {
+							writable.close().then(resolveFn, rejectFn);
+						}, rejectFn);
+
+					}, rejectFn);
+
+				} else {
+					console.error("unexpected return");
+					rejectFn(new TypeError("unexpected return"));
+				}
+			}, rejectFn);
+		}, rejectFn);
+	}, rejectFn);*/
+
+
+	return p;
 }
+
+function postOptimizeWasmAction(ctx, mod, options) {
+	return postOptimizeWasm(ctx, mod);
+}
+
+function postOptimizeTinybsdUserBinaryAction(ctx, mod, options) {
+	return postOptimizeTinybsdUserBinary(ctx, mod);
+}
+
 
 
 function makeIndirectCallable(mod, tableidx, func) {
@@ -1193,10 +2024,17 @@ function postOptimizeKernMainAction(ctx, mod, options) {
 	    {"opcode": 0x0b},									// end
 	    {"opcode": 0x41, "value": 1448},					// i32.const 	(1448 should be replaced by the table index of the current funct)
 	    // we need to stack our args here..
-	    {"opcode": 0x10, "funcidx": 14}, 					// call
+	    {"opcode": 0x10, "func": null}, 					// call
 	    {"opcode": 0x41, "value": 321},						// i32.const 	(value returned)
 	    {"opcode": 0x0b}									// end (end of function)
 	];
+
+	let curthrglob = mod.getGlobalByName("__curthread");
+	let mainthrglob = mod.getGlobalByName("__mainthread");
+	let mainthraddr = mainthrglob.init.length == 2 && mainthrglob.init[0].opcode == 0x41 && mainthrglob.init[1].opcode == 0x0B ? mainthrglob.init[0].value : undefined;
+
+	if (!curthrglob || !mainthraddr)
+		throw TypeError("both curthrglob and main thread address neded to main kernel thread dispatch");
 
 	let kthrmain_dispatch_list = [
 		"G_PART_ADD",
@@ -1338,7 +2176,7 @@ function postOptimizeKernMainAction(ctx, mod, options) {
 	let table = mod.tables[tableidx].contents;
 	let dispatchTypeMap = new Map();
 	let types = [];
-	let items = [];
+	let maincallable = [];
 	let notfound = [];
 	let names = mod.names.functions;
 	let map = {};
@@ -1347,7 +2185,7 @@ function postOptimizeKernMainAction(ctx, mod, options) {
 		let str = kthrmain_dispatch_list[i];
 		let found = false;
 		for (const [func, name] of names) {
-			if (str == name) {
+			if (str == name && !(func instanceof ImportedFunction)) {
 				found = true;
 				let obj = {func: func, name: name};
 				let idx = table.indexOf(func);
@@ -1356,7 +2194,7 @@ function postOptimizeKernMainAction(ctx, mod, options) {
 					elementsIsDirty = true;
 				}
 				obj.indirectIndex = idx;
-				items.push(obj);
+				maincallable.push(obj);
 				let type = func.type;
 				if (types.indexOf(type) == -1)
 					types.push(type);
@@ -1368,6 +2206,7 @@ function postOptimizeKernMainAction(ctx, mod, options) {
 
 	let new_imports = [];
 
+	// mapping out the type signature required for a proxying import function. (fp, ...)
 	len = types.length;
 	for (let i = 0; i < len; i++) {
 		let type = types[i];
@@ -1390,8 +2229,7 @@ function postOptimizeKernMainAction(ctx, mod, options) {
 		}
 
 		let dtype = mod.types[typeidx];
-		dispatchTypeMap.set(type, dtype);
-		let typestr = emccStyleTypeString(dtype);
+		let typestr = emccStyleTypeString(type);
 
 		console.log("ftype: %d dtype: %d %s", type.typeidx, typeidx, wasmStyleTypeString(type));
 		console.log("kthread_dispatch_sync_%s", typestr);
@@ -1401,6 +2239,8 @@ function postOptimizeKernMainAction(ctx, mod, options) {
 		let suffix = typestr.indexOf('_') == 1 ? typestr.replace('_', '') : typestr;
 		newfn.name = "kthrmain_dispatch_sync_" + suffix;
 		newfn.type = dtype;
+
+		dispatchTypeMap.set(type, newfn);
 
 		new_imports.push(newfn);
 	}
@@ -1416,6 +2256,7 @@ function postOptimizeKernMainAction(ctx, mod, options) {
 		}
 	}
 
+	// inserts new imports into module.function
 	len = new_imports.length;
 	for (let i = 0; i < len; i++) {
 		let imp = new_imports[i];
@@ -1423,17 +2264,50 @@ function postOptimizeKernMainAction(ctx, mod, options) {
 		lastimp++;
 	}
 
+	// inserts new imports into module.imports
 	len = new_imports.length;
 	for (let i = 0; i < len; i++) {
 		let imp = new_imports[i];
 		imports.push(imp);
 	}
 
-	console.log(items);
+	console.log(maincallable);
 	console.log(types);
 	console.log(dispatchTypeMap);
 	console.log(new_imports);
 	console.log(notfound);
+
+	len = maincallable.length;
+	for (let i = 0; i < len; i++) {
+		let obj = maincallable[i];
+		let func = obj.func;
+
+		let dispatchfn = dispatchTypeMap.get(obj.func.type);
+
+		let newopcodes = [];
+		newopcodes.push({opcode: 0x02, type: 64});						// block
+		newopcodes.push({opcode: 0x23, global: curthrglob});			// global.get  	(__curthread)
+		newopcodes.push({opcode: 0x41, value: 0});						// i32.const
+		newopcodes.push({opcode: 0x28, offset: mainthraddr, align: 2});	// i32.load 	(__mainthread)
+		newopcodes.push({opcode: 0x46});								// i32.eq
+		newopcodes.push({opcode: 0x0d, labelidx: 0});					// br_if
+		newopcodes.push({opcode: 0x41, value: obj.indirectIndex});		// i32.const 	()
+		
+		let argc = func.type.argc;
+		// insert arguments (simply forwards the arguments this call got)
+		for (let z = 0; z < argc; z++) {
+			// arguments are simply in the local index before those declared in the body.
+			newopcodes.push({"opcode": 0x20, x: z}); // local.get
+		}
+		newopcodes.push({opcode: 0x10, func: dispatchfn});				// call
+		newopcodes.push({opcode: 0x0f}); 								// return
+		newopcodes.push({opcode: 0x0b}); 								// end
+
+		func.opcodes.unshift.apply(func.opcodes, newopcodes);
+		func._opcodeDirty = true;
+
+		console.log(newopcodes);
+	}
 }
 
 function postOptimizeKernSideAction(ctx, module, options) {
@@ -1491,7 +2365,1125 @@ function removeExportFor(mod, obj) {
 
 let _namedGlobals;
 
-function postOptimizeWasm(mod) {
+function postOptimizeWasm(ctx, mod) {
+
+	let opsopt = [];
+
+	function memcpyReplaceHandler(inst, index, arr) {
+		let peek = arr[index + 1];
+		if (peek.opcode == 0x1A) { // drop
+			arr[index] = {opcode: 0xfc0a, memidx1: 0, memidx2: 0};
+			arr.splice(index + 1, 1);
+			return true;
+		} else {
+			console.warn("call to memcpy does not drop return value");
+		}
+		return true;
+	}
+	// TODO: we are missing atomic_fence, but cannot find this in the actual wasm proposal.
+	const inst_replace = [
+		{ 	// atomic operations.
+			name: "atomic_notify",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE00, 0, 0);
+			}
+		}, {
+			name: "atomic_wait32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE01, 0, 0);
+			}
+		}, {
+			name: "wasm_atomic_fence",
+			replace: function(inst, index, arr) {
+				return {opcode: 0xFE03, memidx: 0};
+			}
+		}, {
+			name: "atomic_load8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE12, 0, 0);
+			}
+		}, {
+			name: "atomic_store8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE19, 0, 0);
+			}
+		}, {
+			name: "atomic_add8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE20, 0, 0);
+			}
+		}, {
+			name: "atomic_sub8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE27, 0, 0);
+			}
+		}, {
+			name: "atomic_and8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE2E, 0, 0);
+			}
+		},{
+			name: "atomic_or8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE35, 0, 0);
+			}
+		}, {
+			name: "atomic_xor8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE3C, 0, 0);
+			}
+		}, {
+			name: "atomic_xchg8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE43, 0, 0);
+			}
+		}, {
+			name: "atomic_cmpxchg8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE4A, 0, 0);
+			}
+		},  {
+			name: "atomic_load16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE13, 0, 0);
+			}
+		}, {
+			name: "atomic_store16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE1A, 0, 0);
+			}
+		}, {
+			name: "atomic_add16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE21, 0, 0);
+			}
+		}, {
+			name: "atomic_sub16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE28, 0, 0);
+			}
+		}, {
+			name: "atomic_and16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE2F, 0, 0);
+			}
+		},{
+			name: "atomic_or16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE36, 0, 0);
+			}
+		}, {
+			name: "atomic_xor16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE3D, 0, 0);
+			}
+		}, {
+			name: "atomic_xchg16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE44, 0, 0);
+			}
+		}, {
+			name: "atomic_cmpxchg16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE4B, 0, 0);
+			}
+		}, {
+			name: "atomic_load32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE10, 0, 0);
+			}
+		}, {
+			name: "atomic_store32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE17, 0, 0);
+			}
+		}, {
+			name: "atomic_add32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE1E, 0, 0);
+			}
+		}, {
+			name: "atomic_sub32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE25, 0, 0);
+			}
+		}, {
+			name: "atomic_and32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE2C, 0, 0);
+			}
+		},{
+			name: "atomic_or32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE33, 0, 0);
+			}
+		}, {
+			name: "atomic_xor32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE3A, 0, 0);
+			}
+		}, {
+			name: "atomic_xchg32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE41, 0, 0);
+			}
+		}, {
+			name: "atomic_cmpxchg32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE48, 0, 0);
+			}
+		}, {
+			name: "atomic_wait64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE02, 0, 0);
+			}
+		}, {
+			name: "atomic_load64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE11, 0, 0);
+			}
+		}, {
+			name: "atomic_store64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE18, 0, 0);
+			}
+		}, {
+			name: "atomic_add64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE1F, 0, 0);
+			}
+		}, {
+			name: "atomic_sub64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE26, 0, 0);
+			}
+		}, {
+			name: "atomic_and64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE2D, 0, 0);
+			}
+		}, {
+			name: "atomic_or64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE34, 0, 0);
+			}
+		}, {
+			name: "atomic_xor64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE3B, 0, 0);
+			}
+		}, {
+			name: "atomic_xchg64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE42, 0, 0);
+			}
+		},{
+			name: "atomic_cmpxchg64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE49, 0, 0);
+			}
+		}, { 							// memory operations.
+			name: "memcpy",
+			replace: memcpyReplaceHandler
+		}, {
+			name: "__memcpy",
+			replace: memcpyReplaceHandler
+		}, {
+			name: "memcpy_early",
+			replace: memcpyReplaceHandler
+		}/*, {
+			name: "memset",
+			// replacing memset vs. memory.fill is where it gets complicated, memset returns which the 
+			// memory.fill instruction does not. check for drop instruction but if not found we must fake
+			// the return of memset 
+			replace: function(inst, index, arr) {
+				let peek = arr[index + 1];
+				if (peek.opcode == 0x1A) { // drop
+					arr[index] = {opcode: 0xfc0b, memidx: 0};
+					arr.splice(index + 1, 1);
+					return true;
+				} else {
+					console.warn("call to memcpy does not drop return value");
+				}
+				return true;
+			}
+		}*/
+	];
+	
+	let funcmap = new Map();
+	let names = [];
+	let ylen = inst_replace.length;
+	for (let y = 0; y < ylen; y++) {
+		let handler = inst_replace[y];
+		names.push(handler.name);
+	}
+
+	let functions = mod.functions;
+	ylen = functions.length;
+	for (let y = 0; y < ylen; y++) {
+		let idx, name, func = functions[y];
+		if (typeof func[__nsym] != "string")
+			continue;
+		name = func[__nsym];
+		idx = names.indexOf(name);
+		if (idx === -1)
+			continue;
+		let handler = inst_replace[idx];
+		handler.func = func;
+		handler.count = 0;
+		funcmap.set(name, handler);
+	}
+
+	// run trough all WebAssembly code to find call-sites where we call funcidx
+	let start = 0;
+	for (let y = 0; y < ylen; y++) {
+		let func = functions[y];
+		if (!(func instanceof ImportedFunction)) {
+			start = y;
+			break;
+		}
+	}
+
+	for (let y = start; y < ylen; y++) {
+		let func = functions[y];
+		let opcodes = func.opcodes;
+		// NOTE: don't try to optimize the opcodes.length, handlers might alter instructions around them.
+		for (let x = 0; x < opcodes.length; x++) {
+			let op = opcodes[x];
+			if (op.opcode == 0x10) {
+				if (funcmap.has(op.func)) {
+					let handler = funcmap.get(op.func);
+					handler.count++;
+					let res = handler.replace(op, x, opcodes);
+					if (res === op) {
+						// do nothing
+					} else if (typeof res == "boolean") {
+
+					} else if (typeof res == "number" && Number.isInteger(res)) {
+
+					} else if (typeof res == "object" && res !== null) {
+						opcodes[x] = res;
+						func._opcodeDirty = true;
+					}
+				}
+			}
+		}
+	}
+
+	{	
+		let glob = mod.getGlobalByName("__stack_pointer");
+		console.log("%s = %d", name, glob.init[0].value);
+		ctx.__stack_pointer = glob.init[0].value; // store it for later use.
+		glob = mod.getGlobalByName("thread0_st");
+		console.log("%s = %d", name, glob.init[0].value);
+		ctx.thread0_st = glob.init[0].value; // store it for later use.
+	}
+
+
+	let g1 = mod.getGlobalByName("__stack_pointer");
+	let g2 = new ImportedGlobal();
+	g2.module = "kern";
+	g2.name = "__stack_pointer";
+	g2.type = g1.type;
+	g2.mutable = g1.mutable;
+	mod.replaceGlobal(g1, g2, true);
+	mod.imports.unshift(g2);
+	removeExportFor(mod, g1);
+
+	g1 = mod.getGlobalByName("__curthread");
+	g2 = new ImportedGlobal();
+	g2.module = "kern";
+	g2.name = "__curthread";
+	g2.type = g1.type;
+	g2.mutable = g1.mutable;
+	mod.replaceGlobal(g1, g2, true);
+	mod.imports.push(g2);
+	removeExportFor(mod, g1);
+
+	let sec = targetModule.findSection(SECTION_TYPE.IMPORT);
+	sec.markDirty();
+	sec = targetModule.findSection(SECTION_TYPE.EXPORT);
+	sec.markDirty();
+	sec = targetModule.findSection(SECTION_TYPE.GLOBAL);
+	sec.markDirty();
+
+	console.log(funcmap);
+}
+
+function postOptimizeAtomicInst(ctx, mod) {
+
+	let opsopt = [];
+
+	function memcpyReplaceHandler(inst, index, arr) {
+		let peek = arr[index + 1];
+		if (peek.opcode == 0x1A) { // drop
+			arr[index] = {opcode: 0xfc0a, memidx1: 0, memidx2: 0};
+			arr.splice(index + 1, 1);
+			return true;
+		} else {
+			console.warn("call to memcpy does not drop return value");
+		}
+		return true;
+	}
+	// TODO: we are missing atomic_fence, but cannot find this in the actual wasm proposal.
+	const inst_replace = [
+		{ 	// atomic operations.
+			name: "atomic_notify",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE00, 0, 0);
+			}
+		}, {
+			name: "atomic_wait32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE01, 0, 0);
+			}
+		}, {
+			name: "wasm_atomic_fence",
+			replace: function(inst, index, arr) {
+				return {opcode: 0xFE03, memidx: 0};
+			}
+		}, {
+			name: "atomic_load8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE12, 0, 0);
+			}
+		}, {
+			name: "atomic_store8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE19, 0, 0);
+			}
+		}, {
+			name: "atomic_add8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE20, 0, 0);
+			}
+		}, {
+			name: "atomic_sub8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE27, 0, 0);
+			}
+		}, {
+			name: "atomic_and8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE2E, 0, 0);
+			}
+		},{
+			name: "atomic_or8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE35, 0, 0);
+			}
+		}, {
+			name: "atomic_xor8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE3C, 0, 0);
+			}
+		}, {
+			name: "atomic_xchg8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE43, 0, 0);
+			}
+		}, {
+			name: "atomic_cmpxchg8",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE4A, 0, 0);
+			}
+		},  {
+			name: "atomic_load16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE13, 0, 0);
+			}
+		}, {
+			name: "atomic_store16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE1A, 0, 0);
+			}
+		}, {
+			name: "atomic_add16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE21, 0, 0);
+			}
+		}, {
+			name: "atomic_sub16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE28, 0, 0);
+			}
+		}, {
+			name: "atomic_and16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE2F, 0, 0);
+			}
+		},{
+			name: "atomic_or16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE36, 0, 0);
+			}
+		}, {
+			name: "atomic_xor16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE3D, 0, 0);
+			}
+		}, {
+			name: "atomic_xchg16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE44, 0, 0);
+			}
+		}, {
+			name: "atomic_cmpxchg16",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE4B, 0, 0);
+			}
+		}, {
+			name: "atomic_load32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE10, 0, 0);
+			}
+		}, {
+			name: "atomic_store32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE17, 0, 0);
+			}
+		}, {
+			name: "atomic_add32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE1E, 0, 0);
+			}
+		}, {
+			name: "atomic_sub32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE25, 0, 0);
+			}
+		}, {
+			name: "atomic_and32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE2C, 0, 0);
+			}
+		},{
+			name: "atomic_or32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE33, 0, 0);
+			}
+		}, {
+			name: "atomic_xor32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE3A, 0, 0);
+			}
+		}, {
+			name: "atomic_xchg32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE41, 0, 0);
+			}
+		}, {
+			name: "atomic_cmpxchg32",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE48, 0, 0);
+			}
+		}, {
+			name: "atomic_wait64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE02, 0, 0);
+			}
+		}, {
+			name: "atomic_load64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE11, 0, 0);
+			}
+		}, {
+			name: "atomic_store64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE18, 0, 0);
+			}
+		}, {
+			name: "atomic_add64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE1F, 0, 0);
+			}
+		}, {
+			name: "atomic_sub64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE26, 0, 0);
+			}
+		}, {
+			name: "atomic_and64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE2D, 0, 0);
+			}
+		}, {
+			name: "atomic_or64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE34, 0, 0);
+			}
+		}, {
+			name: "atomic_xor64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE3B, 0, 0);
+			}
+		}, {
+			name: "atomic_xchg64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE42, 0, 0);
+			}
+		},{
+			name: "atomic_cmpxchg64",
+			replace: function(inst, index, arr) {
+				return new AtomicInst(0xFE49, 0, 0);
+			}
+		}
+	];
+	
+	let funcmap = new Map();
+	let names = [];
+	let ylen = inst_replace.length;
+	for (let y = 0; y < ylen; y++) {
+		let handler = inst_replace[y];
+		names.push(handler.name);
+	}
+
+	
+	let functions = mod.functions;
+	ylen = functions.length;
+	for (let y = 0; y < ylen; y++) {
+		let idx, name, func = functions[y];
+		if (typeof func[__nsym] != "string")
+			continue;
+		name = func[__nsym];
+		idx = names.indexOf(name);
+		if (idx === -1)
+			continue;
+		let handler = inst_replace[idx];
+		handler.func = func;
+		handler.count = 0;
+		funcmap.set(name, handler);
+	}
+
+	// run trough all WebAssembly code to find call-sites where we call funcidx
+	let start = 0;
+	for (let y = 0; y < ylen; y++) {
+		let func = functions[y];
+		if (!(func instanceof ImportedFunction)) {
+			start = y;
+			break;
+		}
+	}
+
+	for (let y = start; y < ylen; y++) {
+		let func = functions[y];
+		let opcodes = func.opcodes;
+		// NOTE: don't try to optimize the opcodes.length, handlers might alter instructions around them.
+		for (let x = 0; x < opcodes.length; x++) {
+			let op = opcodes[x];
+			if (op.opcode == 0x10) {
+				if (funcmap.has(op.func)) {
+					let handler = funcmap.get(op.func);
+					handler.count++;
+					let res = handler.replace(op, x, opcodes);
+					if (res === op) {
+						// do nothing
+					} else if (typeof res == "boolean") {
+
+					} else if (typeof res == "number" && Number.isInteger(res)) {
+
+					} else if (typeof res == "object" && res !== null) {
+						opcodes[x] = res;
+						func._opcodeDirty = true;
+					}
+				}
+			}
+		}
+	}
+
+	//
+}
+
+function postOptimizeMemInstAction(ctx, mod) {
+
+	let opsopt = [];
+
+	function memcpyReplaceHandler(inst, index, arr) {
+		let peek = arr[index + 1];
+		if (peek.opcode == 0x1A) { // drop
+			arr[index] = {opcode: 0xfc0a, memidx1: 0, memidx2: 0};
+			arr.splice(index + 1, 1);
+			return true;
+		} else {
+			console.warn("call to memcpy does not drop return value");
+		}
+		return true;
+	}
+	// TODO: we are missing atomic_fence, but cannot find this in the actual wasm proposal.
+	const inst_replace = [
+		{ 							// memory operations.
+			name: "memcpy",
+			replace: memcpyReplaceHandler
+		}, {
+			name: "__memcpy",
+			replace: memcpyReplaceHandler
+		}, {
+			name: "memcpy_early",
+			replace: memcpyReplaceHandler
+		}/*, {
+			name: "memset",
+			// replacing memset vs. memory.fill is where it gets complicated, memset returns which the 
+			// memory.fill instruction does not. check for drop instruction but if not found we must fake
+			// the return of memset 
+			replace: function(inst, index, arr) {
+				let peek = arr[index + 1];
+				if (peek.opcode == 0x1A) { // drop
+					arr[index] = {opcode: 0xfc0b, memidx: 0};
+					arr.splice(index + 1, 1);
+					return true;
+				} else {
+					console.warn("call to memcpy does not drop return value");
+				}
+				return true;
+			}
+		}*/
+	];
+
+	let funcmap = new Map();
+	let functions = mod.functions;
+	let ylen = functions.length;
+	let len = inst_replace.length;
+	for (let i = 0; i < len; i++) {
+		let handler = inst_replace[i];
+		let name = handler.name;
+		let match;
+
+		for (let y = 0; y < ylen; y++) {
+			let func = functions[y];
+			if (typeof func[__nsym] != "string" || func[__nsym] !== name)
+				continue;
+
+			match = func;
+			break;
+		}
+
+		if (match) {
+			handler.func = match;
+			handler.count = 0;
+			funcmap.set(match, handler);
+		}
+	}
+
+	// run trough all WebAssembly code to find call-sites where we call funcidx
+	let start = 0;
+	let imports = mod.imports;
+	len = imports.length;
+	for (let i = 0; i < len; i++) {
+		let imp = imports[i];
+		if (imp instanceof ImportedFunction) {
+			start++;
+		}
+	}
+
+	functions = mod.functions;
+	ylen = functions.length;
+	for (let y = start; y < ylen; y++) {
+		let func = functions[y];
+		let opcodes = func.opcodes;
+		// NOTE: don't try to optimize the opcodes.length, handlers might alter instructions around them.
+		for (let x = 0; x < opcodes.length; x++) {
+			let op = opcodes[x];
+			if (op.opcode == 0x10) {
+				if (funcmap.has(op.func)) {
+					let handler = funcmap.get(op.func);
+					handler.count++;
+					let res = handler.replace(op, x, opcodes);
+					if (res === op) {
+						// do nothing
+					} else if (typeof res == "boolean") {
+
+					} else if (typeof res == "number" && Number.isInteger(res)) {
+
+					} else if (typeof res == "object" && res !== null) {
+						opcodes[x] = res;
+						func._opcodeDirty = true;
+					}
+				}
+			}
+		}
+	}
+}
+
+
+/**
+ * Generic Key-Value-Object container format for storing essential 
+ *
+ * The format is similar but not identical to the producers section (link below) but 
+ * we cannot do whats needed with simply string values.
+ *
+ * u32  	root object index 
+ * u32  	object table count
+ * .... count x 32-bit pointers (relative to start if count address)
+ * 
+ * each object is composed of a 8-byte prefix, where the high 4-byte is the type and
+ * the low 4-bytes is the count of the value it holds, a 4-byte value of 0x0 indicates
+ * that a 4-byte unsigned integer value follows that tells the count or size of the object.
+ * This type of encoding offers the best of two worlds.
+ * - for array values this the number of contained object.
+ * - for dictionary (kvo) object this is the sum of number of keys + values
+ * - for signed/unsigned integer this is the power of value
+ *   1 coresponds to a  8-bit value
+ *   2 coresponds to a 16-bit value
+ *   3 coresponds to a 32-bit value
+ *   4 coresponds to a 64-bit value
+ *   [other values for integers are reserved for future use]
+ * - for string & binary-data values this is the number of bytes (not chars)
+ *
+ * Type 
+ * NULL		0000  0000			nullptr/NULL/null
+ * bool		0000  1000			false
+ * bool		0000  1001			true
+ * date		0000  0011			8-byte date value.
+ * integer	0001  nnnn
+ * float 	0010  nnnn
+ * data		0100  nnnn			binary data chunk
+ * array
+ * 0x00
+ * 
+ * 0x10 	dictionary
+ * 0x20 	array
+ * 0x30 	ascii string value
+ * 0x40 	utf-8 string value
+ * 0x50		unsigned integer
+ * 0x60		signed integerecho
+ * 0x70 	binary data chunk
+ * 
+ * i32
+ *
+ *
+ * [](https://github.com/WebAssembly/tool-conventions/blob/main/ProducersSection.md)
+ */
+class WasmNetbsdKVOContainer extends WebAssemblyCustomSection {
+
+	constructor(module, name, kvo) {
+		super(module, name);
+		this.name = name;
+		this.data = kvo;
+	}
+
+	encode() {
+		// for now we simply use JSON in order to not spend to much time on a encoding when we should get 
+		// kernel up and runnning..
+		let kvo = this.data;
+		let totsz, secsz = 0;
+		let json = JSON.stringify(kvo, null, 2);
+		let datasz = lengthBytesUTF8(json);
+		let namesz = lengthBytesUTF8(this.name);
+		secsz = datasz + namesz;
+		secsz += lengthULEB128(namesz);
+		totsz = secsz;
+		totsz += lengthULEB128(totsz);
+
+		let buf = new ArrayBuffer(totsz + 1);
+        let data = new ByteArray(buf);
+        data.writeUint8(SECTION_TYPE_CUSTOM);
+        data.writeULEB128(secsz);
+        data.writeULEB128(namesz);
+        data.writeUTF8Bytes(this.name);
+        data.writeUTF8Bytes(json);
+
+        if (data.offset != totsz + 1)
+        	console.error("expected length != actual length (%d vs. %d)", data.offset, totsz + 1);
+
+        return buf;
+
+		/*
+		let count = data.readULEB128();
+	    console.log("count: %d", count);
+	    let fields = {};
+	    for (let i = 0; i < count; i++) {
+	        let namesz = data.readULEB128();
+	        let fname = data.readUTF8Bytes(namesz);
+
+	        let valcnt = data.readULEB128();
+	        let values = [];
+	        for (let x = 0; x < valcnt; x++) {
+	            let verlen, valuesz = data.readULEB128();
+	            let value = data.readUTF8Bytes(valuesz);
+	            verlen = data.readULEB128(); // version string.
+	            if (verlen > 0) {
+	                let version = data.readUTF8Bytes(verlen);
+	                values.push({value: value, version: version});
+	            } else {
+	                values.push(value);
+	            }
+	        }
+	        fields[fname] = values;
+	    }
+
+	    console.log(fields);
+	    return fields;
+	    */
+	}
+
+	static decode(module, data, size) {
+
+	}
+} 
+
+// does post mutation of netbsd kernel binaries for WebAssembly, also adds a custom section which holds essential information
+// to initialize the kernel.
+function generateNetbsdWebAssembly(ctx, mod) {
+
+	let initmem = mod.computeInitialMemory(mod.memory[0], true);
+	let data = new DataView(initmem.buffer);
+	console.log(initmem);
+
+	{	
+		let glob = mod.getGlobalByName("__stack_pointer");
+		console.log("__stack_pointer = %d", name, glob.init[0].value);
+		ctx.__stack_pointer = glob.init[0].value; // store it for later use.
+		glob = mod.getGlobalByName("lwp0");
+		console.log("lwp0 = %d", name, glob.init[0].value);
+		ctx.lwp0 = glob.init[0].value; // store it for later use.
+	}
+
+	function getValueByName(name) {
+
+		let glob = mod.getGlobalByName(name);
+		if (!glob) 
+			return undefined;
+		console.log("%s = %d", name, glob.init[0].value);
+		return glob.init[0].value;
+	}
+
+	/*
+	__start__init_memory = WASM_DEF_ADDR; // start of the initial memory, often .rodata section.
+	__stop__init_memory = WASM_DEF_ADDR;  // end of the initial memory, indicates the end of .bss section
+	__bss_start = WASM_DEF_ADDR;          // start of the ".bss" section
+	__kernel_text = WASM_DEF_ADDR;
+	_end = WASM_DEF_ADDR;
+	__data_start = WASM_DEF_ADDR;
+	__rodata_start = WASM_DEF_ADDR;
+	physical_start = WASM_DEF_ADDR;
+	physical_end = WASM_DEF_ADDR;
+	bootstrap_pde = WASM_DEF_ADDR;
+	l1_pte = WASM_DEF_ADDR;
+	bootargs                // 1024 bytes of string value
+	bootdevstr              // 64 bytes of string value
+	boot_args 				// pointer to boot_arguments
+	 */
+	
+	let netbsd_wakern_info = {};
+
+	let __global_base = getValueByName("__global_base");
+
+	let addr_start_mem = getValueByName("__start__init_memory");
+	let addr_stop_mem = getValueByName("__stop__init_memory");
+	let addr_bss_start = getValueByName("__bss_start");
+	let addr_kernel_text = getValueByName("__kernel_text");			// ?
+	let addr_kernel_end = getValueByName("_end");					// ?
+	let addr_data_start = getValueByName("__data_start");
+	let addr_rodata_start = getValueByName("__rodata_start");
+	let addr_physical_start = getValueByName("physical_start");
+	let addr_physical_end = getValueByName("physical_end");
+	let addr_bootstrap_pde = getValueByName("bootstrap_pde");		// done by locore at boot.
+	let addr_l1_pte = getValueByName("l1_pte");						// done by locore at boot.
+	//let addr_bootargs = getValueByName("bootargs");
+	//let addr_bootdevstr = getValueByName("bootdevstr");
+	//let addr_boot_args = getValueByName("boot_args");
+	let addr_fdt_base = getValueByName("__fdt_base");
+	
+
+	netbsd_wakern_info.physical_start = addr_physical_start;
+	netbsd_wakern_info.physical_end = addr_physical_end;
+	netbsd_wakern_info.bootstrap_pde = addr_bootstrap_pde;
+	netbsd_wakern_info.l1_pte = addr_l1_pte;
+	//netbsd_wakern_info.bootargsbuf = addr_bootargs;
+	//netbsd_wakern_info.bootdevstr = addr_bootdevstr;
+	//netbsd_wakern_info.bootargsp = addr_boot_args;
+	netbsd_wakern_info.__start__init_memory = addr_start_mem;
+	netbsd_wakern_info.__stop__init_memory = addr_stop_mem;
+	netbsd_wakern_info.__start_kern = addr_kernel_text;
+	netbsd_wakern_info.__stop_kern = addr_kernel_end;
+	netbsd_wakern_info.fdt_base = addr_fdt_base;
+	netbsd_wakern_info.lwp0 = getValueByName("lwp0");
+	netbsd_wakern_info.lwp0_stackp = getValueByName("__stack_pointer");
+	netbsd_wakern_info.__wasmkern_envp = getValueByName("__wasmkern_envp");
+	netbsd_wakern_info.addresses = [
+		{
+			name: "__global_base",
+			addr: __global_base
+		}, {
+			name: "__start__init_memory",
+			addr: addr_start_mem
+		}, {
+			name: "__stop__init_memory",
+			addr: addr_stop_mem
+		}, {
+			name: "__bss_start",
+			addr: addr_bss_start
+		}, {
+			name: "__kernel_text",
+			addr: addr_kernel_text
+		}, {
+			name: "_end",
+			addr: addr_kernel_end
+		}, {
+			name: "__data_start",
+			addr: addr_data_start
+		}, {
+			name: "__rodata_start",
+			addr: addr_rodata_start
+		}, {
+			name: "physical_start",
+			addr: addr_physical_start
+		}, {
+			name: "physical_end",
+			addr: addr_physical_end
+		}, {
+			name: "bootstrap_pde",
+			addr: addr_bootstrap_pde
+		}, {
+			name: "l1_pte",
+			addr: addr_l1_pte
+		},/*{
+			name: "bootargs",
+			addr: addr_bootargs
+		}, {
+			name: "bootdevstr",
+			addr: addr_bootdevstr
+		}, {
+			name: "boot_args",
+			addr: addr_boot_args
+		},*/{
+			name: "__fdt_base",
+			addr: addr_fdt_base
+		}
+	];
+
+	data.setUint32(addr_start_mem, __global_base, true);
+	data.setUint32(addr_stop_mem, initmem.byteLength, true);
+	netbsd_wakern_info.hint_min_stacksz = (netbsd_wakern_info.lwp0_stackp - initmem.byteLength); // clang always by default place the stack at the end of initmem, growing towards the end of initmem.
+
+	function isConst(opcode) {
+		return opcode == 0x41 || opcode == 0x42 || opcode == 0x43 || opcode == 0x44;
+	}
+
+	let rump_variant = {
+		__wasmkern_envp: "__wasmkern_envp",
+		__physmemlimit: "rump_physmemlimit",
+		__curphysmem: "curphysmem",
+		opfs_ext4_head: "opfs_ext4_head",		// opfs+ext4 driver location
+		opfs_blkdev_head: "opfs_blkdev_head",	// opfs-blkdev
+	};
+
+	for (let p in rump_variant) {
+		let glob, name = rump_variant[p];
+		if (netbsd_wakern_info.hasOwnProperty(p))
+			continue;
+		glob = mod.getGlobalByName(name);
+		if (glob === null)
+			continue;
+		if (glob.init.length != 2 || !(isConst(glob.init[0].opcode) && glob.init[1].opcode == 0x0b)) {
+			throw new TypeError("global of unsupported value");
+		}
+
+		netbsd_wakern_info[p] = glob.init[0].value;
+	}
+
+
+	let memseg = mod.getDataSegmentByName(".bss");
+	let memstart = memseg.inst.opcodes[0].value;
+	data.setUint32(addr_bss_start, memstart, true);
+
+	memseg = mod.getDataSegmentByName(".rodata");
+	memstart = memseg.inst.opcodes[0].value;
+	data.setUint32(addr_rodata_start, memstart, true);
+
+	memseg = mod.getDataSegmentByName(".data");
+	memstart = memseg.inst.opcodes[0].value;
+	data.setUint32(addr_data_start, memstart, true);
+
+	if (mod.memory.length != 1) {
+		throw new Error("only implemented with one memory in mind");
+	}
+
+	data.setUint32(addr_physical_start, 0, true);
+	let memmax = 0;
+	if (mod.memory[0].max) {
+		memmax = mod.memory[0].max * WASM_PAGE_SIZE;
+	} else {
+		memmax = 0xFFFFFFFF;
+	}
+	data.setUint32(addr_physical_end, memmax, true);
+
+	if (netbsd_wakern_info.__curphysmem) {
+		data.setUint32(netbsd_wakern_info.__curphysmem, initmem.byteLength, true);
+		
+	}
+
+	console.log(netbsd_wakern_info);
+	let section = new WasmNetbsdKVOContainer(mod, "com.netbsd.kernel-locore", netbsd_wakern_info);
+	mod.sections.push(section);
+
+	let g1 = mod.getGlobalByName("__stack_pointer");
+	let g2 = new ImportedGlobal();
+	g2.module = "kern";
+	g2.name = "__stack_pointer";
+	g2.type = g1.type;
+	g2.mutable = g1.mutable;
+	mod.replaceGlobal(g1, g2, true);
+	mod.imports.unshift(g2);
+	mod.removeExportByRef(g1);
+
+	g1 = mod.getGlobalByName("wasm_curlwp");
+	g2 = new ImportedGlobal();
+	g2.module = "kern";
+	g2.name = "__curlwp";
+	g2.type = g1.type;
+	g2.mutable = g1.mutable;
+	mod.replaceGlobal(g1, g2, true);
+	mod.imports.push(g2);
+	mod.removeExportByRef(g1);
+
+	let sec = targetModule.findSection(SECTION_TYPE.IMPORT);
+	sec.markDirty();
+	sec = targetModule.findSection(SECTION_TYPE.EXPORT);
+	sec.markDirty();
+	sec = targetModule.findSection(SECTION_TYPE.GLOBAL);
+	sec.markDirty();
+}
+
+class TinyBSDBinaryInfoSection {
+
+	constructor() {
+		this.default_stack_pointer = 0;
+		this.default_stack_size = 0;
+	}
+
+	static decode() {
+		let keys = ["default_stack_pointer", "default_stack_size"];
+	}
+
+	// for now this is basically a embedded JSON object.
+	encode(module) {
+		const CUSTOM_SEC_SIGN = "tinybsd.wasm_imgact";
+		let secsz, totsz = 0;
+		let objstr = JSON.stringify(this, null, 2);
+	    let objstrsz = lengthBytesUTF8(objstr);
+
+	    totsz += objstrsz;
+	    let strlen = lengthBytesUTF8(CUSTOM_SEC_SIGN);
+	    totsz += lengthULEB128(strlen);
+	    totsz += strlen;
+	    secsz = totsz;
+	    totsz += lengthULEB128(totsz);
+
+	        // actual encdong
+	    let buf = new ArrayBuffer(totsz + 1);
+	    let data = new ByteArray(buf);
+	    data.writeUint8(SECTION_TYPE.CUSTOM);
+	    data.writeULEB128(secsz);
+	    data.writeULEB128(strlen);
+	    data.writeUTF8Bytes(CUSTOM_SEC_SIGN);
+	    data.writeUTF8Bytes(objstr);
+
+	    return buf;
+	}
+}
+
+function postOptimizeTinybsdUserBinary(ctx, mod) {
 
 	let opsopt = [];
 
@@ -1741,41 +3733,42 @@ function postOptimizeWasm(mod) {
 		return;
 	}
 
-	let funcmap = [];
-	let names = mod.names.functions;
-	let len = inst_replace.length;
-	for (let i = 0; i < len; i++) {
-		let handler = inst_replace[i];
-		let name = func.name;
-		let match;
-
-		for (const [func, value] of names) {
-			if (value == name) {
-				match = func;
-				break;
-			}
-		}
-
-		if (match) {
-			handler.funcidx = funcidx;
-			handler.count = 0;
-			funcmap.set(match, handler);
-		}
+	let funcmap = new Map();
+	let names = [];
+	let ylen = inst_replace.length;
+	for (let y = 0; y < ylen; y++) {
+		let handler = inst_replace[y];
+		names.push(handler.name);
 	}
+
+	
+	let functions = mod.functions;
+	ylen = functions.length;
+	for (let y = 0; y < ylen; y++) {
+		let idx, name, func = functions[y];
+		if (typeof func[__nsym] != "string")
+			continue;
+		name = func[__nsym];
+		idx = names.indexOf(name);
+		if (idx === -1)
+			continue;
+		let handler = inst_replace[idx];
+		handler.func = func;
+		handler.count = 0;
+		funcmap.set(name, handler);
+	}
+
 
 	// run trough all WebAssembly code to find call-sites where we call funcidx
 	let start = 0;
-	let imports = mod.imports;
-	len = imports.length;
-	for (let i = 0; i < len; i++) {
-		let imp = imports[i];
-		if (imp instanceof ImportedFunction) {
-			start++;
+	for (let y = 0; y < ylen; y++) {
+		let func = functions[y];
+		if (!(func instanceof ImportedFunction)) {
+			start = y;
+			break;
 		}
 	}
 
-	let functions = mod.functions;
-	let ylen = functions.length;
 	for (let y = start; y < ylen; y++) {
 		let func = functions[y];
 		let opcodes = func.opcodes;
@@ -1802,50 +3795,65 @@ function postOptimizeWasm(mod) {
 		}
 	}
 
-	_namedGlobals = namedGlobalsMap(mod);
-	{	
-		let name = "__stack_pointer";
-		let glob = _namedGlobals[name];
+	// below is the convertion of globals.
+
+	{
+		let glob = mod.getGlobalByName("__stack_pointer");
 		console.log("%s = %d", name, glob.init[0].value);
-		name = "thread0_st";
-		glob = _namedGlobals[name];
-		console.log("%s = %d", name, glob.init[0].value);
+		ctx.__stack_pointer = glob.init[0].value; // store it for later use.
+	}
+
+	let sections = mod.findSections("tinybsd.wasm_imgact");
+	if (sections.length == 0) {
+		let sec = new TinyBSDBinaryInfoSection();
+		mod.sections.push({type: 0x00, name: "tinybsd.wasm_imgact", data: sec, offset: 0, size: 0, dataOffset: 0, _isDirty: true});
+		
+		let stackptr = ctx.__stack_pointer;
+		let dataMax = mod.computeInitialMemoryMaxAddress();
+		let stacksz = stackptr - dataMax
+		sec.default_stack_pointer = stackptr;
+		sec.default_stack_size = stacksz;
+	} else {
+		let chunk = sections[0];
+		let sec = new TinyBSDBinaryInfoSection();
+		chunk.data = sec;
+		chunk.offset = 0;
+		chunk.size = 0;
+		chunk.dataOffset = 0;
+		chunk._isDirty = true;
+		
+		let stackptr = ctx.__stack_pointer;
+		let dataMax = mod.computeInitialMemoryMaxAddress();
+		let stacksz = stackptr - dataMax
+		sec.default_stack_pointer = stackptr;
+		sec.default_stack_size = stacksz;
 	}
 
 
-	let name = "__stack_pointer";
-	let g1 = _namedGlobals[name];
+	let g1 = mod.getGlobalByName("__stack_pointer");
 	let g2 = new ImportedGlobal();
 	g2.module = "kern";
-	g2.name = name;
+	g2.name = "__stack_pointer";
 	g2.type = g1.type;
 	g2.mutable = g1.mutable;
-	convertToImportedGlobal(mod, g1, g2);
+	mod.replaceGlobal(g1, g2, true);
 	mod.imports.unshift(g2);
-	removeExportFor(mod, g1);
+	mod.removeExportFor(g1);
 
-	name = "__curthread"
-	g1 = _namedGlobals[name];
-	g2 = new ImportedGlobal();
-	g2.module = "kern";
-	g2.name = name;
-	g2.type = g1.type;
-	g2.mutable = g1.mutable;
-	convertToImportedGlobal(mod, g1, g2);
-	mod.imports.push(g2);
-	removeExportFor(mod, g1);
-
-	let sec = findModuleByType(targetModule, SECTION_TYPE.IMPORT);
-	sec._isDirty = true;
-	sec = findModuleByType(targetModule, SECTION_TYPE.EXPORT);
-	sec._isDirty = true;
-	sec = findModuleByType(targetModule, SECTION_TYPE.GLOBAL);
-	sec._isDirty = true;
+	let section = targetModule.findSection(SECTION_TYPE.IMPORT);
+	section.markDirty();
+	section = targetModule.findSection(SECTION_TYPE.EXPORT);
+	section.markDirty();
+	section = targetModule.findSection(SECTION_TYPE.GLOBAL);
+	section.markDirty();
 
 	console.log(funcmap);
 }
 
 function mapGlobalsUsage(mod) {
+
+	if (!mod.globals)
+		return;
 
 	let gvalues = [];
 	let globals = mod.globals;
@@ -1885,11 +3893,11 @@ function mapGlobalsUsage(mod) {
 		for (let x = 0; x < xlen; x++) { // do get opcodes.length to local as handlers might alter opcode around them.
 			let op = opcodes[x];
 			if (op.opcode == 0x23 || op.opcode == 0x24) {
-				let idx = op.x;
-				if (idx < min || idx > max) {
+				let glob = op.global;
+				if (globals.indexOf(glob) === -1) {
 					console.error("invalid globalidx at funcidx: %d inst-index: %d", y, x);
 				} else {
-					globals[idx].usage++;
+					glob.usage++;
 				}
 			}
 		}
@@ -1936,6 +3944,7 @@ function mapGlobalsUsage(mod) {
 	console.log(locations);
 }
 
+// replaced with mod.replaceGlobal()
 function convertToImportedGlobal(mod, oldGlobal, newGlobal) {
 
 	let gvalues = [];
@@ -2065,7 +4074,224 @@ function convertToImportedGlobal(mod, oldGlobal, newGlobal) {
 	return true;
 }
 
+function configureBootParameters(ctx, module, options) {
 
+	let wabp_addr;
+	let glob = module.getGlobalByName("__static_wabp");
+	if (glob)
+		wabp_addr = glob.init[0].value;
+
+}
+
+function generateKLDModuleInfo(ctx, module, options) {
+	
+}
+
+function computeCallHierarchyInternal(module, fn, calle, map) {
+
+	let callers;
+	if (!calle) {
+		calle = {};
+		calle.func = fn;
+		calle.callers = [];
+		callers = calle.callers;
+		map.set(fn, calle);
+	}
+
+	let funcs = module.functions;
+	let ylen = funcs.length;
+	for (let y = 0; y < ylen; y++) {
+		let func = funcs[y];
+		if (func instanceof ImportedFunction) {
+			continue;
+		}
+		let opcodes = func.opcodes;
+		let xlen = opcodes.length;
+		for (let x = 0; x < xlen; x++) {
+			let inst = opcodes[x];
+			if (inst.opcode != 0x10)
+				continue;
+
+			if (inst.func == fn) {
+				let cs;
+				if (map.has(func)) {
+					cs = map.get(func);
+				} else {
+					cs = computeCallHierarchyInternal(module, func, undefined, map);
+				}
+
+				callers.push(cs);
+			}
+		}
+	}
+
+	return calle;
+}
+
+function computeCallHierarchy(module, fn) {
+
+	let map = new Map();
+	let results = computeCallHierarchyInternal(module, fn, undefined, map);
+	console.log(results);
+	return results;
+}
+
+function analyzeForkEntryPoint(ctx, module, options) {
+	let forkFn = null;
+	let nmap = {};
+
+	forkFn = module.getFunctionByName("__sys_fork");
+
+	if (!forkFn) {
+		console.warn("no fork");
+		return;
+	}
+
+	let callers, callsite = computeCallHierarchy(module, forkFn);
+	console.log(callsite);
+	callers = callsite.callers;
+
+	len = callers.length
+	for (let i = 0; i < len; i++) {
+		let callsite = callers[i];
+		let func = callsite.func;
+		let name = func[__nsym];
+
+		console.log("%s %o", name, callsite);
+		nmap[name] = func;
+	}
+
+	let ylen = callers.length;
+	for (let y = 0; y < ylen; y++) {
+		let func = callers[y].func;
+		let opcodes = func.opcodes;
+		let xlen = opcodes.length;
+		for (let x = 0; x < xlen; x++) {
+			let inst = opcodes[x];
+			if (inst.opcode != 0x10)
+				continue;
+
+			if (inst.func == forkFn) {
+				console.log("func %d inst %d", y, x);
+			}
+		}
+	}
+
+	let inForkGlobal = new ImportedGlobal();
+	inForkGlobal.module = "sys";
+	inForkGlobal.name = "in_fork";
+	inForkGlobal.type = 0x7F;
+	inForkGlobal.mutable = true;
+	// or
+	inForkGlobal = WasmGlobal.createGlobalInt32(0, true);
+	module.appendExport("in_fork", inForkGlobal);
+
+	forkFromGlobal = WasmGlobal.createGlobalInt32(0, true);
+	module.appendExport("fork_from", forkFromGlobal);
+
+	forkArgGlobal = WasmGlobal.createGlobalInt32(0, true); // temporary used to hold one argument.
+	module.appendExport("fork_arg", forkArgGlobal);
+
+	// modify __sys_fork() to return 0 when in_fork is not 0, also unset in_fork before return
+	let opcodes = [];
+	let inst = new BlockInst(0x02);
+	inst.type = 0x40;
+	opcodes.push(inst);
+	opcodes.push({opcode: 0x23, global: inForkGlobal},	// global.get
+				 {opcode: 0x45}, 					    // i32.eqz
+				 {opcode: 0x0d, labelidx: 0}, 			// br_if
+				 {opcode: 0x41, value: 0},				// i32.const
+				 {opcode: 0x24, global: inForkGlobal}, 	// global.set
+				 {opcode: 0x41, value: 0},				// i32.const
+				 new ReturnInst(0x0F),					// return
+				 {opcode: 0x0b});						// end
+	forkFn.opcodes.unshift.apply(forkFn.opcodes, opcodes); // prepend opcodes.
+	forkFn._opcodeDirty = true;
+
+	console.log(forkFn);
+	console.log(nmap);
+
+	let func = nmap["run_script"];
+	if (func) {
+		func._opcodeDirty = true;
+		opcodes = func.opcodes;
+
+		// TODO: we also need a way to restore the arguments..
+		// 		 as arguments can be of variable length it might be best to push this to the
+		// 		 stack as well, using a fork structure, in the example of run_script we take 
+		// 		 a (const char *script) as our argument, which is used part of the function which
+		// 		 is executed on the resulting fork thread.
+		
+		// after 
+		opcodes.splice(7, 0, {opcode: 0x41, value: 1}, 				// i32.const  fork-location
+							 {opcode: 0x24, global: forkFromGlobal},// global.set
+							 {opcode: 0x20, x: 0},					// local.get
+							 {opcode: 0x24, global: forkArgGlobal},	// global.set
+							 {opcode: 0x0b});						// end
+		// before
+		inst = new IfInst(0x04);
+		inst.type = 0x40;
+		opcodes.splice(5, 0, {opcode: 0x23, global: inForkGlobal}, 	// global.get
+							 {opcode: 0x45}, 					    // i32.eqz
+							 inst);									// if
+/*
+		opcodes.splice(5, 0, {opcode: 0x23, global: inForkGlobal}, 	// global.get
+							 {opcode: 0x41, value: 0},				// i32.const
+							 {opcode: 0x47}, 						// i32.ne
+							 inst);									// if
+ */
+
+		module.appendExport("run_script", func);
+	}
+	/*
+	let callsites = [];
+
+	let funcs = module.functions;
+	let ylen = funcs.length;
+	for (let y = 0; y < ylen; y++) {
+		let func = funcs[y];
+		if (func instanceof ImportedFunction || func == forkFn) {
+			continue;
+		}
+		let opcodes = func.opcodes;
+		let xlen = opcodes.length;
+		for (let x = 0; x < xlen; x++) {
+			let inst = opcodes[x];
+			if (inst.opcode != 0x10)
+				continue;
+
+			if (inst.func == forkFn) {
+				let idx = callsites.indexOf(func);
+				if (idx !== -1) {
+
+				} else {
+					callsites.push(func);
+				}
+			}
+		}
+	}
+
+	let len = callsites.length
+	for (let i = 0; i < len; i++) {
+		let callsite = callsites[i];
+		let fn = names.get(callsite);
+		let hierarchy = computeCallHierarchy(module, callsite);
+		
+		let ylen = hierarchy.length;
+		for (let y = 0; y < ylen; y++) {
+			let func = hierarchy[y];
+			let name = names.get(func);
+			console.log("%s", name);
+		}
+		console.log("%s %o", fn, hierarchy);
+	}
+
+	console.log(callsites);*/
+
+	// TODO: analyze if a call to exit() within the branch of the new thread is garantied,
+	// 	     in such case the rewind call stack is not needed and a dirty-cheat could be done.
+
+}
 
 let __uiInit = false;
 
@@ -2205,11 +4431,31 @@ function setupUI() {
 	let runWorkflowUIBtn = document.querySelector("#run-workflow-2");
 	runWorkflowUIBtn.addEventListener("click", function(evt) {
 		let ctxmap = null;
+		let options = getWorkflowParameterValues();
+		
 		if (targetFilename == "kern.wasm") {
-			runWorkflowActions(targetModule, _freebsdWorkflow.actions, ctxmap).then(function(res) {
+			//storeRecentWorkflowInDB(_freebsdKernMainWorkflow.id, options);
+			runWorkflowActions(targetModule, _freebsdKernMainWorkflow.actions, ctxmap, options.params).then(function(res) {
 				populateWebAssemblyInfo(targetModule);
+				console.log("workflow did complete");
 			}, function (err) {
-
+				console.error(err);
+			});
+		} else if (targetFilename == "netbsd-kern.wasm") {
+			//storeRecentWorkflowInDB(_freebsdKernMainWorkflow.id, options);
+			runWorkflowActions(targetModule, _netbsdKernMainWorkflow.actions, ctxmap, options.params).then(function(res) {
+				populateWebAssemblyInfo(targetModule);
+				console.log("workflow did complete");
+			}, function (err) {
+				console.error(err);
+			});
+		} else if (isUserBinary(targetFilename)) {
+			//storeRecentWorkflowInDB(_freebsdUserBinaryForkWorkflow.id, options);
+			runWorkflowActions(targetModule, _freebsdUserBinaryForkWorkflow.actions, ctxmap, options.params).then(function(res) {
+				populateWebAssemblyInfo(targetModule);
+				console.log("workflow did complete");
+			}, function (err) {
+				console.error(err);
 			});
 		} else {
 			console.error("not kern.wasm");
@@ -2285,6 +4531,7 @@ function showInitialMemory(container, mem) {
 	tbl = container.querySelector("table.initial-memory-table");
 	if (!tbl) {
 		tbl = document.createElement("table");
+		tbl.classList.add("data-table");
 		tbl.classList.add("initial-memory-table")
 		let thead = document.createElement("thead");
 		let tr = document.createElement("tr");
@@ -2316,13 +4563,15 @@ function showInitialMemory(container, mem) {
 			tbody.removeChild(tbody.lastChild);
 		}
 	}
+
+	let nsym = WebAssemblyModule.Name;
 	
 	let dataSegments = targetModule.dataSegments;
-	let names = targetModule.names && targetModule.names.data ? targetModule.names.data : null;
 	let len = dataSegments.length;
 	for (let i = 0;i < len;i++) {
 		let dataSeg = dataSegments[i];
-		let name, allzeros = false;
+		let allzeros = false;
+		let name = dataSeg[nsym];
 		
 		let tr = document.createElement("tr");
 		let td = document.createElement("td");
@@ -2331,14 +4580,10 @@ function showInitialMemory(container, mem) {
 		td = document.createElement("td");
 		tr.appendChild(td);
 
-		if (names && names.has(i)) {
-			name = names.get(i);
-		}
-
 		if (name) {
 
 			let node = document.createElement("code");
-			node.textContent = names.get(i);
+			node.textContent = name;
 			td.appendChild(node);
 		} else {
 			let node = document.createTextNode("segment\x20");
@@ -2471,12 +4716,325 @@ function emccStyleTypeString(functype) {
     return ret + '_' + arg;
 }
 
+const CAVET_ICON_SVG = `<svg aria-hidden="true" focusable="false" role="img" class="octicon octicon-triangle-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="display: inline-block; user-select: none; vertical-align: text-bottom; overflow: visible;"><path d="m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z"></path></svg>`;
+const SEARCH_ICON_SVG = `<svg aria-hidden="true" focusable="false" role="img" class="octicon octicon-search" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="display: inline-block; user-select: none; vertical-align: text-bottom; overflow: visible;"><path fill-rule="evenodd" d="M11.5 7a4.499 4.499 0 11-8.998 0A4.499 4.499 0 0111.5 7zm-.82 4.74a6 6 0 111.06-1.06l3.04 3.04a.75.75 0 11-1.06 1.06l-3.04-3.04z"></path></svg>`;
+const SORT_ASC_ICON_SVG = `<svg aria-hidden="true" focusable="false" role="img" class="TableSortIcon TableSortIcon--ascending" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="display: inline-block; user-select: none; vertical-align: text-bottom; overflow: visible;"><path d="m12.927 2.573 3 3A.25.25 0 0 1 15.75 6H13.5v6.75a.75.75 0 0 1-1.5 0V6H9.75a.25.25 0 0 1-.177-.427l3-3a.25.25 0 0 1 .354 0ZM0 12.25a.75.75 0 0 1 .75-.75h7.5a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75Zm0-4a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5H.75A.75.75 0 0 1 0 8.25Zm0-4a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5H.75A.75.75 0 0 1 0 4.25Z"></path></svg>`;
+const SORT_DES_ICON = `<svg aria-hidden="true" focusable="false" role="img" class="TableSortIcon TableSortIcon--descending" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="display: inline-block; user-select: none; vertical-align: text-bottom; overflow: visible;"><path d="M0 4.25a.75.75 0 0 1 .75-.75h7.5a.75.75 0 0 1 0 1.5H.75A.75.75 0 0 1 0 4.25Zm0 4a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5H.75A.75.75 0 0 1 0 8.25Zm0 4a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75ZM13.5 10h2.25a.25.25 0 0 1 .177.427l-3 3a.25.25 0 0 1-.354 0l-3-3A.25.25 0 0 1 9.75 10H12V3.75a.75.75 0 0 1 1.5 0V10Z"></path></svg>`;
+const FILTER_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16"><path d="M.75 3h14.5a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1 0-1.5ZM3 7.75A.75.75 0 0 1 3.75 7h8.5a.75.75 0 0 1 0 1.5h-8.5A.75.75 0 0 1 3 7.75Zm3 4a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z"></path></svg>`;
+
+class EventEmitter {
+    
+    constructor() {
+    	this._listeners = {};
+    }
+
+    addListener(type, callback){
+        this.on(type, callback);
+    }
+
+    on(type, callback) {
+        if((typeof type !== "string" && typeof type !== "symbol") || typeof callback != "function")
+            throw new TypeError("on() unexpected arguments provided")
+
+        if (!this._listeners.hasOwnProperty(type)) {
+        	let arr = [];
+        	this._listeners[type] = arr;
+        	arr.push(callback);
+        } else {
+        	let arr = this._listeners[type];
+        	let idx = arr.indexOf(callback);
+        	if (arr.indexOf(callback) == -1)
+        		arr.push(callback);
+        }
+    }
+
+    once(type, callback) {
+        if(typeof callback  !== 'function')
+            throw new TypeError('only takes instances of Function');
+        
+        var self = this;
+        function g() {
+            self.removeListener(type, g);
+            callback.apply(this, arguments);
+        };
+
+        g.callback = callback;
+        self.on(type, g);
+        
+        return this;
+    }
+
+    removeListener(type, callback){
+        if((typeof type !== "string" && typeof type !== "symbol") || typeof callback != "function")
+            throw new Error(".removeListener() unexpected argument provided");
+
+        if(!this._listeners.hasOwnProperty(type))
+            delete this._listeners[event];
+
+        // Removes the listener if it exists under reference of the event type.
+        const listeners = this._listeners[type];
+        const index = listeners.indexOf(callback);
+        if(index != -1)
+            listeners.splice(index,1);
+
+        // Removes the listeners array for the type if empty.
+        if(listeners.length === 0){
+            delete listeners[type];
+        }
+    }
+
+    removeAllListeners(type) {
+        if(this._listeners.hasOwnProperty(event)){
+            delete this._listeners[event];
+        }
+    }
+
+    listeners(type){
+        return this._listeners.hasOwnProperty(type) ? this._listeners[type].slice() : null;
+    }
+
+    emit(type) {
+        if(typeof type !== "string" && typeof type !== "symbol")
+            throw new TypeError("emit() unexpected arguments provided");
+
+        if(!this._listeners.hasOwnProperty(type))
+            return;
+        
+        // copying the arguments provided to this method.
+        const args = Array.prototype.slice.call(arguments);
+        const listeners = this._listeners[type];
+        const len = listeners.length;
+        
+        // emits the event to all registerd listeners.
+        for(let i = 0; i < len; i++){
+            let callback = listeners[i];
+            if(typeof callback !== "function")
+                continue;
+            
+            // calls the listener.
+            callback.apply(this, args);
+        }
+    }
+    
+    destroy() {
+        this._listeners.length = 0;
+    }
+};
+
+class FilteredSearchView extends EventEmitter {
+
+	constructor() {
+		super();
+		let element = document.createElement("div");
+		element.classList.add("filtered-search")
+		let summary = document.createElement("summary");
+		let titleSpan = document.createElement("span");
+		titleSpan.classList.add("label");
+		titleSpan.textContent = "Contains";
+		summary.appendChild(titleSpan);
+		let btnIcon = document.createElement("span");
+		btnIcon.innerHTML = CAVET_ICON_SVG;
+		summary.appendChild(btnIcon);
+		element.appendChild(summary);
+
+		let _modalElement;
+		let _elements = [];
+		let items = [{
+			title: "Starts with",
+			value: "starts-with"
+		}, {
+			title: "Ends with",
+			value: "ends-with"
+		}, {
+			title: "Contains",
+			value: "contains"
+		}, {
+			title: "Regexp",
+			value: "regexp"
+		}];
+
+		function onActionItemClick(evt) {
+			let target = evt.currentTarget;
+			let index = _elements.indexOf(target);
+			if (index == -1)
+				return;
+
+			let item = items[index];
+			titleSpan.textContent = item.title;
+
+			_modalElement.parentElement.removeChild(_modalElement);
+			let len = _elements.length;
+			for (let i = 0; i < items.length; i++) {
+				let element = _elements[i];
+				element.removeEventListener("click", onActionItemClick);
+			}
+			_modalElement = null;
+			_elements = [];
+		}
+
+		summary.addEventListener("click", (evt) => {
+			let modal = document.createElement("div");
+			modal.classList.add("action-menu");
+			let ul = document.createElement("ul");
+			ul.classList.add("action-list");
+			modal.appendChild(ul);
+			for (let i = 0; i < items.length; i++) {
+				let item = items[i];
+				let li = document.createElement("li");
+				li.classList.add("action-item");
+				li.textContent = item.title;
+				li.addEventListener("click", onActionItemClick);
+				_elements.push(li);
+				ul.appendChild(li);
+			}
+
+			let rect = summary.getBoundingClientRect();
+			modal.style.top = (rect.bottom + window.scrollY + 5) + "px";
+			modal.style.left = rect.left + "px";
+			console.log(rect);
+			_modalElement = modal;
+			document.body.appendChild(modal);
+		});
+
+		let inputBox = document.createElement("span");
+		inputBox.classList.add("text-input-wrapper")
+		let inputIcon = document.createElement("span");
+		inputIcon.classList.add("icon");
+		inputIcon.innerHTML = SEARCH_ICON_SVG;
+		inputBox.appendChild(inputIcon);
+		let inputControl = document.createElement("input");
+		inputControl.type = "text";
+		inputControl.value = "";
+		inputBox.appendChild(inputControl);
+		element.appendChild(inputBox);
+
+		this._element = element;
+	}
+
+
+	get element() {
+		return this._element;
+	}
+}
+
+class PaginatorView extends EventEmitter {
+
+	constructor() {
+		super();
+		this._pageIndex = 0;
+		this._pageCount = 1;
+
+		let first, prev, curr, next, lastBtn, paginator = document.createElement("div");
+		paginator.classList.add("pagination");
+		first = document.createElement("span");
+		first.textContent = "First";
+		first.addEventListener("click", (evt) => {
+			let oldValue = this._pageIndex;
+			this._pageIndex = 0;
+			
+			if (this._pageIndex == oldValue)
+				return;
+			
+			curr.textContent = "1";
+			this.emit("change", this._pageIndex);
+		});
+		paginator.appendChild(first);
+		prev = document.createElement("span");
+		prev.innerHTML = "<svg fill=\"currentColor\"><path d=\"M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z\"/></svg>";
+		prev.addEventListener("click", (evt) => {
+			let oldValue = this._pageIndex;
+			this._pageIndex--;
+			if (this._pageIndex < 0)
+				this._pageIndex = 0; 
+
+			if (this._pageIndex == oldValue)
+				return;
+			
+			curr.textContent = (this._pageIndex + 1)
+			this.emit("change", this._pageIndex);
+		});
+		paginator.appendChild(prev);
+		curr = document.createElement("span");
+		curr.classList.add("page-active");
+		curr.textContent = "1";
+		paginator.appendChild(curr);
+		next = document.createElement("span");
+		next.innerHTML = "<svg fill=\"currentColor\"><path d=\"M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z\"/></svg>";
+		next.addEventListener("click", (evt) => {
+			let oldValue = this._pageIndex;
+			this._pageIndex++;
+			if (this._pageIndex >= this._pageCount) {
+				this._pageIndex = this._pageCount - 1;
+			}
+			if (this._pageIndex == oldValue)
+				return;
+
+			curr.textContent = (this._pageIndex + 1);
+			this.emit("change", this._pageIndex);
+		});
+		paginator.appendChild(next);
+		lastBtn = document.createElement("span");
+		lastBtn.textContent = "Last";
+		lastBtn.addEventListener("click", (evt) => {
+			let oldValue = this._pageIndex;
+			this._pageIndex = this._pageCount;
+
+			if (this._pageIndex == oldValue)
+				return;
+			
+			curr.textContent = (this._pageIndex + 1);
+			this.emit("change", this._pageIndex);
+		});
+		paginator.appendChild(lastBtn);
+
+		this._element = paginator;
+	}
+
+	get element() {
+		return this._element;
+	}
+
+	get pageIndex() {
+		return this._pageIndex;
+	}
+
+	set pageIndex(value) {
+		if (!Number.isInteger(value))
+			throw new TypeError("invalid type");
+		if (value < 0 || value >= this._pageCount)
+			throw new RangeError("invalid range");
+		if (this._pageIndex === value)
+			return;
+		this._pageIndex = value;
+	}
+
+	get pageCount() {
+		return this._pageCount;
+	}
+
+	set pageCount(value) {
+		if (!Number.isInteger(value))
+			throw new TypeError("invalid type");
+		if (value <= 0)
+			throw new RangeError("invalid range");
+		if (this._pageCount === value)
+			return;
+		if (this._pageIndex >= this._pageCount)
+			this._pageIndex = this._pageCount - 1;
+		this._pageCount = value;
+	}
+
+}
+
 class WasmGlobalsInspectorView {
 
 	constructor (header, body) {
 		let _self = this;
 		this._heading = header;
 		this._body = body;
+
+		let test = new FilteredSearchView();
+		body.appendChild(test.element);
 
 		let findInput = document.createElement("input");
 		findInput.type = "text";
@@ -2498,6 +5056,7 @@ class WasmGlobalsInspectorView {
 		body.appendChild(labelCS);
 
 		let table = document.createElement("table");
+		table.classList.add("data-table");
 		let thead = document.createElement("thead");
 		thead.innerHTML = "<tr><th>index</th><th>name</th><th>type</th><th>initial value</th><th>use count</th><th>import/export</th></tr>";
 		table.appendChild(thead);
@@ -2511,90 +5070,53 @@ class WasmGlobalsInspectorView {
 
 		this._defaultCollection;
 		this._collection;
-		this._pageIndex = 0;
 		this._pageRowCount = 25;
 
-		{
-			let paginator = document.createElement("div");
-			paginator.classList.add("pagination");
-			let first = document.createElement("span");
-			first.textContent = "First";
-			first.addEventListener("click", function (evt) {
-				_self._pageIndex = 0;
-				curr.textContent = "1";
-				_self.render();
-			});
-			paginator.appendChild(first);
-			let prev = document.createElement("span");
-			prev.innerHTML = "<svg fill=\"currentColor\"><path d=\"M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z\"/></svg>";
-			prev.addEventListener("click", function (evt) {
-				if (_self._pageIndex == 0)
-					return;
-				_self._pageIndex--;
-				curr.textContent = (_self._pageIndex + 1)
-				_self.render();
-			});
-			paginator.appendChild(prev);
-			let curr = document.createElement("span");
-			curr.classList.add("page-active");
-			curr.textContent = "1";
-			paginator.appendChild(curr);
-			let next = document.createElement("span");
-			next.innerHTML = "<svg fill=\"currentColor\"><path d=\"M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z\"/></svg>";
-			next.addEventListener("click", function (evt) {
-				let last = _self._collection.length == 0 ? 0 : Math.floor(_self._collection.length / _self._pageRowCount);
-				if (_self._pageIndex == last)
-					return;
-				_self._pageIndex++;
-				curr.textContent = (_self._pageIndex + 1);
-				_self.render();
-			});
-			paginator.appendChild(next);
-			let lastBtn = document.createElement("span");
-			lastBtn.textContent = "Last";
-			lastBtn.addEventListener("click", function (evt) {
-				_self._pageIndex = _self._collection.length == 0 ? 0 : Math.floor(_self._collection.length / _self._pageRowCount);
-				curr.textContent = (_self._pageIndex + 1);
-				_self.render();
-			});
-			paginator.appendChild(lastBtn);
-			body.appendChild(paginator);
-		}
+		let paginator = new PaginatorView();
+		body.appendChild(paginator.element);
+		paginator.on("change", (type, pageIndex) => {
+			this.render();
+		});
 
-		findOptions.addEventListener("change", function(evt) {
-			let results = _self.search(findInput.value, {
+		findOptions.addEventListener("change", (evt) => {
+			let results = this.search(findInput.value, {
 					caseSensitive: findCS.value !== "off",
 					searchType: findOptions.selectedOptions.item(0).value
 				});
-			_self._collection = results;
-			_self._pageIndex = 0;
-			_self.render();
-			_self._footer.textContent = "found " + results.length + " matches";
+			this._collection = results;
+			paginator.pageIndex = 0;
+			paginator.pageCount = results.length == 0 ? 1 : Math.ceil(results.length / this._pageRowCount);
+			this.render();
+			this._footer.textContent = "found " + results.length + " matches";
 		});
 
-		findCS.addEventListener("change", function(evt) {
-			let results = _self.search(findInput.value, {
+		findCS.addEventListener("change", (evt) => {
+			let results = this.search(findInput.value, {
 					caseSensitive: findCS.value !== "off",
 					searchType: findOptions.selectedOptions.item(0).value
 				});
-			_self._collection = results;
-			_self._pageIndex = 0;
-			_self.render();
-			_self._footer.textContent = "found " + results.length + " matches";
+			this._collection = results;
+			paginator.pageIndex = 0;
+			paginator.pageCount = results.length == 0 ? 1 : Math.ceil(results.length / this._pageRowCount);
+			this.render();
+			this._footer.textContent = "found " + results.length + " matches";
 		});
 
-		findInput.addEventListener("keyup", function(evt) {
+		findInput.addEventListener("keyup", (evt) => {
 			if (evt.key == "Enter") {
-				let results = _self.search(findInput.value, {
+				let results = this.search(findInput.value, {
 					caseSensitive: findCS.value !== "off",
 					searchType: findOptions.selectedOptions.item(0).value
 				});
-				_self._collection = results;
-				_self._pageIndex = 0;
-				_self.render();
-				_self._footer.textContent = "found " + results.length + " matches";
+				this._collection = results;
+				paginator.pageIndex = 0;
+				paginator.pageCount = results.length == 0 ? 1 : Math.ceil(results.length / this._pageRowCount);
+				this.render();
+				this._footer.textContent = "found " + results.length + " matches";
 			}
 		});
+
+		this._paginator = paginator;
 	}
 
 	search(string, opts) {
@@ -2681,8 +5203,8 @@ class WasmGlobalsInspectorView {
 		while (tbody.lastChild) {
 			tbody.removeChild(tbody.lastChild);
 		}
-
-		let start = this._pageIndex * this._pageRowCount;
+		let paginator = this._paginator;
+		let start = paginator.pageIndex * this._pageRowCount;
 		let items = this._collection;
 
 		let globals = targetModule.globals;
@@ -2723,6 +5245,9 @@ class WasmGlobalsInspectorView {
 		for (let p in value) {
 			items.push({name: p, global: value[p]});
 		}
+		let paginator = this._paginator;
+		paginator.pageIndex = 0;
+		paginator.pageCount = items.length == 0 ? 1 : Math.ceil(items.length / this._pageRowCount);
 		this.render();
 	}
 
@@ -2855,7 +5380,6 @@ class WasmFunctionsInspectorView {
 
 	search(string, opts) {
 		let mod = this._module;
-		let names = mod.names.functions;
 		let items = this._defaultCollection;
 		let len = items.length;
 		let cis = opts.caseSensitive !== true;
@@ -3000,13 +5524,32 @@ class WasmFunctionsInspectorView {
 		this._defaultCollection = items;
 		this._collection = items;
 		this._module = mod;
-		if (mod.names && mod.names.functions) {
-			let functions = mod.functions;
-			let names = mod.names.functions;
-			for (const [func, name] of names) {
-				let funcidx = functions.indexOf(func);
-				items.push({funcidx: funcidx, func: func, name: name});
+		let functions = mod.functions;
+		let len = functions.length;
+		for (let i = 0; i < len; i++) {
+			let func = functions[i];
+			let name = typeof func[__nsym] == "string" ? func[__nsym] : null;
+			let obj = {funcidx: i, func: func, name: name, exportedAS: null, importedAs: null};
+			items.push(obj);
+			if (func instanceof ImportedFunction) {
+				obj.imported = true;
+				obj.importedAs = {module: func.module, name: func.name};
 			}
+		}
+
+		let exported = mod.exports;
+		len = exported.length;
+		for (let i = 0; i < len; i++) {
+			let exp = exported[i];
+			if (!(exp instanceof ImportedFunction)) {
+				continue;
+			}
+			let func = exp.function;
+			let idx = functions.indexOf(func);
+			if (idx == -1)
+				continue;
+			let obj = items[idx];
+			obj.exportedAS = exp.name;
 		}
 
 		this.render();
@@ -3028,7 +5571,7 @@ class WasmTablesInspectorView {
 		body.appendChild(findInput);
 
 		let findOptions = document.createElement("select");
-		findOptions.innerHTML = "<option value=\"starts-with\">Starts with</option><option value=\"ends-with\">Ends with</option><option value=\"contains\">Contains</option><option value=\"regexp\">Regexp</option>";
+		findOptions.innerHTML = "<option value=\"starts-with\">Starts with</option><option value=\"ends-with\">Ends with</option><option value=\"contains\">Contains</option><option value=\"regexp\">Regexp</option><option value=\"col-index\">Column index</option><option value=\"col-funcidx\">Column funcidx</option>";
 		findOptions.selectedIndex = 2;
 		body.appendChild(findOptions);
 
@@ -3210,6 +5753,32 @@ class WasmTablesInspectorView {
 				}
 				break;
 			}
+			case "col-index": {
+				let val = parseInt(string);
+				if (isNaN(val))
+					return matches;
+
+				for (let i = 0; i < len; i++) {
+					let item = items[i];
+					if (item.index == val) {
+						matches.push(item);
+					}
+				}
+				break;
+			}
+			case "col-funcidx": {
+				let val = parseInt(string);
+				if (isNaN(val))
+					return matches;
+
+				for (let i = 0; i < len; i++) {
+					let item = items[i];
+					if (item.funcidx == val) {
+						matches.push(item);
+					}
+				}
+				break;
+			}
 			default:
 				break;
 		}
@@ -3287,18 +5856,43 @@ class WasmTablesInspectorView {
 		this._defaultCollection = items;
 		this._collection = items;
 		this._module = mod;
-		if (mod.names && mod.names.functions) {
-			let names = mod.names.functions;
-			let contents = mod.tables[0].contents;
-			let functions = mod.functions;
-			let len = contents.length;
-			for (let i = 1; i < len; i++) {
-				let func = contents[i];
-				let name = names.get(func);
-				let funcidx = functions.indexOf(func);
-				items.push({index: i, func: func, funcidx: funcidx, name: name});
+		let tables = mod.tables;
+		let functions = mod.functions;
+		let ylen = tables.length;
+		for (let y = 0; y < ylen; y++) {
+			let table = tables[y];
+			let vector = table.contents;
+			let xlen = vector.length;
+			for (let x = 0; x < xlen; x++) {
+				let func = vector[x];
+				if (func === undefined)
+					continue;
+				let name = typeof func[__nsym] == "string" ? func[__nsym] : null;
+				let idx = functions.indexOf(func);
+				let obj = {tblidx: y, index: x, funcidx: idx, func: func, name: name, exportedAS: null, importedAs: null};
+				items.push(obj);
+				if (func instanceof ImportedFunction) {
+					obj.imported = true;
+					obj.importedAs = {module: func.module, name: func.name};
+				}
 			}
 		}
+
+		let exported = mod.exports;
+		let len = exported.length;
+		for (let i = 0; i < len; i++) {
+			let exp = exported[i];
+			if (!(exp instanceof ImportedFunction)) {
+				continue;
+			}
+			let func = exp.function;
+			let idx = functions.indexOf(func);
+			if (idx == -1)
+				continue;
+			let obj = items[idx];
+			obj.exportedAS = exp.name;
+		}
+
 		this.render();
 	}
 
@@ -3985,6 +6579,10 @@ const inspectorUI = {
 const _inspectorViews = {};
 
 function namedGlobalsMap(mod) {
+
+	if (!mod.globals)
+		return;
+
 	let arr1 = [];
 	let arr2 = [];
 	let unamedGlobals = [];
@@ -4001,21 +6599,13 @@ function namedGlobalsMap(mod) {
 		map[exp.name] = exp.global;
 	}
 
-	if (mod.names && mod.names.globals) {
-		let nmap = mod.names.globals;
-		for (const [idx, name] of nmap) {
-			let glob = globals[idx];
-			if (arr2.indexOf(glob) === -1) {
-				arr2.push(glob);
-				map[name] = glob;
-			}
-		}
-	}
-
 	len = globals.length;
 	for (let i = 0; i < len; i++) {
 		let glob = globals[i];
-		if (arr2.indexOf(glob) === -1) {
+		if (typeof glob[__nsym] == "string") {
+			let name = glob[__nsym];
+			map[name] = glob;
+		} else if (arr2.indexOf(glob) === -1) {
 			unamedGlobals.push(glob);
 		}
 	}
@@ -4047,22 +6637,19 @@ function populateWebAssemblyInfo(mod) {
 	}
 
 	let con2 = document.querySelector("#test");
-	let headers = con2.querySelectorAll("#wasm-modules-inspect ul > li.accordion-header");
+	let headers = con2.querySelectorAll("#wasm-modules-inspect section.inspect-body > h3");
 	len = headers.length;
 	for (let i = 0; i < len; i++) {
-		let li = headers.item(i);
-		if (li.textContent.trim() == "Memory")
+		let h3 = headers.item(i);
+		if (h3.textContent.trim() == "Memory")
 			continue;
-		li.classList.add("open");
-		let body = document.createElement("li");
-		body.classList.add("accordion-body", "open");
-		li.parentElement.insertBefore(body, li.nextElementSibling);
-		let txt = li.textContent.trim().toLowerCase();
+		let body = h3.parentElement;
+		let txt = h3.textContent.trim().toLowerCase();
 		if (txt == "globals") {
 			let view;
-			//inspectorUI.globals(li, body);
+			//inspectorUI.globals(h3, body);
 			if (!_inspectorViews[txt]) {
-				view = new WasmGlobalsInspectorView(li, body);
+				view = new WasmGlobalsInspectorView(h3, body);
 				_inspectorViews[txt] = view;
 			} else {
 				view = _inspectorViews[txt];
@@ -4072,30 +6659,85 @@ function populateWebAssemblyInfo(mod) {
 			view.model = _namedGlobals;
 
 		} else if (txt == "functions") {
-			//inspectorUI.functions(li, body);
+			//inspectorUI.functions(h3, body);
 			let view;
 			if (!_inspectorViews[txt]) {
-				view = new WasmFunctionsInspectorView(li, body);
+				view = new WasmFunctionsInspectorView(h3, body);
 				_inspectorViews[txt] = view;
 			} else {
 				view = _inspectorViews[txt];
 			}
 			view.module = mod;
 		} else if (txt == "tables") {
-			//inspectorUI.tables(li, body);
+			//inspectorUI.tables(h3, body);
 			let view;
 			if (!_inspectorViews[txt]) {
-				view = new WasmTablesInspectorView(li, body);
+				view = new WasmTablesInspectorView(h3, body);
 				_inspectorViews[txt] = view;
 			} else {
 				view = _inspectorViews[txt];
 			}
 			view.module = mod;
 		} else if (txt == "data") {
-			inspectorUI.data_segments(li, body);
+			inspectorUI.data_segments(h3, body);
 		} else if (txt == "custom sections") {
-			inspectorUI.custom_sections(li, body);
+			inspectorUI.custom_sections(h3, body);
 		}
+	}
+
+	let inspectContainer = document.querySelector("#wasm-modules-inspect");
+
+	if (mod.producers) {
+		let container = document.createElement("section");
+		container.classList.add("inspect-body");
+		container.style.setProperty("padding-bottom", "20px");
+		inspectContainer.appendChild(container);
+
+		let h3 = document.createElement("h3");
+		h3.textContent = "Producers";
+		container.appendChild(h3);
+
+		let table = document.createElement("table");
+		table.classList.add("data-table");
+		let thead = document.createElement("thead");
+		thead.innerHTML = "<tr><th>Name</th><th>Value</th><th>Verion</th></tr>";
+		table.appendChild(thead);
+		container.appendChild(table);
+		let tbody = document.createElement("tbody");
+		table.appendChild(tbody);
+
+		let producers = mod.producers;
+		for (let p in producers) {
+			let values = producers[p];
+			let len = values.length;
+			if (len == 0)
+				continue;
+
+			let tr = document.createElement("tr");
+			tbody.appendChild(tr);
+			let th = document.createElement("th");
+			if (len !== 1) {
+				th.setAttribute("rowspan", len);
+			}
+			th.textContent = p;
+			tr.appendChild(th);
+			for (let i = 0; i < len; i++) {
+				let value = values[i];
+				let td = document.createElement("td");
+				tr.appendChild(td);
+				if (typeof value == "string") {
+					td.textContent = value;
+					td = document.createElement("td");
+					tr.appendChild(td);
+				} else {
+					td.textContent = value.value;
+					td = document.createElement("td");
+					td.textContent = value.version;
+					tr.appendChild(td);
+				}
+			}
+		}
+
 	}
 
 	console.log(headers);
@@ -4207,11 +6849,255 @@ function filesFromDataTransfer(dataTransfer) {
 	return files;
 }
 
+class WorkflowUIFilePicker {
+
+	constructor() {
+
+		let element = document.createElement("li");
+		element.classList.add("workflow-action", "workflow-param-file");
+		let header = document.createElement("div");
+		header.classList.add("action-header", "file-label");
+		header.textContent = "Input";
+		element.appendChild(header);
+		let body = document.createElement("div");
+		body.classList.add("action-body");
+		body.style.width = "100%";
+		body.textContent = "body";
+		element.appendChild(body);
+		let grant = document.createElement("div");
+		grant.classList.add("action-header");
+		let grantInner = document.createElement("span");
+		grantInner.classList.add("grant-access");
+		grantInner.textContent = "grant access";
+		grant.appendChild(grantInner);
+		grant.style.display = "none";
+		element.appendChild(grant);
+		let options = document.createElement("div");
+		options.classList.add("action-header", "file-picker-button");
+		options.textContent = "chose";
+		element.appendChild(options);
+
+		grant.addEventListener("click", (evt) => {
+
+		 	let file = this._file;
+		 	file.requestPermission({mode: 'readwrite'}).then((status) => {
+		 		console.log(status);
+		 		if (status == "granted") {
+		 			grant.style.display = "none";
+		 		}
+		 	})
+		});
+
+		options.addEventListener("click", (evt) => {
+			console.log("should pick file for param-file");
+
+			let types = this._types;
+			window.showOpenFilePicker({multiple: false, types: types}).then((files) => {
+
+				let file = files[0];
+
+				if (files.length > 1) {
+					console.warn("should apply logics for sorting out multiple files");
+				}
+
+				this._file = file;
+				body.textContent = file.name;
+
+				file.queryPermission({mode: 'readwrite'}).then((status) =>{
+					console.log(status);
+					if (status == "prompt") {
+						grant.style.setProperty("display", null);
+					}
+				})
+
+			}, console.error);
+		});
+
+		element.addEventListener("dragenter", (evt) => {
+			event.preventDefault();
+		});
+
+		element.addEventListener("dragover", (evt) => {
+			event.preventDefault();
+		});
+
+		element.addEventListener("drop", (evt) => {
+
+			let files = filesFromDataTransfer(evt.dataTransfer);
+			if (files.length == 0) {
+				event.preventDefault();
+				return;
+			}
+
+			findInputFiles(files);
+
+			let label = element.querySelector(".action-body");
+			label.textContent = files[0].name;
+			label.textContent += '\x20' + humanFileSize(files[0].size, true);
+			appendFiles(files);
+			this._file = files[0];
+
+			event.preventDefault();
+		});
+
+		this._element = element;
+		this._heading = header;
+	}
+
+	set paramName(value) {
+		this._paramName = value;
+		this._heading.textContent = value;
+	}
+
+	get paramName() {
+		return this._paramName;
+	}
+
+	set mode(value) {
+		this._mode = value;
+	}
+
+	get mode() {
+		return this._mode;
+	}
+
+	set role(value) {
+		this._role = value;
+	}
+
+	get role() {
+		return this._role;
+	}
+
+	set types(value) {
+		this._role = value;
+	}
+
+	get types() {
+		return this._role;
+	}
+
+	set file(value) {
+		this._file = value;
+	}
+
+	get file() {
+		return this._file;
+	}
+
+	get element() {
+		return this._element;
+	}
+
+}
+
+// Until we get the workflow picker working this is how its determined which workflow to pick per filename.
+let _userBinaries = ["init.wasm", "sh.wasm", "zsh.wasm", "awk.wasm", "ee.wasm", "cat.wasm", 
+					 "chflags.wasm", "chmod.wasm", "cp.wasm", "kenv.wasm", "ln.wasm", "mkdir.wasm", 
+					 "mv.wasm", "ps.wasm", "pwd.wasm", "realpath.wasm", "rm.wasm", "rmdir.wasm", "sleep.wasm",
+					 "touch.wasm", "file.wasm", "ls.wasm", "syslogd.wasm"];
+function isUserBinary(name) {
+	return _userBinaries.indexOf(name) !== -1;
+}
+
+function setupWorkflowUIForTarget() {
+
+	let container = document.querySelector("ul.workflow-ui");
+	let workflow;
+
+	if (targetFilename == "kern.wasm") {
+		workflow = _freebsdKernMainWorkflow
+	} else if (targetFilename == "netbsd-kern.wasm") {
+		workflow = _netbsdKernMainWorkflow
+	} else if (isUserBinary(targetFilename)) {
+		workflow = _freebsdUserBinaryForkWorkflow
+	}
+
+	if (!workflow)
+		return;
+
+	_workflowParameters = [];
+	_workflowParamValues = {};
+	_workflowParamViews = {};
+
+	let actions = workflow.actions;
+	let ylen = actions.length;
+	for (let y = 0; y < ylen; y++) {
+		let actionData = actions[y];
+		let actionName = actionData.action;
+		if (!_workflowActions.hasOwnProperty(actionName)) {
+			console.warn("missing %s in _workflowActions", actionName);
+			continue;
+		}
+		let actionTemplate = _workflowActions[actionName];
+		if (actionTemplate.params) {
+			let params = actionTemplate.params;
+			let xlen = params.length;
+			for (let x = 0; x < xlen; x++) {
+				let param = params[x];
+				if (param.type == "file") {
+					let view = new WorkflowUIFilePicker();
+					view.paramName = param.name;
+					view.types = param.types;
+					container.appendChild(view.element);
+					_workflowParamViews[param.name] = view;
+					_workflowParameters.push(param);
+				}
+			}
+		}
+	}
+
+	actions = workflow.actions;
+	ylen = actions.length;
+	for (let y = 0; y < ylen; y++) {
+		let actionData = actions[y];
+		let actionName = actionData.action;
+		if (!_workflowActions.hasOwnProperty(actionName)) {
+			console.warn("missing %s in _workflowActions", actionName);
+			continue;
+		}
+		let actionTemplate = _workflowActions[actionName];
+		let li = document.createElement("li");
+		li.textContent = actionName;
+		container.appendChild(li);
+	}
+}
+
 function setupTargetPanel(container) {
 
 	let workflowUl = document.createElement("ul");
 	workflowUl.classList.add("workflow-ui");
 	container.appendChild(workflowUl);
+
+	setupWorkflowUIForTarget();
+
+	let workflowUIToolbar = container.parentElement.querySelector("#workflow-ui-toolbar");
+	let selectElement = document.createElement("select");
+	let len = _workflows.length;
+	for (let i = 0; i < len; i++) {
+		let workflow = _workflows[i];
+		let opt = document.createElement("option");
+		opt.textContent = workflow.name;
+		opt.value = workflow.id;
+		selectElement.appendChild(opt);
+	}
+
+	selectElement.addEventListener("change", function(evt) {
+		let idx = selectElement.selectedIndex;
+		let opt = selectElement.options.item(idx);
+		let id = opt.value;
+		let workflow;
+		let len = _workflows.length;
+		for (let i = 0; i < len; i++) {
+			let item = _workflows[i];
+			if (item.id == id) {
+				workflow = item;
+				break;
+			}
+		}
+	});
+
+	workflowUIToolbar.appendChild(selectElement);
 
 	// input binary
 
@@ -4263,7 +7149,7 @@ function setupTargetPanel(container) {
 	});
 
 	// output data
-
+	/*
 	let outputPicker = document.createElement("li");
 	outputPicker.classList.add("workflow-action", "workflow-output-file");
 	header = document.createElement("div");
@@ -4352,11 +7238,13 @@ function setupTargetPanel(container) {
 		event.preventDefault();
 		return false;
 	});
+	*/
 }
 
 let fileUl;
 let targetFilename;
 let lastTabView = document.querySelector("div#workflow-ui-panel");
+let lastTabElement;
 let mainTabItems = [{
 	selector: "#tab-workflow-ui.tab-item",
 	action: function(element) {
@@ -4394,7 +7282,18 @@ let mainTabItems = [{
 		view.style.display = null;
 		lastTabView = view;
 	}
-}, ]
+}, {
+	selector: "#tab-stats.tab-item",
+	action: function(element) {
+		let view = document.querySelector("div#wasm-modules-stats");
+		if (lastTabView)
+			lastTabView.style.display = "none";
+		view.style.display = null;
+		lastTabView = view;
+	}
+}]
+
+
 
 function appendFiles(files) {
 	let len = files.length;
@@ -4451,10 +7350,20 @@ function findInputFiles(files) {
 		//loadWebAssemblyBinary(buf);
 		loadFilePairs(wasmFiles[0].binary, wasmFiles[0].symbolMapFile).then(function(res) {
 			if (file.name == "kern.wasm") {
-				postOptimizeKernMainAction(null, targetModule, {});
+				//postOptimizeWasm(targetModule);
+				//postOptimizeKernMainAction(null, targetModule, {});
 				inspectFreeBSDBinary(moduleBuffer, targetModule);
+			} else if (file.name == "netbsd-kern.wasm") {
+				//postOptimizeWasm(targetModule);
+				//postOptimizeKernMainAction(null, targetModule, {});
+				inspectNetBSDBinary(moduleBuffer, targetModule);
 			}
+			setupWorkflowUIForTarget();
 		});
+		_openFiles = [{role: "input", kind: "wasm-binary", file: wasmFiles[0].binary}];
+		if (wasmFiles[0].symbolMapFile) {
+			_openFiles.push({role: "input", kind: "symbol-map", file: wasmFiles[0].symbolMapFile})
+		}
 		/*file.arrayBuffer().then(function(buf) {
 			loadWebAssemblyBinary(buf);
 		}, console.error);*/
@@ -4477,11 +7386,8 @@ async function loadFilePairs(binary, symbolMapFile) {
 function setupMainUI() {
 
 	let readmeContainer = document.querySelector("article#readme");
-	let dropZoneDiv = document.querySelector("div#drop-zone");
 	if (readmeContainer)
 		readmeContainer.style.display = "none";
-
-	dropZoneDiv.style.display = "none";
 
 	/*document.addEventListener("dragenter", function(evt) {
 		event.preventDefault();
@@ -4504,6 +7410,12 @@ function setupMainUI() {
 		}
 		tabMap.push(element);
 		element.addEventListener("click", onMainTabClick);
+		if (element.classList.contains("selected")) {
+			if (lastTabElement) {
+				lastTabElement.classList.remove("selected");
+			}
+			lastTabElement = element;
+		}
 	}
 
 	function onMainTabClick(evt) {
@@ -4513,6 +7425,11 @@ function setupMainUI() {
 			return;
 		let obj = mainTabItems[index];
 		obj.action(target);
+		if (lastTabElement) {
+			lastTabElement.classList.remove("selected");
+		}
+		lastTabElement = target;
+		lastTabElement.classList.add("selected");
 	}
 
 	fileUl = document.createElement("ul");
@@ -4569,7 +7486,8 @@ function setupMainUI() {
 	targetPanel.classList.add("target-panel");
 	let workflowUIPanel = document.querySelector("div#workflow-ui-panel");
 	if (workflowUIPanel) {
-		workflowUIPanel.insertBefore(targetPanel, workflowUIPanel.firstElementChild);
+		let workflowUIToolbar = document.querySelector("#workflow-ui-toolbar");
+		workflowUIPanel.insertBefore(targetPanel, workflowUIToolbar.nextElementSibling);
 		let actionInfo = document.querySelector("#action-info");
 		if (actionInfo)
 			workflowUIPanel.appendChild(actionInfo);
@@ -4580,11 +7498,9 @@ function setupMainUI() {
 
 	let inspectorContainer = document.querySelector("div#test");
 	inspectorContainer.style.display = "none";
-	{
-		let wasmInfo = document.querySelector("#wasm-modules-stats");
-		if (wasmInfo)
-			inspectorContainer.insertBefore(wasmInfo, inspectorContainer.firstElementChild);
-	}
+
+	let statsContainer = document.querySelector("#wasm-modules-stats");
+	statsContainer.style.display = "none";
 }
 
 setupMainUI();
@@ -4622,9 +7538,17 @@ function processSymbolsMap(mod, txt) {
  * Computes a new ArrayBuffer which represents the modules initial memory, placed as it would be at runtime.
  * 
  * @param {*} mod
+ * @param {ArrayBuffer} the ArrayBuffer which the module was decoded from.
+ * @param {Boolean} If set to true then changes to buffer is encoded.
  * @returns A copy of the memory content of the module such as it would be initialized by the Wasm Runtime.
  */
-function computeInitialMemory(mod, buf) {
+function computeInitialMemory(mod, buf, mutable) {
+	mutable = (mutable === true);
+
+	if (mutable && mod._mutableDataSegments) {
+		return mod._mutableDataSegments;
+	}
+
 	let segments = mod.dataSegments
 	let len = segments.length;
 	let min = segments[0].inst.opcodes[0].value;
@@ -4647,7 +7571,108 @@ function computeInitialMemory(mod, buf) {
 		u8_memcpy(src, seg.offset, seg.size, mem, off);
 	}
 
+	if (mutable) {
+		mod._mutableDataSegments = mem;
+	}
+
 	return mem;
+}
+
+function setupKernelBootParams(wabp_addr) {
+
+}
+
+// ModInfo (kernel module defintion used by elf in freebsd)
+// - https://man.freebsd.org/cgi/man.cgi?query=kld&sektion=4#MODULE_TYPES
+// related to source code in: /tinybsd/sys/kern/kern_linker.c
+// 
+// module info are basically a vector of the struct described below:
+// {
+//     uint32_t field_name; 		// MODINFO or MODINFOMD
+//     uint32_t value_size;
+//     char value_data[value_size];
+// }
+// 
+// terminated by a entry of field_name == 0 && value_size == 0
+// 
+
+//Module information subtypes
+const MODINFO = {
+	END: 0x0000,			/* End of list */
+	NAME: 0x0001,			/* Name of module (string) */
+	TYPE: 0x0002,			/* Type of module (string) */
+	ADDR: 0x0003,			/* Loaded address */
+	SIZE: 0x0004,			/* Size of module */
+	EMPTY: 0x0005,			/* Has been deleted */
+	ARGS: 0x0006,			/* Parameters string */
+	METADATA: 0x8000,		/* Module-specfic */
+};
+
+const MODINFOMD = {
+	AOUTEXEC: 0x0001,		/* a.out exec header */
+	ELFHDR: 0x0002,			/* ELF header */
+	SSYM: 0x0003,			/* start of symbols */
+	ESYM: 0x0004,			/* end of symbols */
+	DYNAMIC: 0x0005,		/* _DYNAMIC pointer */
+	MB2HDR: 0x0006,			/* MB2 header info */
+	ENVP: 0x0006,			/* envp[] */
+	HOWTO: 0x0007,			/* boothowto */
+	KERNEND: 0x0008,		/* kernend */
+	SHDR: 0x0009,			/* section header table */
+	CTORS_ADDR: 0x000a,		/* address of .ctors */
+	CTORS_SIZE: 0x000b,		/* size of .ctors */
+	FW_HANDLE: 0x000c,		/* Firmware dependent handle */
+	KEYBUF: 0x000d,			/* Crypto key intake buffer */
+	FONT: 0x000e,			/* Console font */
+	NOCOPY: 0x8000,			/* don't copy this metadata to the kernel */
+	DEPLIST: (0x4001 | 0x8000)
+};
+
+// appends a dataSegment named ".modinfo" to the WebAssembly Module.
+function encodeModInfoSection() {
+
+}
+
+function encodeModInfo() {
+
+	let bytes = new Uint8Array(512);
+	let data = new ByteArray(bytes);
+	let idx = 0; // next byte to write, which also gives the current size.
+
+	function push_string(str) {
+		let strlen = str.length;
+	}
+
+	data.writeUint32(MODINFO.NAME);
+	push_string("kernel");
+
+	data.writeUint32(MODINFO.TYPE);
+	push_string("elf kernel");
+
+	data.writeUint32(MODINFO.ADDR);
+	data.writeUint32(4);
+	data.writeUint32(0);
+
+	data.writeUint32(MODINFO.SIZE);
+	data.writeUint32(8);
+	data.writeUint64(BigInt(0));
+
+	// MODINFO_METADATA | MODINFOMD_DTBP
+
+	data.writeUint32(MODINFO.METADATA | MODINFOMD.KERNEND);
+	data.writeUint32(4);
+	data.writeUint32(0);
+
+	data.writeUint32(MODINFO.METADATA | MODINFOMD.HOWTO);
+	data.writeUint32(4);
+	data.writeInt32(0x800);
+
+	// End marker
+	data.writeUint32(0);
+	data.writeUint32(0);
+
+	// set preload_metadata global (the address should contain a address)
+
 }
 
 // FreeBSD inspect 
@@ -4778,12 +7803,7 @@ function findExportDefByObject(mod, obj) {
 
 function inspectFreeBSDBinary(buf, mod) {
 
-	if (!_namedGlobals)
-		_namedGlobals = namedGlobalsMap(mod);
-
-	let start_sysinit = _namedGlobals["__start_set_sysinit_set"].init[0].value;
-	let stop_sysinit = _namedGlobals["__stop_set_sysinit_set"].init[0].value;
-
+	// TODO: move me to a general initialData initializer..
 	let segments = mod.dataSegments
 	let len = segments.length;
 	let min = segments[0].inst.opcodes[0].value;
@@ -4812,6 +7832,92 @@ function inspectFreeBSDBinary(buf, mod) {
 	}
 
 	console.log(mem);
+
+	inspectFreeBSDSysInit(buf, mod, mem, data);
+	inspectFreeBSDModMetadataSet(buf, mod, mem, data);
+}
+
+function inspectNetBSDBinary(buf, mod) {
+
+}
+
+
+function inspectFreeBSDModMetadataSet(buf, mod, mem, data) {
+
+	let start_modmetadata = mod.getGlobalByName("__start_set_modmetadata_set").init[0].value;
+	let stop_modmetadata = mod.getGlobalByName("__stop_set_modmetadata_set").init[0].value;
+
+	console.log("start_modmetadata = %d", start_modmetadata);
+	console.log("stop_modmetadata = %d", stop_modmetadata);
+
+	let table = mod.tables[0];
+	let indirectTable = table.contents;
+
+	const MDT_DEPEND = 1;
+	const MDT_MODULE = 2;
+	const MDT_VERSION = 3;
+	const MDT_PNP_INFO = 4;
+
+	let idx = start_modmetadata;
+	let cnt = 0;
+	let arr = [];
+	while (idx < stop_modmetadata) {
+		let ptr = data.getUint32(idx, true);
+		let md_ver = data.getInt32(ptr, true);
+		let md_type = data.getInt32(ptr + 4, true);
+		let md_data = data.getUint32(ptr + 8, true);
+		let md_cval = data.getUint32(ptr + 12, true);
+
+		if (md_ver != 1) {
+			throw new TypeError("metadata struct verion is not 1");
+		}
+
+		if (md_type == MDT_DEPEND) {
+			let md_ver_minimum = data.getInt32(md_data, true);
+			let md_ver_preferred = data.getInt32(md_data + 4, true);
+			let md_ver_maximum = data.getInt32(md_data + 8, true);
+			console.log("MDT_DEPEND {md_data = %d md_cval = %d}", md_data, md_cval);
+			console.log("md_data {md_ver_minimum = %d md_ver_preferred = %d md_ver_maximum = %d}", md_ver_minimum, md_ver_preferred, md_ver_maximum);
+		} else if (md_type == MDT_MODULE) {
+			let str, strptr = data.getUint32(md_data, true);
+			if (strptr != null) {
+				str = UTF8ArrayToString(mem, strptr);
+			} else {
+				str = "";
+			}
+
+			let fnptr = data.getUint32(md_data + 4, true);
+			let fname = "";
+			let funcidx, fn = indirectTable[fnptr];
+			if (fn && mod.names.functions.has(fn)) {
+				fname = mod.names.functions.get(fn);
+				funcidx = mod.functions.indexOf(fn);
+			} else {
+				fname = "<<NULL>>"
+				funcidx = 0;
+			}
+
+			let priv = data.getUint32(md_data + 8, true);
+			console.log("MDT_MODULE {md_data = %d md_cval = %d}", md_data, md_cval);
+			console.log("md_data {name = '%s' evhand = %s (funcidx %d) priv = %d}", str, fname, funcidx, priv);
+		} else if (md_type == MDT_VERSION) {
+			let mv_version = data.getInt32(md_data, true);
+			console.log("MDT_VERSION {md_data = %d md_cval = %d, mv_version = %d}", md_data, md_cval, mv_version);
+		} else if (md_type == MDT_PNP_INFO) {
+			console.log("MDT_PNP_INFO {md_data = %d md_cval = %d}", md_data, md_cval);
+		} else {
+			throw new TypeError("metadata unsupported md_type");
+		}
+
+		idx += 4;
+	}
+}
+
+function inspectFreeBSDSysInit(buf, mod, mem, data) {
+
+	let start_sysinit = mod.getGlobalByName("__start_set_sysinit_set").init[0].value;
+	let stop_sysinit = mod.getGlobalByName("__stop_set_sysinit_set").init[0].value;
+
 	console.log("start_sysinit = %d", start_sysinit);
 	console.log("stop_sysinit = %d", stop_sysinit);
 
@@ -4912,9 +8018,309 @@ function inspectFreeBSDBinary(buf, mod) {
 			let fn = mod.names.functions.get(func);
 			console.log("fn %s of type", fn, type);
 		}
+		let fname = mod.names.functions.get(func);
+		sysinit.fn = fname;
+		if (fname == "module_register_init") {
+			let ptr = sysinit.udata;
+			if (ptr !== 0) {
+				let strptr = data.getUint32(ptr, true);
+				let str = UTF8ArrayToString(mem, strptr);
+				let fnptr = data.getUint32(ptr + 4, true);
+				let func = fnptr != 0 ? indirectTable[fnptr] : 0;
+				sysinit.udataText = "{" + (strptr != 0 ? "\"" + str + "\"" : strptr)  +", " + (func != 0 && mod.names.functions.has(func) ? mod.names.functions.get(func) : "0") + ", "  + data.getUint32(ptr + 8, true) +  "}";
+			}
+		} else if (fname == "kproc_start") {
+			let ptr = sysinit.udata;
+			if (ptr !== 0) {
+				let strptr = data.getUint32(ptr, true);
+				let str = UTF8ArrayToString(mem, strptr);
+				let fnptr = data.getUint32(ptr + 4, true);
+				let func = fnptr != 0 ? indirectTable[fnptr] : 0;
+				sysinit.udataText = "{.arg0=" + (strptr != 0 ? "\"" + str + "\"" : strptr)  +", .main=" + (func != 0 && mod.names.functions.has(func) ? mod.names.functions.get(func) : "0") + ", "  + data.getUint32(ptr + 8, true) +  "}";
+			}
+		} else if (fname == "kthread_start") {
+			let ptr = sysinit.udata;
+			if (ptr !== 0) {
+				let strptr = data.getUint32(ptr, true);
+				let str = UTF8ArrayToString(mem, strptr);
+				let fnptr = data.getUint32(ptr + 4, true);
+				let func = fnptr != 0 ? indirectTable[fnptr] : 0;
+				sysinit.udataText = "{.arg0=" + (strptr != 0 ? "\"" + str + "\"" : strptr)  +", .main=" + (func != 0 && mod.names.functions.has(func) ? mod.names.functions.get(func) : "0") + ", "  + data.getUint32(ptr + 8, true) +  "}";
+			}
+		}
 	}
 
 	console.log(types);
+
+	addFreeBSDInspectorViews(mod, old);
+}
+
+class WasmSysInitTableInspectorView {
+
+	constructor (header, body) {
+		
+		let _self = this;
+		let findInput = document.createElement("input");
+		findInput.type = "text";
+		findInput.placeholder = "find";
+		body.appendChild(findInput);
+
+		let findOptions = document.createElement("select");
+		findOptions.innerHTML = "<option value=\"starts-with\">Starts with</option><option value=\"ends-with\">Ends with</option><option value=\"contains\">Contains</option><option value=\"regexp\">Regexp</option>";
+		findOptions.selectedIndex = 2;
+		body.appendChild(findOptions);
+
+		let findCS = document.createElement("input");
+		findCS.type = "checkbox";
+		findCS.id = "case-sensetive";
+		body.appendChild(findCS);
+		let labelCS = document.createElement("label");
+		labelCS.for = "case-sensetive";
+		labelCS.textContent = "Case Sensetive";
+		body.appendChild(labelCS);
+
+		let findResults = document.createElement("ul");
+		body.appendChild(findResults);
+
+		let table = document.createElement("table");
+		table.classList.add("data-table");
+		let thead = document.createElement("thead");
+		thead.innerHTML = "<tr><th>Order</th><th>Subsystem</th><th>Function</th><th>udata (addr)</th><th>udata (preview)</th></tr>";
+		table.appendChild(thead);
+		let tbody = document.createElement("tbody");
+		table.appendChild(tbody);
+		body.appendChild(table);
+		let footer = document.createElement("span");
+		body.appendChild(footer);
+
+		this._heading = header;
+		this._body = body;
+		this._footer = footer;
+		this._tbody = tbody;
+		this._defaultCollection = null;
+		this._collection = null;
+		this._pageIndex = 0;
+		this._pageRowCount = 25;
+		this._module = null;
+
+		{
+			let paginator = document.createElement("div");
+			paginator.classList.add("pagination");
+			let first = document.createElement("span");
+			first.textContent = "First";
+			first.addEventListener("click", function (evt) {
+				_self._pageIndex = 0;
+				curr.textContent = "1"
+				_self.render();
+			});
+			paginator.appendChild(first);
+			let prev = document.createElement("span");
+			prev.innerHTML = "<svg fill=\"currentColor\"><path d=\"M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z\"/></svg>";
+			prev.addEventListener("click", function (evt) {
+				if (_self._pageIndex == 0)
+					return;
+				_self._pageIndex--;
+				curr.textContent = (_self._pageIndex + 1)
+				_self.render();
+			});
+			paginator.appendChild(prev);
+			let curr = document.createElement("span");
+			curr.classList.add("page-active");
+			curr.textContent = "1";
+			paginator.appendChild(curr);
+			let next = document.createElement("span");
+			next.innerHTML = "<svg fill=\"currentColor\"><path d=\"M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z\"/></svg>";
+			next.addEventListener("click", function (evt) {
+				let last = _self._collection.length == 0 ? 0 : Math.floor(_self._collection.length / _self._pageRowCount);
+				if (_self._pageIndex == last)
+					return;
+				_self._pageIndex++;
+				curr.textContent = (_self._pageIndex + 1);
+				_self.render();
+			});
+			paginator.appendChild(next);
+			let lastBtn = document.createElement("span");
+			lastBtn.textContent = "Last";
+			lastBtn.addEventListener("click", function (evt) {
+				_self._pageIndex = _self._collection.length == 0 ? 0 : Math.floor(_self._collection.length / _self._pageRowCount);
+				curr.textContent = (_self._pageIndex + 1);
+				_self.render();
+			});
+			paginator.appendChild(lastBtn);
+			body.appendChild(paginator);
+		}
+
+		findOptions.addEventListener("change", (evt) => {
+			let results = this.search(findInput.value, {
+					caseSensitive: findCS.value !== "off",
+					searchType: findOptions.selectedOptions.item(0).value
+				});
+			this._collection = results;
+			this._pageIndex = 0;
+			this.render();
+		});
+
+		findInput.addEventListener("keyup", (evt) => {
+			if (evt.key == "Enter") {
+				let results = this.search(findInput.value, {
+					caseSensitive: findCS.value !== "off",
+					searchType: findOptions.selectedOptions.item(0).value
+				});
+				this._collection = results;
+				this._pageIndex = 0;
+				this.render();
+			}
+		});
+
+		//let tbltest = document.createElement("table");
+		//tbltest.innerHTML = "<thead></tr><th>funcidx</th><th>name</th><th>typeidx</th><th>use count</th><th>stack usage</th><th>inst cnt</th><th>bytecode size</th></tr></thead><tbody><tbody>"
+		//body.appendChild(tbltest);
+	}
+
+	search(string, opts) {
+		let items = this._defaultCollection;
+		let len = items.length;
+		let cis = opts.caseSensitive !== true;
+		let matches = [];
+		let searchType = opts.searchType;
+		switch (searchType) {
+			case "starts-with":
+				if (cis) {
+					let lc = string.toLowerCase();
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.fn && item.fn.toLowerCase().startsWith(lc)) {
+							matches.push(item);
+						}
+					}
+				} else {
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.fn && item.fn.startsWith(string)) {
+							matches.push(item);
+						}
+					}
+				}
+				break;
+			case "ends-with":
+				if (cis) {
+					let lc = string.toLowerCase();
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.fn && item.fn.toLowerCase().endsWith(lc)) {
+							matches.push(item);
+						}
+					}
+				} else {
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.fn && item.fn.endsWith(string)) {
+							matches.push(item);
+						}
+					}
+				}
+				break;
+			case "contains":
+				if (cis) {
+					let lc = string.toLowerCase();
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.fn && item.fn.toLowerCase().includes(lc)) {
+							matches.push(item);
+						}
+					}
+				} else {
+					for (let i = 0; i < len; i++) {
+						let item = items[i];
+						if (item.fn && item.fn.includes(string)) {
+							matches.push(item);
+						}
+					}
+				}
+				break;
+			case "regexp": {
+				let regexp = new Regexp(string);
+				for (let i = 0; i < len; i++) {
+					let item = items[i];
+					if (item.fn && item.fn.search(regexp)) {
+						matches.push(item);
+					}
+				}
+				break;
+			}
+			default:
+				break;
+		}
+
+		return matches;
+	}
+
+	render() {
+		let tbody = this._tbody;
+		while (tbody.lastChild) {
+			tbody.removeChild(tbody.lastChild);
+		}
+
+		let start = this._pageIndex * this._pageRowCount;
+		let items = this._collection;
+		let arr = this._sysinit;
+		let mod = this._module;
+		let len = Math.min(items.length, start + this._pageRowCount);
+		for (let i = start; i < len; i++) {
+			let sysinit = items[i];
+
+			let tr = document.createElement("tr");
+			tbody.appendChild(tr);
+			let td = document.createElement("td");
+			td.textContent = arr.indexOf(sysinit);
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.textContent = sysinit.ssname;
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.textContent = sysinit.fn;
+			tr.appendChild(td);
+			td = document.createElement("td");
+			td.textContent = sysinit.udata;
+			tr.appendChild(td);
+			td = document.createElement("td");
+			if (sysinit.udataText) {
+				td.textContent += sysinit.udataText;
+			}
+			tr.appendChild(td);
+		}
+
+		this._footer.textContent = "found " + this._collection.length + " matches";	
+	}
+
+	set sysinit(value) {
+		let cpy = value.slice();
+		this._defaultCollection = cpy
+		this._collection = cpy;
+		this._sysinit = cpy;
+		this.render();
+	}
+
+	get sysinit() {
+		return this._sysinit.slice();
+	}
+}
+
+function addFreeBSDInspectorViews(mod, sysinit_arr) {
+
+	let inspectContainer = document.querySelector("#wasm-modules-inspect");
+
+	let container = document.createElement("section");
+	container.classList.add("inspect-body");
+	container.style.setProperty("padding-bottom", "20px");
+	inspectContainer.appendChild(container);
+
+	let h3 = document.createElement("h3");
+	h3.textContent = "freeBSD sysinit";
+	container.appendChild(h3);
+
+	let view = new WasmSysInitTableInspectorView(h3, container);
+	view.sysinit = sysinit_arr;
 }
 
 function generateCallCount(mod) {
@@ -4950,6 +8356,9 @@ function generateCallCount(mod) {
 }
 
 function generateStackUsage(mod) {
+
+	if (!mod.imports)
+		return
 
 	let start = 0;
 	let stackGlobal;
@@ -5053,7 +8462,7 @@ function inspectObjectiveC(mod, buf) {
 		obj.segment = seg;
 	}
 	 
-	let mem = computeInitialMemory(mod, buf);
+	let mem = mod.computeInitialMemory(mod.memory[0], true);
 	let data = new DataView(mem.buffer);
 
 	let protocolMap = new Map();
@@ -5503,6 +8912,230 @@ function inspectObjectiveC(mod, buf) {
 
 // end of Objective-C inspect
 
+
+
+// managing persistent state
+
+function uuidv4() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random()*16|0, v = c == 'x' ? r : (r&0x3|0x8);
+        return v.toString(16);
+    });
+}
+
+function isEqualWorkflowData(data1, data2) {
+
+	let k1 = Object.keys(data1);
+	let k2 = Object.keys(data1);
+
+	if (k1.length != k2.length) {
+		return false;
+	}
+
+	let len = k1.length;
+	for (let i = 0; i < len; i++) {
+		let key = k1[i];
+		if (k2.indexOf(key) == -1) {
+			return false;
+		}
+	}
+
+	len = k1.length;
+	for (let i = 0; i < len; i++) {
+		let key = k1[i];
+		let v1 = data1[key];
+		let v2 = data2[key];
+		let type = typeof v1;
+		if (typeof v2 !== type) {
+			return false;
+		}
+
+		if (type == "string" || type == "boolean" || type == "number" || type == "bigint" || type == "undefined") {
+
+			if (v1 !== v2) {
+				return false;
+			}
+		} else if (type == "object") {
+
+			if (v1 === null) {
+				
+				if (v2 !== null) {
+					return false;
+				}
+
+			} else if (v2 === null) {
+				
+				if (v1 !== null) {
+					return false;
+				}
+
+			} else if (Array.isArray(v1)) {
+				
+				if (!Array.isArray(v2)) {
+					return false;
+				}
+
+				if (v1.length != v2.length) {
+					return false;
+				}
+
+			} else if (v1.kind == "file") {
+
+				if (v1.kind !== "file") {
+					return false;
+				}
+
+				if (v1.id !== v2.id) {
+					return false;
+				}
+			}
+		}
+	}
+
+	return true;
+}
+
+function generateAppData(appData, workflowData, workflowId) {
+
+	let files;
+	let recentWorkFlows;
+
+	if (!appData) {
+		let obj = {};
+		obj.files = [];
+		obj.recentWorkFlows = [];
+
+		files = obj.files;
+		recentWorkFlows = obj.recentWorkFlows;
+		appData = obj;
+	} else {
+		files = appData.files;
+		recentWorkFlows = appData.recentWorkFlows;
+	}
+
+	let fileIdMap = new Map();
+	let workflowFiles = workflowData.files;
+	let ylen = workflowFiles.length;
+	for (let y = 0; y < ylen; y++) {
+
+		let file1 = workflowFiles[y];
+		let found = false;
+
+		let xlen = files.length;
+		for (let x = 0; x < xlen; x++) {
+			let obj = files[x];
+			let file2 = obj.file;
+			if (file2.isSameEntry(file1)) {
+				fileIdMap.set(file1, obj.id);
+				found = true;
+				break;
+			}
+		}
+
+		if (!found) {
+			let obj = {};
+			obj.id = uuidv4();
+			obj.file = file1;
+			files.push(obj);
+			fileIdMap.set(file1, obj.id);
+		}
+	}
+
+	let cpy = Object.assign({}, workflowData);
+	for (let key in cpy) {
+		let val = cpy[key];
+		if (workflowFiles.indexOf(val) !== -1) {
+			let id = fileIdMap.get(val);
+			cpy[key] = {kind: "file", id: id};
+		}
+	}
+
+	cpy.workflowId = workflowId;
+
+	let len = recentWorkFlows.length;
+	for (let i = 0; i < len; i++) {
+		let data2 = recentWorkFlows[i];
+		let equal = isEqualWorkflowData(cpy, data2);
+		if (equal) {
+			return false;
+		}
+	}
+
+
+	recentWorkFlows.push(cpy);
+
+	return appData;
+}
+
+function storeRecentWorkflowInDB(workflowId, workflowData) {
+
+	let transaction = _db.transaction("AppData", "readwrite");
+	let appDataStore = transaction.objectStore("AppData");
+	let req = appDataStore.get("default");
+	req.onsuccess = function(evt) {
+		console.log(evt);
+		let appData = evt.target.result;
+
+		let obj = generateAppData(appData, workflowData, workflowId);
+		obj.id = "default";
+		if (obj === false) {
+			return;
+		}
+		let req2 = appDataStore.put(obj);
+		req2.onsuccess = function(evt) {
+			console.log("data added to IndexedDB");
+		}
+
+		req2.onerror = function(evt) {
+			console.error(evt);
+		}
+	}
+
+	req.onerror = function(evt) {
+		console.error(evt);
+	}
+}
+
+function openDatabase() {
+	let req = window.indexedDB.open("wasn-info", 1);
+	req.onerror = function(evt) {
+		console.error("Error loading database. %o", evt);
+	}
+
+	req.onsuccess = function(evt) {
+		console.log("Database initialized.");
+		const db = evt.target.result;
+		_db = db;
+
+		let transaction = db.transaction("AppData", "readonly");
+		let appDataStore = transaction.objectStore("AppData");
+		let req = appDataStore.get("default");
+		req.onsuccess = function(evt) {
+			console.log(evt);
+		}
+	}
+
+	req.onupgradeneeded = (evt) => {
+		_db = evt.target.result;
+	  	_db.onerror = (evt) => {
+	    	console.error("Error loading database. %o", evt);
+	  	};
+
+	  	_db.createObjectStore("AppData", {
+    		keyPath: "id",
+  		});
+
+	  	_db.createObjectStore("RecentWorkflow", {
+    		keyPath: "id",
+    		autoIncrement: true
+  		});
+
+		console.log("Object store created.");
+	};
+}
+
+openDatabase();
+
 // TODO: custom-section: name from emscripten symbol-map
 
 function loadWebAssemblyBinary(buf, symbolsTxt) {
@@ -5522,7 +9155,7 @@ function loadWebAssemblyBinary(buf, symbolsTxt) {
 	generateCallCount(mod);
 	generateStackUsage(mod);
 	/*if (targetFilename == "kern.wasm") {
-		runWorkflowActions(mod, _freebsdWorkflow);
+		runWorkflowActions(mod, _freebsdKernMainWorkflow);
 	}*/
 	populateWebAssemblyInfo(mod);
 	try {

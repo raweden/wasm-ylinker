@@ -4,11 +4,13 @@
 // https://nielsleenheer.com/articles/2017/the-case-for-console-hex/
 // https://webassembly.github.io/spec/core/appendix/custom.html#binary-indirectnamemap
 // https://webassembly.github.io/spec/core/appendix/index-instructions.html
+// https://github.com/WebAssembly/tool-conventions/issues/59
 
 // nexts steps:
 // 1. manipulate globals; requires globals to be objectified rather than index referenced in instructions etc.
 // 2. refactor into class based approach sectionclass.decode/encode etc each with section based logics such as insert/remove objects.
 
+const __nsym = Symbol("@custom-name");
 const sectionnames = {
     '0': "custom",
     '1': "type",
@@ -24,6 +26,20 @@ const sectionnames = {
     '11': "data",
     '12': "data count"
 };
+
+const SECTION_TYPE_FUNCTYPE = 1;
+const SECTION_TYPE_IMPORT = 2;
+const SECTION_TYPE_FUNC = 3;
+const SECTION_TYPE_TABLE = 4;
+const SECTION_TYPE_MEMORY = 5;
+const SECTION_TYPE_GLOBAL = 6;
+const SECTION_TYPE_EXPORT = 7;
+const SECTION_TYPE_START = 8;
+const SECTION_TYPE_ELEMENT = 9;
+const SECTION_TYPE_CODE = 0x0A;
+const SECTION_TYPE_DATA = 0x0B;
+const SECTION_TYPE_DATA_COUNT = 0x0C;
+const SECTION_TYPE_CUSTOM = 0x00;
 
 function type_name(type) {
     switch(type) {
@@ -190,6 +206,42 @@ function UTF8ArrayToString(heap, idx, maxBytesToRead) {
     }
     return str;
 }
+
+// Base Classes
+
+class WebAssemblySection {
+
+    constructor(type, module) {
+        this.type = type;
+        this.module = module;
+        this._cache = undefined;
+    }
+
+    decode(data) {
+        throw new Error("subclasses of this class must override this method");
+    }
+
+    encode(data) {
+        throw new Error("subclasses of this class must override this method");
+    }
+
+    markDirty() {
+        this._isDirty = true;
+    }
+
+    get isDirty() {
+        return this._isDirty;
+    }
+}
+
+class WebAssemblyCustomSection extends WebAssemblySection {
+
+    constructor(module, name) {
+        super(SECTION_TYPE_CUSTOM, module);
+        this.name = name;
+    }
+}
+
 
 function inst_name(opcode) {
 
@@ -630,6 +682,22 @@ class CallInst extends Inst {
     }
 }
 
+class LocalInst extends Inst {
+
+    constructor(opcode, local) {
+        super(opcode);
+        this.local = local;
+    }
+}
+
+class GlobalInst extends Inst {
+
+    constructor(opcode, glob) {
+        super(opcode);
+        this.global = glob;
+    }
+}
+
 class AtomicInst extends Inst {
 
     constructor(opcode, align, offset) {
@@ -807,7 +875,7 @@ function isValidValueType(type) {
     return type == 0x7F || type == 0x7E || type == 0x7D || type == 0x7C || type == 0x7B  || type == 0x70 || type == 0x6F;
 }
 
-function byteCodeComputeByteLength(mod, opcodes, genloc) {
+function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
     genloc = genloc === true;
     let sz = 0;
 
@@ -936,17 +1004,26 @@ function byteCodeComputeByteLength(mod, opcodes, genloc) {
                 sz += 1;
                 break;
             case 0x20: // local.get
+            {
                 sz += 1;
-                sz += lengthULEB128(inst.x);
+                let idx = locals.indexOf(inst.local);
+                sz += lengthULEB128(idx);
                 break;
+            }
             case 0x21: // local.set
+            {
                 sz += 1;
-                sz += lengthULEB128(inst.x);
+                let idx = locals.indexOf(inst.local);
+                sz += lengthULEB128(idx);
                 break;
+            }
             case 0x22: // local.tee
+            {
                 sz += 1;
-                sz += lengthULEB128(inst.x);
+                let idx = locals.indexOf(inst.local);
+                sz += lengthULEB128(idx);
                 break;
+            }
             case 0x23: // global.get
             {
                 sz += 1;
@@ -1646,11 +1723,13 @@ function byteCodeComputeByteLength(mod, opcodes, genloc) {
     return sz
 }
 
+class WebAssemblyInstructionSet {
 
+}
 
 // https://webassembly.github.io/spec/core/binary/instructions.html#binary-expr
 // https://webassembly.github.io/spec/core/appendix/index-instructions.html
-function decodeByteCode(data, mod) {
+function decodeByteCode(data, mod, locals) {
     
     let start = data.offset;
     let brk = false;
@@ -1661,6 +1740,7 @@ function decodeByteCode(data, mod) {
     let globals = mod.globals;
     let tables = mod.tables;
     let types = mod.types;
+    let locend = locals ? locals.length - 1 : 0;
 
     while(brk == false) {
         let op_code = data.readUint8();
@@ -1682,7 +1762,7 @@ function decodeByteCode(data, mod) {
                     inst.type = type;
                 } else {
                     data.offset--; // rewind
-                    type = data.readSLEB128();
+                    type = data.readSLEB128(32);
                     if (type > 0) {
                         inst.type = types[type];
                     } else {
@@ -1705,7 +1785,7 @@ function decodeByteCode(data, mod) {
                     inst.type = type;
                 } else {
                     data.offset--; // rewind
-                    type = data.readSLEB128();
+                    type = data.readSLEB128(32);
                     if (type > 0) {
                         inst.type = types[type];
                     } else {
@@ -1781,10 +1861,10 @@ function decodeByteCode(data, mod) {
                 break;
             }
             case 0x41: // i32.const     [] -> [i32]
-                opcodes.push({opcode: op_code, value: data.readSLEB128()});
+                opcodes.push({opcode: op_code, value: data.readSLEB128(32)});
                 break;
             case 0x42: // i64.const     [] -> [i64]
-                opcodes.push({opcode: op_code, value: data.readSLEB128(true)});
+                opcodes.push({opcode: op_code, value: data.readSLEB128(64)});
                 break;
             case 0x43: // f32.const     [] -> [f32]
                 opcodes.push({opcode: op_code, value: data.readFloat32()});
@@ -1818,14 +1898,35 @@ function decodeByteCode(data, mod) {
                 opcodes.push({opcode: op_code});
                 break;
             case 0x20: // local.get         [] -> [t]
-                opcodes.push({opcode: op_code, x: data.readULEB128()});
+            {
+                let x = data.readULEB128();
+                if (x < 0 || x > locend)
+                    throw new RangeError(".local out of range");
+                let local = locals[x];
+                local.usage++;
+                opcodes.push({opcode: op_code, local: local, x: x});
                 break;
+            }
             case 0x21: // local.set         [t] -> []
-                opcodes.push({opcode: op_code, x: data.readULEB128()});
+            {
+                let x = data.readULEB128();
+                if (x < 0 || x > locend)
+                    throw new RangeError(".local out of range");
+                let local = locals[x];
+                local.usage++;
+                opcodes.push({opcode: op_code, local: local, x: x});
                 break;
+            }
             case 0x22: // local.tee         [t] -> [t]
-                opcodes.push({opcode: op_code, x: data.readULEB128()});
+            {
+                let x = data.readULEB128();
+                if (x < 0 || x > locend)
+                    throw new RangeError(".local out of range");
+                let local = locals[x];
+                local.usage++;
+                opcodes.push({opcode: op_code, local: local, x: x});
                 break;
+            }
             case 0x23: // global.get        [] -> [t]
             {
                 let idx = data.readULEB128();
@@ -2505,7 +2606,7 @@ function decodeByteCode(data, mod) {
     return {start: start, end: data.offset, opcodes: topInsts};
 }
 
-function encodeByteCode(mod, opcodes, data) {
+function encodeByteCode(mod, opcodes, locals, data) {
 
     let functions = mod.functions;
     let globals = mod.globals;
@@ -2632,17 +2733,32 @@ function encodeByteCode(mod, opcodes, data) {
                 data.writeUint8(b1);
                 break;
             case 0x20: // local.get
+            {
+                let idx = locals.indexOf(inst.local);
+                if (idx === -1)
+                    throw new RangeError("inst.local not defined");
                 data.writeUint8(b1);
-                data.writeULEB128(inst.x);
+                data.writeULEB128(idx);
                 break;
+            }
             case 0x21: // local.set
+            {
+                let idx = locals.indexOf(inst.local);
+                if (idx === -1)
+                    throw new RangeError("inst.local not defined");
                 data.writeUint8(b1);
-                data.writeULEB128(inst.x);
+                data.writeULEB128(idx);
                 break;
+            }
             case 0x22: // local.tee
+            {
+                let idx = locals.indexOf(inst.local);
+                if (idx === -1)
+                    throw new RangeError("inst.local not defined");
                 data.writeUint8(b1);
-                data.writeULEB128(inst.x);
+                data.writeULEB128(idx);
                 break;
+            }
             case 0x23: // global.get
             {
                 data.writeUint8(b1);
@@ -3357,6 +3473,7 @@ const CHUNK_TYPE = {
     ELEMENT: 9,
     BYTECODE: 0x0A,
     DATA: 0x0B,
+    DATA_COUNT: 0x0C,
     CUSTOM: 0x00
 };
 
@@ -3505,53 +3622,88 @@ class ByteArray {
         return result;
     }
 
-    // reads a signed LEB128 (little-endian-base128) integer
-    readSLEB128(as64) {
 
-        let u8 = this._u8;
-        let off = this._offset;
-        let len = u8.byteLength;
-        as64 = (as64 === true);
+    /**
+     * Utility function to decode a SLEB128 value.
+     *
+     * @param {Number}          asIntN
+     * @return {BigInt|Number}
+     */
+    readSLEB128(asIntN) {
 
-        if (as64) {
+        if (asIntN == 64 || asIntN === undefined) {
 
-            let result = BigInt(0);
-            let shift = BigInt(0);
-            while (off < len) {
-                const byte = u8[off++];
-                result |= BigInt(byte & 0x7f) << shift;
-                shift += 7n;
-                if ((0x80 & byte) === 0) {
-                    this._offset = off;
-                    if (shift < 32n && (byte & 0x40) !== 0) {
-                        return result | (BigInt(~0) << shift);
-                    }
-                    return result;
-                }
-            }
-
-            throw RangeError("encoding of LEB128 did not end correct");
-
-        } else {
-
-            let result = 0;
+            const UINT64_MAX = 18446744073709551615n;
+            let err, off = this._offset;
+            const orig_p = off;
+            const buf = this._u8;
+            const end = buf.byteLength;
+            let value = BigInt(0);
             let shift = 0;
-            while (off < len) {
-                const byte = u8[off++];
-                result |= (byte & 0x7f) << shift;
-                shift += 7;
-                if ((0x80 & byte) === 0) {
-                    this._offset = off;
-                    if (shift < 32 && (byte & 0x40) !== 0) {
-                        return result | (~0 << shift);
-                    }
-                    return result;
+            let byte;
+
+            do {
+                if (off == end) {
+                    err = new RangeError("malformed sleb128, extends past end");
+                    err.byteOffset = (off - orig_p);
+                    throw err;
                 }
-            }
+                byte = buf[off];
+                let slice = byte & 0x7f;
+                if ((shift >= 64 && slice != (value < 0n ? 0x7f : 0x00)) || (shift == 63 && slice != 0 && slice != 0x7f)) {
+                    err = new RangeError("sleb128 too big for int64");
+                    err.byteOffset = (off - orig_p);
+                    throw err;
+                }
+                value |= BigInt(slice) << BigInt(shift);
+                shift += 7;
+                ++off;
+            } while (byte >= 128);
+            
+            // Sign extend negative numbers if needed.
+            if (shift < 64 && (byte & 0x40))
+                value |= UINT64_MAX << BigInt(shift);
+            
+            this._offset = off;
+            
+            return BigInt.asIntN(64, value);
 
+        } else if (asIntN == 32) {
+
+            let err, off = this._offset;
+            const orig_p = off;
+            const buf = this._u8;
+            const end = buf.byteLength;
+            let value = 0;
+            let shift = 0;
+            let byte;
+
+            do {
+                if (off == end) {
+                    err = new RangeError("malformed sleb128, extends past end");
+                    err.byteOffset = (off - orig_p);
+                    throw err;
+                }
+                byte = buf[off];
+                let slice = byte & 0x7f;
+                if ((shift >= 32 && slice != (value < 0 ? 0x7f : 0x00)) || (shift == 31 && slice != 0 && slice != 0x7f)) {
+                    err = new RangeError("sleb128 too big for int32");
+                    err.byteOffset = (off - orig_p);
+                    throw err;
+                }
+                value |= slice << shift;
+                shift += 7;
+                ++off;
+            } while (byte >= 128);
+            
+            // Sign extend negative numbers if needed.
+            if (shift < 32 && (byte & 0x40))
+                value |= 0xFFFFFFFF << shift;
+            
+            this._offset = off;
+            
+            return value;
         }
-
-        throw RangeError("encoding of LEB128 did not end correct");
     }
 
     readUTF8Bytes(length) {
@@ -3662,83 +3814,148 @@ class ByteArray {
         this._data.setUint8(this._offset++, value);
     }
 
-    writeULEB128(value) {
+    /**
+     * Utility function to encode a ULEB128 value to a buffer. Returns the length in bytes of the encoded value.
+     * 
+     * @param  {BigInt|Number} value         [description]
+     * @param  {Number} padTo         [description]
+     * @return {Number}          [description]
+     */
+    writeULEB128(value, padTo) {
+        if (!Number.isInteger(padTo))
+            padTo = 0;
+        
         if (typeof value == "bigint") {
             const mask = BigInt(0x7f);
             let u8 = this._u8;
             let off = this._offset;
+            let orig_p = off;
             let len = u8.byteLength;
+            let cnt = 0;
             do {
                 let byte = Number(value & mask);
                 value >>= 7n;
-                if (value != 0) {
-                    u8[off++] = (byte | 0x80);
-                } else {
-                    u8[off++] = byte;
-                    this._offset = off;
-                    return;
+                cnt++;
+                if (value != 0 || cnt < padTo) {
+                    byte = (byte | 0x80);
                 }
-
+                u8[off++] = byte;
             } while (value != 0n);
 
-            throw RangeError("arraybuffer to small");
+            // pad with 0x80 and emit a nyll byte at the end.
+            if (cnt < padTo) {
+                let end = padTo - 1;
+                for (;cnt < end;++cnt)
+                    u8[off++] = 0x80;
+                u8[off++] = 0x00;
+            }
+
+            this._offset = off;
+
+            return (off - orig_p);
         }
 
         let u8 = this._u8;
         let off = this._offset;
+        let orig_p = off;
         let len = u8.byteLength;
+        let cnt = 0;
         do {
             let byte = value & 0x7f;
             value >>= 7;
-            if (value != 0) {
-                u8[off++] = (byte | 0x80);
-            } else {
-                u8[off++] = byte;
-                this._offset = off;
-                return;
+            cnt++;
+            if (value != 0 || cnt < padTo) {
+                byte = (byte | 0x80);
             }
+            u8[off++] = byte;
 
         } while (value != 0);
 
-        throw RangeError("arraybuffer to small");
+        // pad with 0x80 and emit a nyll byte at the end.
+        if (cnt < padTo) {
+            let end = padTo - 1;
+            for (;cnt < end;++cnt)
+                u8[off++] = 0x80;
+            u8[off++] = 0x00;
+        }
+
+        this._offset = off;
+
+        return (off - orig_p);
     }
 
-    writeSLEB128(value) {
+
+    /**
+     * Utility function to encode a SLEB128 value to a buffer. Returns the length in bytes of the encoded value.
+     * @param  {BigInt|Number}  value         [description]
+     * @param  {Number}         padTo         [description]
+     * @return {[type]}          [description]
+     */
+    writeSLEB128(value, padTo) {
+        
+        if (!Number.isInteger(padTo))
+            padTo = 0;
+        
         if (typeof value == "bigint") {
-            let u8 = this._u8;
+
             let off = this._offset;
-            let len = u8.byteLength;
-            while (off < len) {
-                let byte_ = Number(value & 0x7fn);
-                value >>= 7n;
-                if ((value === 0n && (byte_ & 0x40) === 0) || (value === -1n && (byte_ & 0x40) !== 0)) {
-                    u8[off++] = byte_;
-                    this._offset = off;
-                    return;
-                }
-                u8[off++] = (byte_ | 0x80);
+            const buf = this._u8;
+            const orig_p = off;
+            let count = 0;
+            let more;
+            do {
+                let byte = Number(value & BigInt(0x7f));
+                // NOTE: this assumes that this signed shift is an arithmetic right shift.
+                value >>= BigInt(7);
+                more = !((((value == 0n) && ((byte & 0x40) == 0)) || ((value == BigInt(-1)) && ((byte & 0x40) != 0))));
+                count++;
+                if (more || count < padTo)
+                    byte |= 0x80; // Mark this byte to show that more bytes will follow.
+                buf[off++] = byte;
+            } while (more);
+         
+            // Pad with 0x80 and emit a terminating byte at the end.
+            if (count < padTo) {
+                const padValue = value < BigInt(0) ? 0x7f : 0x00;
+                for (; count < padTo - 1; ++count)
+                    buf[off++] = (padValue | 0x80);
+                buf[off++] = padValue;
             }
 
-            throw RangeError("arraybuffer to small");    
+            this._offset = off;
 
-        }
+            return (off - orig_p);
+        
+        } else {
 
-        let u8 = this._u8;
-        let off = this._offset;
-        let len = u8.byteLength;
-        value |= 0;
-        while (off < len) {
-            const byte_ = value & 0x7f;
-            value >>= 7;
-            if ((value === 0 && (byte_ & 0x40) === 0) || (value === -1 && (byte_ & 0x40) !== 0)) {
-                u8[off++] = byte_;
-                this._offset = off;
-                return;
+            let off = this._offset;
+            const buf = this._u8;
+            const orig_p = off;
+            let count = 0;
+            let more;
+            do {
+                let byte = value & 0x7f;
+                // NOTE: this assumes that this signed shift is an arithmetic right shift.
+                value >>= 7;
+                more = !((((value == 0 ) && ((byte & 0x40) == 0)) || ((value == -1) && ((byte & 0x40) != 0))));
+                count++;
+                if (more || count < padTo)
+                    byte |= 0x80; // Mark this byte to show that more bytes will follow.
+                buf[off++] = byte;
+            } while (more);
+         
+            // Pad with 0x80 and emit a terminating byte at the end.
+            if (count < padTo) {
+                const padValue = value < 0 ? 0x7f : 0x00;
+                for (; count < padTo - 1; ++count)
+                    buf[off++] = (padValue | 0x80);
+                buf[off++] = padValue;
             }
-            u8[off++] = (byte_ | 0x80);
-        }
 
-        throw RangeError("arraybuffer to small");
+            this._offset = off;
+
+            return (off - orig_p);
+        }
     }
 
     writeUTF8Bytes(value) {
@@ -3813,7 +4030,9 @@ function lengthBytesUTF8(str) {
     return len;
 }
 
-function lengthULEB128(value) {
+function lengthULEB128(value, padTo) {
+    if (!Number.isInteger(padTo))
+        padTo = 0;
     let cnt = 0;
     if (typeof value == "bigint") {
         do {
@@ -3822,6 +4041,8 @@ function lengthULEB128(value) {
                 cnt++;
             } else {
                 cnt++;
+                if (cnt < padTo)
+                    return padTo;
                 return cnt;
             }
 
@@ -3836,6 +4057,8 @@ function lengthULEB128(value) {
             cnt++;
         } else {
             cnt++;
+            if (cnt < padTo)
+                return padTo;
             return cnt;
         }
 
@@ -3844,34 +4067,111 @@ function lengthULEB128(value) {
     throw TypeError("should never get here!");
 }
 
-function lengthSLEB128(value) {
-    let cnt = 0;
+/**
+ * Utility function to compute the bytes needed to encode a SLEB128 value to a buffer.
+ * @param  {BigInt|Number}  value         [description]
+ * @param  {Number}         padTo         [description]
+ * @return {[type]}         Returns the number of bytes needed.
+ */
+function lengthSLEB128(value, padTo) {
+    
+    if (!Number.isInteger(padTo))
+        padTo = 0;
+    
     if (typeof value == "bigint") {
-        while (true) {
-            let byte_ = Number(value & 0x7fn);
-            value >>= 7n;
-            if ((value === 0n && (byte_ & 0x40) === 0) || (value === -1n && (byte_ & 0x40) !== 0)) {
-                cnt++;
-                return cnt;
+
+        let more, off = 0;
+        let count = 0;
+        do {
+            let byte = Number(value & BigInt(0x7f));
+            // NOTE: this assumes that this signed shift is an arithmetic right shift.
+            value >>= BigInt(7);
+            more = !((((value == 0n) && ((byte & 0x40) == 0)) || ((value == BigInt(-1)) && ((byte & 0x40) != 0))));
+            count++;
+            off++
+        } while (more);
+     
+        // Pad with 0x80 and emit a terminating byte at the end.
+        if (count < padTo) {
+            for (; count < padTo - 1; ++count) {
+                off++
             }
-            cnt++;
+            off++
         }
 
-        throw TypeError("should never get here!");
-    }
+        return off;
+    
+    } else {
 
-    value |= 0;
-    while (true) {
-        const byte_ = value & 0x7f;
-        value >>= 7;
-        if ((value === 0 && (byte_ & 0x40) === 0) || (value === -1 && (byte_ & 0x40) !== 0)) {
-            cnt++;
-            return cnt;
+        let more, off = 0;
+        let count = 0;
+        do {
+            let byte = value & 0x7f;
+            // NOTE: this assumes that this signed shift is an arithmetic right shift.
+            value >>= 7;
+            more = !((((value == 0 ) && ((byte & 0x40) == 0)) || ((value == -1) && ((byte & 0x40) != 0))));
+            count++;
+            off++;
+        } while (more);
+     
+        // Pad with 0x80 and emit a terminating byte at the end.
+        if (count < padTo) {
+            for (; count < padTo - 1; ++count)
+                off++;
+            off++;
         }
-        cnt++;
+
+        return off;
     }
 
-    throw RangeError("arraybuffer to small");
+    /*
+    if (typeof value == "bigint") {
+        const neg = value < 0n;
+        if (value >= BigInt(-64) && value < BigInt(64)) {
+            return 1;
+        }
+
+        let n = 0;
+        let x = value;
+        let more = true;
+        while (more) {
+            let byte = Number(x & BigInt(0x7f));
+            let sign = (byte & 0x40) > 0;
+            x >>= 7n;
+            if ((x == 0n && !sign) || (x == BigInt(-1) && sign)) {
+                more = false;
+            } else {
+                byte |= 0x80;
+            }
+            n += 1;
+        }
+
+        return n;
+    
+    } else {
+        // else we asume that its a value of Number
+        const neg = value < 0;
+        if (value >= -64 && value < 64) {
+            return 1;
+        }
+
+        let n = 0;
+        let x = value;
+        let more = true;
+        while (more) {
+            let byte = (x & 0x7f);
+            let sign = (byte & 0x40) > 0;
+            x >>= 7;
+            if ((x == 0 && !sign) || (x == -1 && sign)) {
+                more = false;
+            } else {
+                byte |= 0x80;
+            }
+            n += 1;
+        }
+
+        return n;
+    }*/
 }
 
 class WasmGlobal {
@@ -3921,97 +4221,115 @@ class FuncType {
     }
 };
 
-// https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md#target-features-section
-function decodeTypeSection(data, len) {
-    let end = data.offset + len;
-    let cnt = data.readULEB128();
-    let functypes = [];
-    for (let y = 0; y < cnt; y++) {
-        let prefix = data.readUint8();
-        if (prefix != 0x60) {
-            console.error("invalid functype prefix 0x%s", prefix.toString(16));
-            return null;
-        }
-        let argc = data.readULEB128();
-        let argv = argc > 0 ? [] : null;
-        for (let x = 0; x < argc; x++) {
-            let type = data.readUint8();
-            argv.push(type);
-        }
+class WebAssemblyFuncTypeSection extends WebAssemblySection {
 
-        let retc = data.readULEB128();
-        let retv = retc > 0 ? [] : null;
-        for (let x = 0; x < retc; x++) {
-            let type = data.readUint8();
-            retv.push(type);
-        }
-        let functype = new FuncType();
-        functype.argc = argc;
-        functype.argv = argv;
-        functype.retc = retc;
-        functype.retv = retv;
-        functype.typeidx = y; // TODO: remove me
-        functype.count = 0;
-        functypes.push(functype);
+    constructor(module) {
+        super(SECTION_TYPE_FUNCTYPE, module);
+
     }
 
-    //console.log("functype vector count: %d", cnt);
-    //console.log(functypes);
-    //dump_functypes(functypes);
+    encode(options) {
 
-    return functypes;
+        let totsz = 0;
+
+        let types = this.module.types;
+        let len = types.length;
+        for (let i = 0; i < len; i++) {
+            let type = types[i];
+            let argc = Array.isArray(type.argv) ? type.argv.length : 0;
+            let retc = Array.isArray(type.retv) ? type.retv.length : 0;
+            totsz += lengthULEB128(argc);
+            totsz += argc;
+            totsz += lengthULEB128(retc);
+            totsz += retc;
+            totsz += 1; // prefix 0x60
+        }
+
+        totsz += lengthULEB128(len);
+        let secsz = totsz;
+        totsz += lengthULEB128(totsz);
+
+        // actual encoding
+        let buf = new ArrayBuffer(totsz + 1);
+        let data = new ByteArray(buf);
+        data.writeUint8(SECTION_TYPE_FUNCTYPE);
+        data.writeULEB128(secsz);
+        data.writeULEB128(len);
+
+        
+        len = types.length;
+        for (let i = 0; i < len; i++) {
+            let type = types[i]
+            let prefix = data.writeUint8(0x60);
+
+            let argv = type.argv;
+            let argc = Array.isArray(argv) ? argv.length : 0;
+            data.writeULEB128(argc);
+            for (let x = 0; x < argc; x++) {
+                data.writeUint8(argv[x]);
+            }
+
+            let retv = type.retv;
+            let retc = Array.isArray(retv) ? retv.length : 0;
+            data.writeULEB128(retc);
+            for (let x = 0; x < retc; x++) {
+                data.writeUint8(retv[x]);
+            }
+        }
+
+        return buf;
+    }
+
+    static decode(module, data, size) {
+
+        let types;
+        if (!module.types) {
+            types = [];
+            module.types = types;
+        } else {
+            types = module.types;
+        }
+
+        let end = data.offset + size;
+        let cnt = data.readULEB128();
+        let functypes = [];
+        for (let y = 0; y < cnt; y++) {
+            let prefix = data.readUint8();
+            if (prefix != 0x60) {
+                console.error("invalid functype prefix 0x%s", prefix.toString(16));
+                return null;
+            }
+            let argc = data.readULEB128();
+            let argv = argc > 0 ? [] : null;
+            for (let x = 0; x < argc; x++) {
+                let type = data.readUint8();
+                argv.push(type);
+            }
+
+            let retc = data.readULEB128();
+            let retv = retc > 0 ? [] : null;
+            for (let x = 0; x < retc; x++) {
+                let type = data.readUint8();
+                retv.push(type);
+            }
+            let functype = new FuncType();
+            functype.argc = argc;
+            functype.argv = argv;
+            functype.retc = retc;
+            functype.retv = retv;
+            functype.typeidx = y; // TODO: remove me
+            functype.count = 0;
+            types.push(functype);
+        }
+
+        //console.log("functype vector count: %d", cnt);
+        //console.log(functypes);
+        //dump_functypes(functypes);
+
+        return new WebAssemblyFuncTypeSection(module);
+    }
 }
 
-function encodeTypeSection(types) {
-
-    let totsz = 0;
-
-    let len = types.length;
-    for (let i = 0; i < len; i++) {
-        let type = types[i];
-        let argc = Array.isArray(type.argv) ? type.argv.length : 0;
-        let retc = Array.isArray(type.retv) ? type.retv.length : 0;
-        totsz += lengthULEB128(argc);
-        totsz += argc;
-        totsz += lengthULEB128(retc);
-        totsz += retc;
-        totsz += 1; // prefix 0x60
-    }
-
-    totsz += lengthULEB128(len);
-    let secsz = totsz;
-    totsz += lengthULEB128(totsz);
-
-    // actual encoding
-    let buf = new ArrayBuffer(totsz + 1);
-    let data = new ByteArray(buf);
-    data.writeUint8(SECTION_TYPE.TYPE);
-    data.writeULEB128(secsz);
-    data.writeULEB128(len);
-
-    
-    len = types.length;
-    for (let i = 0; i < len; i++) {
-        let type = types[i]
-        let prefix = data.writeUint8(0x60);
-
-        let argv = type.argv;
-        let argc = Array.isArray(argv) ? argv.length : 0;
-        data.writeULEB128(argc);
-        for (let x = 0; x < argc; x++) {
-            data.writeUint8(argv[x]);
-        }
-
-        let retv = type.retv;
-        let retc = Array.isArray(retv) ? retv.length : 0;
-        data.writeULEB128(retc);
-        for (let x = 0; x < retc; x++) {
-            data.writeUint8(retv[x]);
-        }
-    }
-
-    return buf;
-}
 
 class ImportedFunction {
 
@@ -4062,531 +4380,606 @@ class WasmMemory {
     }
 };
 
-function decodeImportSection(data, len, m) {
-    let end = data.offset + len;
-    let cnt = data.readULEB128();
-    let functypes = m.types;
-    let results = [];
-    while (data.offset < end) {
-        let mlen = data.readULEB128();
-        let mod = data.readUTF8Bytes(mlen);
-        let nlen = data.readULEB128();
-        let name = data.readUTF8Bytes(nlen);
-        let type = data.readUint8();
-        let imp;
-        if (type == 0x00) {         // function
-            imp = new ImportedFunction();
-            let typeidx = data.readULEB128();
-            imp.type = functypes[typeidx];
-            imp.type.count++; // increment refcount.
-            if (!m.functions) {
-                m.functions = [];
-            }
-            m.functions.push(imp);
-        } else if (type == 0x01) {  // table
-            imp = new ImportedTable();
-            imp.reftype = data.readUint8();
-            let limit = data.readUint8();
-            if (limit == 0x01) {
-                imp.min = data.readULEB128();
-                imp.max = data.readULEB128();
-            } else if (limit == 0x00) {
-                imp.min = data.readULEB128();
-            }
-            if (!m.tables) {
-                m.tables = [];
-            }
-            m.tables.push(imp);
-        } else if (type == 0x02) {  // memory
-            let limit = data.readUint8();
-            if (limit == 0x01) {
-                imp = new ImportedMemory();
-                imp.min = data.readULEB128();
-                imp.max = data.readULEB128();
-                imp.shared = false;
-            } else if (limit == 0x00) {
-                imp = new ImportedMemory();
-                imp.min = data.readULEB128();
-                imp.shared = false;
-            } else if (limit == 0x02) {
-                imp = new ImportedMemory();
-                imp.min = data.readULEB128();
-                imp.shared = true;
-            } else if (limit == 0x03) {
-                imp = new ImportedMemory();
-                imp.min = data.readULEB128();
-                imp.max = data.readULEB128();
-                imp.shared = true;              
-            } else {
-                console.error("found memory limit of type %d", type);
-            }
-            if (!m.memory) {
-                m.memory = [];
-            }
-            m.memory.push(imp);
-        } else if (type == 0x03) {  // global
-            imp = new ImportedGlobal();
-            let t = data.readUint8();
-            imp.globaltype = type_name(t);
-            imp.type = t;
-            imp.mutable = data.readUint8() === 1;
-            if (!m.globals) {
-                m.globals = [];
-            }
-            m.globals.push(imp);
-        } else {
-            console.error("found unsupported import type %d", type);
-            continue;
-        }
+class WebAssemblyImportSection extends WebAssemblySection {
 
-        if (imp) {
-            //imp.type = export_type_name(type);
-            imp.module = mod;
-            imp.name = name;
-            results.push(imp);
-        }
-    }
-    
-    //console.log("import vector count: %d", cnt);
-    //console.log(results);
-    // TODO: map every existing module-name
-    return results;
-}
-
-function encodeImportSection(imports) {
-
-    let total = 0;
-    let ylen = imports.length;
-    let cnt = 0;
-    for (let y = 0; y < ylen; y++) {
-        let imp = imports[y];
-        let len = lengthBytesUTF8(imp.module);
-        total += len;
-        len = lengthULEB128(len);
-        total += len;
-        len = lengthBytesUTF8(imp.name);
-        total += len;
-        len = lengthULEB128(len);
-        total += len;
-
-        if (imp instanceof ImportedFunction) {
-            total += 1; // type
-            total += lengthULEB128(imp.type.typeidx);
-            cnt++;
-        } else if (imp instanceof ImportedGlobal) {
-            total += 3; // type, valuetype, mutable
-            cnt++;
-        } else if (imp instanceof ImportedMemory) {
-            total += 2; // type, limits
-            total += lengthULEB128(imp.min);
-            if (imp.max !== null) {
-                total += lengthULEB128(imp.max);
-            } 
-            cnt++;
-        } else if (imp instanceof ImportedTable) {
-            total += 3; // type, reftype, limits
-            total += lengthULEB128(imp.min);
-            if (imp.max !== null) {
-                total += lengthULEB128(imp.max);
-            }
-            cnt++;
-        } else {
-            console.error("unsupported import type");
-            continue;
-        }
+    constructor(module) {
+        super(SECTION_TYPE_IMPORT, module);
+        
     }
 
-    total += lengthULEB128(cnt);
-    let sz = lengthULEB128(total);
-    let buf = new ArrayBuffer(total + sz + 1);
-    let data = new ByteArray(buf);
-    data.writeUint8(SECTION_TYPE.IMPORT);
-    data.writeULEB128(total);
-    data.writeULEB128(cnt);
-    ylen = imports.length;
-    for (let y = 0; y < ylen; y++) {
-        let imp = imports[y];
-        let strlen = lengthBytesUTF8(imp.module);
-        data.writeULEB128(strlen);
-        data.writeUTF8Bytes(imp.module);
+    encode(options) {
 
-        strlen = lengthBytesUTF8(imp.name);
-        data.writeULEB128(strlen);
-        data.writeUTF8Bytes(imp.name);
+        let imports = this.module.imports;
+        let total = 0;
+        let ylen = imports.length;
+        let cnt = 0;
+        let memPadTo = 4;
+        for (let y = 0; y < ylen; y++) {
+            let imp = imports[y];
+            let len = lengthBytesUTF8(imp.module);
+            total += len;
+            len = lengthULEB128(len);
+            total += len;
+            len = lengthBytesUTF8(imp.name);
+            total += len;
+            len = lengthULEB128(len);
+            total += len;
 
-        if (imp instanceof ImportedFunction) {
-            data.writeUint8(0x00);
-            data.writeULEB128(imp.type.typeidx);
-        } else if (imp instanceof ImportedGlobal) {
-            data.writeUint8(0x03);
-            data.writeUint8(imp.type);
-            data.writeUint8(imp.mutable ? 1 : 0);
-        } else if (imp instanceof ImportedMemory) {
-            data.writeUint8(0x02);
-            if (imp.shared) {
-                if (imp.max === null) {
-                    data.writeUint8(0x02);
-                    data.writeULEB128(imp.min);
-                } else {
-                    data.writeUint8(0x03);
-                    data.writeULEB128(imp.min);
-                    data.writeULEB128(imp.max);
+            if (imp instanceof ImportedFunction) {
+                total += 1; // type
+                total += lengthULEB128(imp.type.typeidx);
+                cnt++;
+            } else if (imp instanceof ImportedGlobal) {
+                total += 3; // type, valuetype, mutable
+                cnt++;
+            } else if (imp instanceof ImportedMemory) {
+                total += 2; // type, limits
+                total += lengthULEB128(imp.min, memPadTo);
+                if (imp.max !== null) {
+                    total += lengthULEB128(imp.max, memPadTo);
+                } 
+                cnt++;
+            } else if (imp instanceof ImportedTable) {
+                total += 3; // type, reftype, limits
+                total += lengthULEB128(imp.min);
+                if (imp.max !== null) {
+                    total += lengthULEB128(imp.max);
                 }
-
+                cnt++;
             } else {
-                if (imp.max === null) {
-                    data.writeUint8(0x00);
-                    data.writeULEB128(imp.min);
-                } else {
-                    data.writeUint8(0x01);
-                    data.writeULEB128(imp.min);
-                    data.writeULEB128(imp.max);
-                }
-
-            }
-
-        } else if (imp instanceof ImportedTable) {
-            data.writeUint8(0x01);
-            data.writeUint8(imp.reftype);
-            data.writeULEB128(imp.min);
-            if (imp.max !== null) {
-                data.writeULEB128(imp.max);
-            }
-        } else {
-            console.error("unsupported import type");
-            continue;
-        }
-    }
-
-    return buf;
-}
-
-
-function decodeFuncSection(data, len, mod) {
-    let end = data.offset + len;
-    let cnt = data.readULEB128();
-
-    let functions;
-    if (!mod.functions) {
-        mod.functions = [];
-    }
-
-    let types = mod.types;
-    /*let len2 = functypes.length;
-    for (let i = 0; i < len2; i++) {
-        functypes[i].count = 0;
-    }*/
-
-    functions = mod.functions;
-    while (data.offset < end) {
-        let typeidx = data.readULEB128();
-        let fn = new WasmFunction();
-        let type = types[typeidx];
-        fn.type = type;
-        type.count++;
-        functions.push(fn);
-    }
-    console.log("function vector count: %d", cnt);
-}
-
-function encodeFuncSection(mod) {
-
-    let secsz, totsz = 0;
-    let functions = mod.functions;
-    let types = mod.types;
-    let cnt, len = functions.length;
-    let start = 0;
-
-    // getting index where the imported functions ends.
-    for (let i = 0; i < len; i++) {
-        let func = functions[i];
-        if (!(func instanceof ImportedFunction)) {
-            start = i - 1;
-            break;
-        }
-    }
-
-    cnt = len - start;
-
-    for (let i = start; i < len; i++) {
-        let func = functions[i];
-        let typeidx = types.indexOf(func.type);
-        if (typeidx == -1)
-            throw new ReferenceError("type not found in vector");
-        totsz += lengthULEB128(typeidx);
-    }
-
-    totsz += lengthULEB128(cnt);
-    secsz = totsz;
-    totsz += lengthULEB128(secsz);
-
-    // actual encdong
-    let buf = new ArrayBuffer(totsz + 1);
-    let data = new ByteArray(buf);
-    data.writeUint8(SECTION_TYPE.FUNC);
-    data.writeULEB128(secsz);
-    data.writeULEB128(cnt);
-
-    for (let i = start; i < len; i++) {
-        let func = functions[i];
-        let typeidx = types.indexOf(func.type);
-        data.writeULEB128(typeidx);
-    }
-
-    return buf;
-}
-
-function decodeTableSection(data, len, mod) {
-    let end = data.offset + len;
-    let cnt = data.readULEB128();
-    let arr, tables = [];
-    if (!mod.tables)
-        mod.tables = [];
-    arr = mod.tables;
-    for (let i = 0; i < cnt; i++) {
-        let table = {};
-        table.reftype = data.readUint8();
-        let limits = data.readUint8();
-        if (limits == 0x00) {
-            table.min = data.readULEB128();
-        } else if (limits == 0x01) {
-            table.min = data.readULEB128();
-            table.max = data.readULEB128();
-        }
-        tables.push(table);
-        arr.push(table);
-    }
-
-    console.log("table vector count: %d", cnt);
-    console.log(tables);
-}
-
-function encodeTableSection(mod) {
-
-    let secsz, totsz = 0;
-    let tables = mod.tables;
-    let len = tables.length;
-
-    for (let i = 0; i < len; i++) {
-        let table = tables[i];
-        if (Number.isInteger(table.min) && Number.isInteger(table.max)) {
-            totsz += lengthULEB128(table.min);
-            totsz += lengthULEB128(table.max);
-        } else if (Number.isInteger(table.min) && Number.isInteger(table.max)) {
-            totsz += lengthULEB128(table.min);
-        } else {
-            throw new TypeError("invalid definition of table object");
-        }
-    }
-
-    totsz += len * 2; // for table.reftype + table.limits (type)
-    totsz += lengthULEB128(cnt);
-    secsz = totsz;
-    totsz += lengthULEB128(secsz);
-
-    // actual encdong
-    let buf = new ArrayBuffer(totsz + 1);
-    let data = new ByteArray(buf);
-    data.writeUint8(SECTION_TYPE.TABLE);
-    data.writeULEB128(secsz);
-    data.writeULEB128(cnt);
-
-    for (let i = start; i < len; i++) {
-        let table = tables[i];
-        data.writeUint8(table.reftype);
-        if (Number.isInteger(table.min) && Number.isInteger(table.max)) {
-            data.writeUint8(0x01);
-            data.writeULEB128(table.min);
-            data.writeULEB128(table.max);
-        } else if (Number.isInteger(table.min) && Number.isInteger(table.max)) {
-            data.writeUint8(0x00);
-            data.writeULEB128(table.min);
-        }
-    }
-
-    return buf;
-}
-
-function decodeMemorySection(data, len, mod) {
-    let end = data.offset + len;
-    let cnt = data.readULEB128();
-    let mems;
-    if (!mod.memory) {
-        mems = [];
-        mod.memory = mems;
-    } else {
-        mems = mod.memory;
-    }
-    while (data.offset < end) {
-        let limit = data.readUint8();
-        let obj = new WasmMemory();
-        if (limit == 0x01) {
-            obj.min = data.readULEB128();
-            obj.max = data.readULEB128();
-            obj.shared = false;
-        } else if (limit == 0x00) {
-            obj.min = data.readULEB128();
-            obj.shared = false;
-        } else if (limit == 0x02) {
-            obj.min = data.readULEB128();
-            obj.shared = true;
-        } else if (limit == 0x03) {
-            obj.min = data.readULEB128();
-            obj.max = data.readULEB128();
-            obj.shared = true;              
-        }
-        mems.push(obj);
-    }
-    console.log("memory vector count: %d", cnt);
-    console.log(mems);
-}
-
-function encodeMemorySection(mod) {
-
-    let secsz, totsz = 0;
-    let vector = mod.memory;
-    let len = vector.length;
-    let cnt = 0;
-
-    for (let i = 0; i < len; i++) {
-        let mem = vector[i];
-        if (mem instanceof ImportedMemory)
-            continue;
-
-        if (mem.shared) {
-
-            if (Number.isInteger(mem.min) && Number.isInteger(mem.max)) {
-                totsz += lengthULEB128(mem.min);
-                totsz += lengthULEB128(mem.max);
-            } else if (Number.isInteger(mem.min)) {
-                totsz += lengthULEB128(mem.min);
-            } else {
-                throw new TypeError("invalid memory definition");
-            }
-
-        } else {
-
-            if (Number.isInteger(mem.min) && Number.isInteger(mem.max)) {
-                totsz += lengthULEB128(mem.min);
-                totsz += lengthULEB128(mem.max);
-            } else if (Number.isInteger(mem.min)) {
-                totsz += lengthULEB128(mem.min);
-            } else {
-                throw new TypeError("invalid memory definition");
+                console.error("unsupported import type");
+                continue;
             }
         }
-        cnt++;
-    }
 
-    if (cnt == 0)
-        return null;
+        total += lengthULEB128(cnt);
+        let sz = lengthULEB128(total);
+        let buf = new ArrayBuffer(total + sz + 1);
+        let data = new ByteArray(buf);
+        data.writeUint8(SECTION_TYPE_IMPORT);
+        data.writeULEB128(total);
+        data.writeULEB128(cnt);
+        ylen = imports.length;
+        for (let y = 0; y < ylen; y++) {
+            let imp = imports[y];
+            let strlen = lengthBytesUTF8(imp.module);
+            data.writeULEB128(strlen);
+            data.writeUTF8Bytes(imp.module);
 
-    totsz += cnt; // accounts for the byte(s) used by mem.limits
-    totsz += lengthULEB128(cnt);
-    secsz = totsz;
-    totsz += lengthULEB128(totsz);
+            strlen = lengthBytesUTF8(imp.name);
+            data.writeULEB128(strlen);
+            data.writeUTF8Bytes(imp.name);
 
-    // actual encdong
-    let buf = new ArrayBuffer(totsz + 1);
-    let data = new ByteArray(buf);
-    data.writeUint8(SECTION_TYPE.MEMORY);
-    data.writeULEB128(totsz);
-    data.writeULEB128(cnt);
-
-    for (let i = 0; i < len; i++) {
-        let mem = vector[i];
-        if (mem instanceof ImportedMemory)
-            continue;
-
-        if (mem.shared) {
-            //
-            if (Number.isInteger(mem.min) && Number.isInteger(mem.max)) {
-                data.writeUint8(0x03);
-                data.writeULEB128(mem.min);
-                data.writeULEB128(mem.max);
-            } else if (Number.isInteger(mem.min)) {
-                data.writeUint8(0x02);
-                data.writeULEB128(mem.min);
-            }
-
-        } else {
-
-            if (Number.isInteger(mem.min) && Number.isInteger(mem.max)) {
-                data.writeUint8(0x01);
-                data.writeULEB128(mem.min);
-                data.writeULEB128(mem.max);
-            } else if (Number.isInteger(mem.min)) {
+            if (imp instanceof ImportedFunction) {
                 data.writeUint8(0x00);
-                data.writeULEB128(mem.min);
+                data.writeULEB128(imp.type.typeidx);
+            } else if (imp instanceof ImportedGlobal) {
+                data.writeUint8(0x03);
+                data.writeUint8(imp.type);
+                data.writeUint8(imp.mutable ? 1 : 0);
+            } else if (imp instanceof ImportedMemory) {
+                data.writeUint8(0x02);
+                if (imp.shared) {
+                    if (imp.max === null) {
+                        data.writeUint8(0x02);
+                        data.writeULEB128(imp.min, memPadTo);
+                    } else {
+                        data.writeUint8(0x03);
+                        data.writeULEB128(imp.min, memPadTo);
+                        data.writeULEB128(imp.max, memPadTo);
+                    }
+
+                } else {
+                    if (imp.max === null) {
+                        data.writeUint8(0x00);
+                        data.writeULEB128(imp.min, memPadTo);
+                    } else {
+                        data.writeUint8(0x01);
+                        data.writeULEB128(imp.min, memPadTo);
+                        data.writeULEB128(imp.max, memPadTo);
+                    }
+
+                }
+
+            } else if (imp instanceof ImportedTable) {
+                data.writeUint8(0x01);
+                data.writeUint8(imp.reftype);
+                data.writeULEB128(imp.min);
+                if (imp.max !== null) {
+                    data.writeULEB128(imp.max);
+                }
+            } else {
+                console.error("unsupported import type");
+                continue;
             }
         }
+
+        return buf;
     }
 
-    return buf;
+    static decode(module, data, size) {
 
+        let cnt = data.readULEB128();
+        let types = module.types;
+        let results = [];
+        for (let i = 0; i < cnt; i++) {
+            let mlen = data.readULEB128();
+            let mod = data.readUTF8Bytes(mlen);
+            let nlen = data.readULEB128();
+            let name = data.readUTF8Bytes(nlen);
+            let type = data.readUint8();
+            let imp;
+            if (type == 0x00) {         // function
+                imp = new ImportedFunction();
+                let typeidx = data.readULEB128();
+                imp.type = types[typeidx];
+                imp.type.count++; // increment refcount.
+                if (!module.functions) {
+                    module.functions = [];
+                }
+                module.functions.push(imp);
+            } else if (type == 0x01) {  // table
+                imp = new ImportedTable();
+                imp.reftype = data.readUint8();
+                let limit = data.readUint8();
+                if (limit == 0x01) {
+                    imp.min = data.readULEB128();
+                    imp.max = data.readULEB128();
+                } else if (limit == 0x00) {
+                    imp.min = data.readULEB128();
+                }
+                if (!module.tables) {
+                    module.tables = [];
+                }
+                module.tables.push(imp);
+            } else if (type == 0x02) {  // memory
+                let limit = data.readUint8();
+                if (limit == 0x01) {
+                    imp = new ImportedMemory();
+                    imp.min = data.readULEB128();
+                    imp.max = data.readULEB128();
+                    imp.shared = false;
+                } else if (limit == 0x00) {
+                    imp = new ImportedMemory();
+                    imp.min = data.readULEB128();
+                    imp.shared = false;
+                } else if (limit == 0x02) {
+                    imp = new ImportedMemory();
+                    imp.min = data.readULEB128();
+                    imp.shared = true;
+                } else if (limit == 0x03) {
+                    imp = new ImportedMemory();
+                    imp.min = data.readULEB128();
+                    imp.max = data.readULEB128();
+                    imp.shared = true;              
+                } else {
+                    console.error("found memory limit of type %d", type);
+                }
+                if (!module.memory) {
+                    module.memory = [];
+                }
+                module.memory.push(imp);
+            } else if (type == 0x03) {  // global
+                imp = new ImportedGlobal();
+                let t = data.readUint8();
+                imp.globaltype = type_name(t);
+                imp.type = t;
+                imp.mutable = data.readUint8() === 1;
+                if (!module.globals) {
+                    module.globals = [];
+                }
+                module.globals.push(imp);
+            } else {
+                console.error("found unsupported import type %d", type);
+                continue;
+            }
+
+            if (imp) {
+                //imp.type = export_type_name(type);
+                imp.module = mod;
+                imp.name = name;
+                results.push(imp);
+            }
+        }
+        
+        //console.log("import vector count: %d", cnt);
+        //console.log(results);
+        // TODO: map every existing module-name
+        let section = new WebAssemblyImportSection(module);
+        section.data = results;
+        module.imports = results;
+        return section;
+    }
 }
 
-function decodeGlobalSection(data, len, mod) {
-    let end = data.offset + len;
-    let cnt = data.readULEB128();
-    let results = [];
-    let arr;
-    if (!mod.globals) {
-        mod.globals = [];
+
+class WebAssemblyFunctionSection extends WebAssemblySection {
+
+    constructor(module) {
+        super(SECTION_TYPE_FUNC, module);
+        
     }
-    arr = mod.globals;
-    while (data.offset < end) {
-        let type = data.readUint8();
-        let mut = data.readUint8();
-        let opcode = decodeByteCode(data, mod);
-        let obj = new WasmGlobal(type, (mut === 1), opcode.opcodes);
-        results.push(obj);
-        arr.push(obj);
-        data.offset = opcode.end;
+
+    encode(options) {
+
+        let mod = this.module;
+        let secsz, totsz = 0;
+        let functions = mod.functions;
+        let types = mod.types;
+        let cnt, len = functions.length;
+        let start = 0;
+
+        // getting index where the imported functions ends.
+        for (let i = 0; i < len; i++) {
+            let func = functions[i];
+            if (!(func instanceof ImportedFunction)) {
+                start = i;
+                break;
+            }
+        }
+
+        cnt = len - start;
+
+        for (let i = start; i < len; i++) {
+            let func = functions[i];
+            if (func instanceof ImportedFunction)
+                throw new TypeError("found missplaced import");
+
+            let typeidx = types.indexOf(func.type);
+            if (typeidx == -1)
+                throw new ReferenceError("type not found in vector");
+            totsz += lengthULEB128(typeidx);
+        }
+
+        totsz += lengthULEB128(cnt);
+        secsz = totsz;
+        totsz += lengthULEB128(secsz);
+
+        // actual encdong
+        let buf = new ArrayBuffer(totsz + 1);
+        let data = new ByteArray(buf);
+        data.writeUint8(SECTION_TYPE_FUNC);
+        data.writeULEB128(secsz);
+        data.writeULEB128(cnt);
+
+        for (let i = start; i < len; i++) {
+            let func = functions[i];
+            let typeidx = types.indexOf(func.type);
+            data.writeULEB128(typeidx);
+        }
+
+        return buf;
     }
-    //console.log("global vector count: %d", cnt);
-    //console.log(results);
+
+    static decode(module, data, size) {
+        
+        let cnt = data.readULEB128();
+
+        let functions;
+        if (!module.functions) {
+            module.functions = [];
+        }
+
+        let types = module.types;
+        /*let len2 = functypes.length;
+        for (let i = 0; i < len2; i++) {
+            functypes[i].count = 0;
+        }*/
+
+        functions = module.functions;
+        for (let i = 0; i < cnt; i++) {
+            let typeidx = data.readULEB128();
+            let fn = new WasmFunction();
+            let type = types[typeidx];
+            fn.type = type;
+            type.count++;
+            functions.push(fn);
+        }
+        console.log("function vector count: %d", cnt);
+
+        return new WebAssemblyFunctionSection(module);
+    }
 }
 
-function encodeGlobalSection(mod) {
 
-    let arr = [];
-    let globals = mod.globals;
-    let len = globals.length;
-    for (let i = 0; i < len; i++) {
-        let glob = globals[i];
-        glob.index = i;
-        if (glob instanceof ImportedGlobal)
-            continue;
-        arr.push(glob);
+class WebAssemblyTableSection extends WebAssemblySection {
+
+    constructor(module) {
+        super(SECTION_TYPE_TABLE, module);
+        
     }
 
-    let secsz = 0;
-    secsz += lengthULEB128(arr.length);
-    len = arr.length;
-    for (let i = 0; i < len; i++) {
-        let glob = arr[i];
-        secsz += byteCodeComputeByteLength(mod, glob.init);
-        secsz += 2;
+    encode(options) {
+
+        let mod = this.module;
+        let secsz, totsz = 0;
+        let tables = mod.tables;
+        let len = tables.length;
+        let start = 0;
+        let cnt = 0;
+
+        // get the number of imports in begining.
+        for (let i = 0; i < len; i++) {
+            let table = tables[i];
+            if (!(table instanceof ImportedTable)) {
+                start = i;
+                break;
+            }
+        }
+
+        for (let i = start; i < len; i++) {
+            let table = tables[i];
+            if (table instanceof ImportedTable)
+                throw new ReferenceError("imports mixed");
+
+            if (Number.isInteger(table.min) && Number.isInteger(table.max)) {
+                totsz += lengthULEB128(table.min);
+                totsz += lengthULEB128(table.max);
+            } else if (Number.isInteger(table.min) && Number.isInteger(table.max)) {
+                totsz += lengthULEB128(table.min);
+            } else {
+                throw new TypeError("invalid definition of table object");
+            }
+            cnt++;
+        }
+
+        totsz += cnt * 2; // for table.reftype + table.limits (type)
+        totsz += lengthULEB128(cnt);
+        secsz = totsz;
+        totsz += lengthULEB128(secsz);
+
+        // actual encdong
+        let buf = new ArrayBuffer(totsz + 1);
+        let data = new ByteArray(buf);
+        data.writeUint8(SECTION_TYPE_TABLE);
+        data.writeULEB128(secsz);
+        data.writeULEB128(cnt);
+
+        for (let i = start; i < len; i++) {
+            let table = tables[i];
+            data.writeUint8(table.reftype);
+            if (Number.isInteger(table.min) && Number.isInteger(table.max)) {
+                data.writeUint8(0x01);
+                data.writeULEB128(table.min);
+                data.writeULEB128(table.max);
+            } else if (Number.isInteger(table.min) && Number.isInteger(table.max)) {
+                data.writeUint8(0x00);
+                data.writeULEB128(table.min);
+            }
+        }
+
+        return buf;
     }
 
-    let totsz = lengthULEB128(secsz);
-    totsz += secsz + 1;
+    static decode(module, data, size) {
+        
+        let cnt = data.readULEB128();
+        let vector, tables = [];
+        if (!module.tables)
+            module.tables = [];
+        vector = module.tables;
+        for (let i = 0; i < cnt; i++) {
+            let table = {};
+            table.reftype = data.readUint8();
+            let limits = data.readUint8();
+            if (limits == 0x00) {
+                table.min = data.readULEB128();
+            } else if (limits == 0x01) {
+                table.min = data.readULEB128();
+                table.max = data.readULEB128();
+            }
+            tables.push(table);
+            vector.push(table);
+        }
 
-    let buf = new ArrayBuffer(totsz);
-    let data = new ByteArray(buf);
-    data.writeUint8(0x06);
-    data.writeULEB128(secsz);
-    data.writeULEB128(arr.length);
-    for (let i = 0; i < len; i++) {
-        let glob = arr[i];
-        data.writeUint8(glob.type);
-        data.writeUint8(glob.mutable);
-        encodeByteCode(mod, glob.init, data);
+        console.log("table vector count: %d", cnt);
+        console.log(tables);
+
+        return new WebAssemblyTableSection(module);
     }
-
-    return buf;
 }
+
+class WebAssemblyMemorySection extends WebAssemblySection {
+
+    constructor(module) {
+        super(SECTION_TYPE_MEMORY, module);
+        
+    }
+
+    encode(options) {
+
+        let mod = this.module;
+        let secsz, totsz = 0;
+        let vector = mod.memory;
+        let len = vector.length;
+        let cnt = 0;
+        let memPadTo = 4;
+
+        for (let i = 0; i < len; i++) {
+            let mem = vector[i];
+            if (mem instanceof ImportedMemory)
+                continue;
+
+            if (mem.shared) {
+
+                if (Number.isInteger(mem.min) && Number.isInteger(mem.max)) {
+                    totsz += lengthULEB128(mem.min, memPadTo);
+                    totsz += lengthULEB128(mem.max, memPadTo);
+                } else if (Number.isInteger(mem.min)) {
+                    totsz += lengthULEB128(mem.min, memPadTo);
+                } else {
+                    throw new TypeError("invalid memory definition");
+                }
+
+            } else {
+
+                if (Number.isInteger(mem.min) && Number.isInteger(mem.max)) {
+                    totsz += lengthULEB128(mem.min, memPadTo);
+                    totsz += lengthULEB128(mem.max, memPadTo);
+                } else if (Number.isInteger(mem.min)) {
+                    totsz += lengthULEB128(mem.min, memPadTo);
+                } else {
+                    throw new TypeError("invalid memory definition");
+                }
+            }
+            cnt++;
+        }
+
+        totsz += cnt; // accounts for the byte(s) used by mem.limits
+        totsz += lengthULEB128(cnt);
+        secsz = totsz;
+        totsz += lengthULEB128(totsz);
+
+        // actual encdong
+        let buf = new ArrayBuffer(totsz + 1);
+        let data = new ByteArray(buf);
+        data.writeUint8(SECTION_TYPE_MEMORY);
+        data.writeULEB128(secsz);
+        data.writeULEB128(cnt);
+
+        for (let i = 0; i < len; i++) {
+            let mem = vector[i];
+            if (mem instanceof ImportedMemory)
+                continue;
+
+            if (mem.shared) {
+                //
+                if (Number.isInteger(mem.min) && Number.isInteger(mem.max)) {
+                    data.writeUint8(0x03);
+                    data.writeULEB128(mem.min, memPadTo);
+                    data.writeULEB128(mem.max, memPadTo);
+                } else if (Number.isInteger(mem.min)) {
+                    data.writeUint8(0x02);
+                    data.writeULEB128(mem.min, memPadTo);
+                }
+
+            } else {
+
+                if (Number.isInteger(mem.min) && Number.isInteger(mem.max)) {
+                    data.writeUint8(0x01);
+                    data.writeULEB128(mem.min, memPadTo);
+                    data.writeULEB128(mem.max, memPadTo);
+                } else if (Number.isInteger(mem.min)) {
+                    data.writeUint8(0x00);
+                    data.writeULEB128(mem.min, memPadTo);
+                }
+            }
+        }
+
+        return buf;
+    }
+
+    static decode(module, data, size) {
+        let end = data.offset + size;
+        let cnt = data.readULEB128();
+        let vector;
+        if (!module.memory) {
+            vector = [];
+            module.memory = vector;
+        } else {
+            vector = module.memory;
+        }
+
+        for (let i = 0; i < cnt; i++) {
+            let limit = data.readUint8();
+            let mem = new WasmMemory();
+            if (limit == 0x01) {
+                mem.min = data.readULEB128();
+                mem.max = data.readULEB128();
+                mem.shared = false;
+            } else if (limit == 0x00) {
+                mem.min = data.readULEB128();
+                mem.shared = false;
+            } else if (limit == 0x02) {
+                mem.min = data.readULEB128();
+                mem.shared = true;
+            } else if (limit == 0x03) {
+                mem.min = data.readULEB128();
+                mem.max = data.readULEB128();
+                mem.shared = true;              
+            }
+            vector.push(mem);
+        }
+
+        console.log("memory vector count: %d", cnt);
+        console.log(vector);
+
+        return new WebAssemblyMemorySection(module);
+    }
+}
+
+
+class WebAssemblyGlobalSection extends WebAssemblySection {
+
+    constructor(module) {
+        super(SECTION_TYPE_GLOBAL, module);
+        
+    }
+
+    encode(options) {
+        let vector = [];
+        let mod = this.module;
+        let globals = mod.globals;
+        let len = globals.length;
+        for (let i = 0; i < len; i++) {
+            let glob = globals[i];
+            glob.index = i;
+            if (glob instanceof ImportedGlobal)
+                continue;
+            vector.push(glob);
+        }
+
+        let secsz = 0;
+        secsz += lengthULEB128(vector.length);
+        len = vector.length;
+        for (let i = 0; i < len; i++) {
+            let glob = vector[i];
+            secsz += byteCodeComputeByteLength(mod, glob.init, null);
+            secsz += 2;
+        }
+
+        let totsz = lengthULEB128(secsz);
+        totsz += secsz + 1;
+
+        let buf = new ArrayBuffer(totsz);
+        let data = new ByteArray(buf);
+        data.writeUint8(SECTION_TYPE_GLOBAL);
+        data.writeULEB128(secsz);
+        data.writeULEB128(vector.length);
+        for (let i = 0; i < len; i++) {
+            let glob = vector[i];
+            data.writeUint8(glob.type);
+            data.writeUint8(glob.mutable);
+            encodeByteCode(mod, glob.init, null, data);
+        }
+
+        return buf;
+    }
+
+    static decode(module, data, size) {
+
+        let cnt = data.readULEB128();
+        let vector;
+        if (!module.globals) {
+            vector = [];
+            module.globals = vector;
+        } else {
+            vector = module.globals;
+        }
+        
+        for (let i = 0; i < cnt; i++) {
+            let type = data.readUint8();
+            let mut = data.readUint8();
+            let opcode = decodeByteCode(data, module);
+            let obj = new WasmGlobal(type, (mut === 1), opcode.opcodes);
+            vector.push(obj);
+            data.offset = opcode.end;
+        }
+
+        return new WebAssemblyGlobalSection(module);
+    }
+}
+
 
 class ExportedFunction {
 
@@ -4628,277 +5021,520 @@ class ExportedGlobal {
     }
 };
 
-function decodeExportSection(data, len, mod) {
-    let end = data.offset + len;
-    let cnt = data.readULEB128();
-    let results = [];
-    let results2 = [];
-    while (data.offset < end) {
-        let nlen = data.readULEB128();
-        let name = data.readUTF8Bytes(nlen);
-        let type = data.readUint8();
-        let idx = data.readULEB128();
-        results.push({
-            name: name,
-            type: export_type_name(type),
-            index: idx,
-        });
+class WebAssemblyExportSection extends WebAssemblySection {
 
-        if (type == 0x00) {
-            let exp = new ExportedFunction();
-            exp.name = name;
-            exp.function = mod.functions[idx];
-            results2.push(exp);
-        } else if (type == 0x01) {
-            let exp = new ExportedTable();
-            exp.name = name;
-            exp.table = mod.tables[idx];
-            results2.push(exp);
-        } else if (type == 0x02) {
-            let exp = new ExportedMemory();
-            exp.name = name;
-            exp.memory = mod.memory[idx];
-            results2.push(exp);
-        } else if (type == 0x03) {
-            let exp = new ExportedGlobal();
-            exp.name = name;
-            exp.global = mod.globals[idx];
-            results2.push(exp);
-        } else {
-            console.warn("export of type %d is not supported", type);
-        }
-    }
-    console.log("export vector count: %d", cnt);
-    //console.log(results);
-    //console.log(results2);
-
-    mod.exports = results2;
-}
-
-function encodeExportSection(mod) {
-
-    let exported = mod.exports;
-    let indexes = [];
-    let secsz = lengthULEB128(exported.length);
-    secsz += exported.length; // each export have a type-id
-    let len = exported.length;
-    for (let i = 0; i < len; i++) {
-        let exp = exported[i];
-        let nlen = lengthBytesUTF8(exp.name);
-        secsz += nlen;
-        secsz += lengthULEB128(nlen);
-        let idx = -1;
-        if (exp instanceof ExportedFunction) {
-            idx = mod.functions.indexOf(exp.function);
-        } else if (exp instanceof ExportedTable) {
-            idx = mod.tables.indexOf(exp.table);
-        } else if (exp instanceof ExportedMemory) {
-            idx = mod.memory.indexOf(exp.memory);
-        } else if (exp instanceof ExportedGlobal) {
-            idx = mod.globals.indexOf(exp.global);
-        }
-
-        if (idx === -1)
-            throw TypeError("invalid reference or type");
-        indexes.push(idx);
-        secsz += lengthULEB128(idx);
+    constructor(module) {
+        super(SECTION_TYPE_EXPORT, module);
+        this.data = undefined;
     }
 
-    let totsz = secsz + 1;
-    totsz += lengthULEB128(secsz);
-    let buf = new ArrayBuffer(totsz);
-    let data = new ByteArray(buf);
-    data.writeUint8(0x07);
-    data.writeULEB128(secsz);
-    data.writeULEB128(len);
+    encode(options) {
 
-    for (let i = 0; i < len; i++) {
-        let exp = exported[i];
-        let idx = indexes[i];
-        let strlen = lengthBytesUTF8(exp.name);
-        data.writeULEB128(strlen);
-        data.writeUTF8Bytes(exp.name);
-        if (exp instanceof ExportedFunction) {
-            data.writeUint8(0x00);
-            data.writeULEB128(idx);
-        } else if (exp instanceof ExportedTable) {
-            data.writeUint8(0x01);
-            data.writeULEB128(idx);
-        } else if (exp instanceof ExportedMemory) {
-            data.writeUint8(0x02);
-            data.writeULEB128(idx);
-        } else if (exp instanceof ExportedGlobal) {
-            data.writeUint8(0x03);
-            data.writeULEB128(idx);
+        let mod = this.module;
+        let exported = mod.exports;
+        let indexes = [];
+        let secsz = lengthULEB128(exported.length);
+        secsz += exported.length; // each export have a type-id
+        let len = exported.length;
+        for (let i = 0; i < len; i++) {
+            let exp = exported[i];
+            let nlen = lengthBytesUTF8(exp.name);
+            secsz += nlen;
+            secsz += lengthULEB128(nlen);
+            let idx = -1;
+            if (exp instanceof ExportedFunction) {
+                idx = mod.functions.indexOf(exp.function);
+            } else if (exp instanceof ExportedTable) {
+                idx = mod.tables.indexOf(exp.table);
+            } else if (exp instanceof ExportedMemory) {
+                idx = mod.memory.indexOf(exp.memory);
+            } else if (exp instanceof ExportedGlobal) {
+                idx = mod.globals.indexOf(exp.global);
+            }
+
+            if (idx === -1)
+                throw TypeError("invalid reference or type");
+            indexes.push(idx);
+            secsz += lengthULEB128(idx);
         }
+
+        let totsz = secsz + 1;
+        totsz += lengthULEB128(secsz);
+        let buf = new ArrayBuffer(totsz);
+        let data = new ByteArray(buf);
+        data.writeUint8(SECTION_TYPE_EXPORT);
+        data.writeULEB128(secsz);
+        data.writeULEB128(len);
+
+        for (let i = 0; i < len; i++) {
+            let exp = exported[i];
+            let idx = indexes[i];
+            let strlen = lengthBytesUTF8(exp.name);
+            data.writeULEB128(strlen);
+            data.writeUTF8Bytes(exp.name);
+            if (exp instanceof ExportedFunction) {
+                data.writeUint8(0x00);
+                data.writeULEB128(idx);
+            } else if (exp instanceof ExportedTable) {
+                data.writeUint8(0x01);
+                data.writeULEB128(idx);
+            } else if (exp instanceof ExportedMemory) {
+                data.writeUint8(0x02);
+                data.writeULEB128(idx);
+            } else if (exp instanceof ExportedGlobal) {
+                data.writeUint8(0x03);
+                data.writeULEB128(idx);
+            }
+        }
+
+        return buf;
     }
 
-    return buf;
+    static decode(module, data, size) {
+
+        let cnt = data.readULEB128();
+        let vector = [];
+        for (let i = 0; i < cnt; i++) {
+
+            let nlen = data.readULEB128();
+            let name = data.readUTF8Bytes(nlen);
+            let type = data.readUint8();
+            let idx = data.readULEB128();
+
+            if (type == 0x00) {
+                let exp = new ExportedFunction();
+                exp.name = name;
+                exp.function = module.functions[idx];
+                vector.push(exp);
+            } else if (type == 0x01) {
+                let exp = new ExportedTable();
+                exp.name = name;
+                exp.table = module.tables[idx];
+                vector.push(exp);
+            } else if (type == 0x02) {
+                let exp = new ExportedMemory();
+                exp.name = name;
+                exp.memory = module.memory[idx];
+                vector.push(exp);
+            } else if (type == 0x03) {
+                let exp = new ExportedGlobal();
+                exp.name = name;
+                exp.global = module.globals[idx];
+                vector.push(exp);
+            } else {
+                console.warn("export of type %d is not supported", type);
+            }
+        }
+        console.log("export vector count: %d", cnt);
+        //console.log(results);
+        //console.log(vector);
+
+        let section = new WebAssemblyExportSection(module);
+        section.data = vector;
+        module["exports"] = vector;
+        return section;
+    }
 }
 
-function decodeStartSection(data, len, mod) {
-    let funcidx = data.readULEB128();
-    let func = mod.functions[funcidx];
-    mod.startfn = func;
-    console.log("start section entry-fn-idx: %d", funcidx);
+
+class WebAssemblyStartSection extends WebAssemblySection {
+
+    constructor(module) {
+        super(SECTION_TYPE_START, module);
+        
+    }
+
+    encode(options) {
+
+        let mod = this.module;
+        let secsz, totsz = 0;
+        let funcidx = mod.functions.indexOf(mod.startfn);
+        if (funcidx == -1)
+            throw new ReferenceError("mod.startfn not defined in mod.functions");
+
+        totsz += lengthULEB128(funcidx);
+        secsz = totsz;
+        totsz += lengthULEB128(totsz);
+
+        // actual encdong
+        let buf = new ArrayBuffer(totsz + 1);
+        let data = new ByteArray(buf);
+        data.writeUint8(SECTION_TYPE_START);
+        data.writeULEB128(secsz);
+        data.writeULEB128(funcidx);
+
+        return buf;
+    }
+
+    static decode(module, data, size) {
+        let funcidx = data.readULEB128();
+        let func = mod.functions[funcidx];
+        mod.startfn = func;
+        console.log("start section entry-fn-idx: %d", funcidx);
+
+        return new WebAssemblyStartSection(module);
+    }
 }
 
-function encodeStartSection(mod) {
-    let secsz, totsz = 0;
-    let funcidx = mod.functions.indexOf(mod.startfn);
-    if (funcidx == -1)
-        throw new ReferenceError("mod.startfn not defined in mod.functions");
+class WasmElementSegment {
 
-    totsz += lengthULEB128(funcidx);
-    secsz = totsz;
-    totsz += lengthULEB128(totsz);
+    constructor() {
+        this.prefix = undefined;
+        this.opcodes = undefined;
+        this.vector = undefined;
+        this.count = undefined;
+    }
+}
 
-    // actual encdong
-    let buf = new ArrayBuffer(totsz + 1);
-    let data = new ByteArray(buf);
-    data.writeUint8(SECTION_TYPE.START);
-    data.writeULEB128(secsz);
-    data.writeULEB128(funcidx);
+class WebAssemblyElementSection extends WebAssemblySection {
 
-    return buf;
+    constructor(module) {
+        super(SECTION_TYPE_ELEMENT, module);
+        
+    }
+
+    encode(options) {
+
+        let mod = this.module;
+        let secsz, totsz = 0;
+        let functions = mod.functions;
+        let elementSegments = mod.elementSegments;
+        let ylen = elementSegments.length;
+
+        for (let y = 0; y < ylen; y++) {
+            let element = elementSegments[y];
+            totsz += byteCodeComputeByteLength(mod, element.opcodes, null);
+            let vector = element.vector;
+            let xlen = vector.length;
+            for (let x = 0; x < xlen; x++) {
+                let func = vector[x];
+                let funcidx = functions.indexOf(func);
+                if (funcidx === -1)
+                    throw ReferenceError("function in element is not defined in module.functions");
+                totsz += lengthULEB128(funcidx);
+            }
+
+            totsz += lengthULEB128(xlen);
+        }
+
+        totsz += ylen; // for element.prefix (one byte per element item)
+        totsz += lengthULEB128(ylen);
+        secsz = totsz;
+        totsz += lengthULEB128(secsz);
+
+        // actual encdong
+        let buf = new ArrayBuffer(totsz + 1);
+        let data = new ByteArray(buf);
+        data.writeUint8(SECTION_TYPE_ELEMENT);
+        data.writeULEB128(secsz);
+        data.writeULEB128(ylen);
+
+        for (let y = 0; y < ylen; y++) {
+            let element = elementSegments[y];
+            data.writeUint8(element.prefix);
+            encodeByteCode(mod, element.opcodes, null, data);
+            let vector = element.vector;
+            let xlen = vector.length;
+            data.writeULEB128(xlen);
+            for (let x = 0; x < xlen; x++) {
+                let func = vector[x];
+                let funcidx = functions.indexOf(func);
+                data.writeULEB128(funcidx);
+            }
+        }
+
+        return buf;
+
+    }
+
+    static decode(module, data, size) {
+        
+        let cnt = data.readULEB128();
+        let functions = module.functions;
+        let elementSegments = [];
+        module.elementSegments = elementSegments;
+        for (let i = 0; i < cnt; i++) {
+            let prefix = data.readULEB128();
+            if (prefix == 0x00) {
+                let expr = decodeByteCode(data, module);
+                let idx;
+                if (expr.opcodes.length == 2 && expr.opcodes[0].opcode == 0x41 && expr.opcodes[1].opcode == 0x0B) {
+                    idx = expr.opcodes[0].value;
+                } else if (expr.opcodes.length == 2 && expr.opcodes[0].opcode == 0x23 && expr.opcodes[1].opcode == 0x0B) {
+                    console.warn("implement support for global.get");
+                    idx = 1;
+                } else {
+                    console.log(expr);
+                    throw new TypeError("only static offset expressions supported ATM");
+                }
+                console.log(expr);
+                let vlen = data.readULEB128();
+                let tableidx = 0;
+                let table;
+                if (Array.isArray(module.tables[tableidx].contents)) {
+                    table = module.tables[0].contents;
+                } else {
+                    table = [undefined];
+                    module.tables[0].contents = table;
+                }
+                let vec = [];
+                //vec.length = idx + vlen;
+                for (let x = 0; x < vlen; x++) {
+                    let funcidx = data.readULEB128();
+                    let fn = functions[funcidx];
+                    table[idx++] = fn;
+                    vec.push(fn);
+                }
+
+                let element = new WasmElementSegment();
+                element.prefix = prefix;
+                element.opcodes = expr.opcodes;
+                element.vector = vec;
+                element.count = vlen;
+                elementSegments.push(element);
+
+                //console.log("prefix: %d expr: %o vec(funcidx) %o", prefix, expr, vec);
+            }
+        }
+
+        //console.log("element section vector count: %d", cnt);
+
+        return new WebAssemblyElementSection(module);
+    }
 }
 
 function decodeElementSection(data, secsz, mod) {
-    let end = data.offset + secsz;
-    let cnt = data.readULEB128();
-    let functions = mod.functions;
-    let elementSegments = [];
-    mod.elementSegments = elementSegments;
-    for (let i = 0; i < cnt; i++) {
-        let prefix = data.readULEB128();
-        if (prefix == 0x00) {
-            let expr = decodeByteCode(data, mod);
-            let idx;
-            if (expr.opcodes.length == 2 && expr.opcodes[0].opcode == 0x41 && expr.opcodes[1].opcode == 0x0B) {
-                idx = expr.opcodes[0].value;
-            } else if (expr.opcodes.length == 2 && expr.opcodes[0].opcode == 0x23 && expr.opcodes[1].opcode == 0x0B) {
-                console.warn("implement support for global.get");
-                idx = 1;
-            } else {
-                console.log(expr);
-                throw new TypeError("only static offset expressions supported ATM");
-            }
-            console.log(expr);
-            let vlen = data.readULEB128();
-            let tableidx = 0;
-            let table;
-            if (Array.isArray(mod.tables[tableidx].contents)) {
-                table = mod.tables[0].contents;
-            } else {
-                table = [undefined];
-                mod.tables[0].contents = table;
-            }
-            let vec = [];
-            //vec.length = idx + vlen;
-            for (let x = 0; x < vlen; x++) {
-                let funcidx = data.readULEB128();
-                let fn = functions[funcidx];
-                table[idx++] = fn;
-                vec.push(fn);
-            }
-
-            let element = {};
-            element.prefix = prefix;
-            element.opcodes = expr.opcodes;
-            element.vector = vec;
-            element.count = vlen;
-            elementSegments.push(element);
-
-            //console.log("prefix: %d expr: %o vec(funcidx) %o", prefix, expr, vec);
-        }
-    }
-
-    //console.log("element section vector count: %d", cnt);
+    
 }
 
 function encodeElementSection(mod) {
 
-    let secsz, totsz = 0;
-    let functions = mod.functions;
-    let elementSegments = mod.elementSegments;
-    let ylen = elementSegments.length;
 
-    for (let y = 0; y < ylen; y++) {
-        let element = elementSegments[y];
-        totsz += byteCodeComputeByteLength(mod, element.opcodes);
-        let vector = element.vector;
-        let xlen = vector.length;
-        for (let x = 0; x < xlen; x++) {
-            let func = vector[x];
-            let funcidx = functions.indexOf(func);
-            if (funcidx === -1)
-                throw ReferenceError("function in element is not defined in module.functions");
-            totsz += lengthULEB128(funcidx);
-        }
-
-        totsz += lengthULEB128(xlen);
-    }
-
-    totsz += ylen; // for element.prefix (one byte per element item)
-    totsz += lengthULEB128(ylen);
-    secsz = totsz;
-    totsz += lengthULEB128(secsz);
-
-    // actual encdong
-    let buf = new ArrayBuffer(totsz + 1);
-    let data = new ByteArray(buf);
-    data.writeUint8(SECTION_TYPE.ELEMENT);
-    data.writeULEB128(secsz);
-    data.writeULEB128(ylen);
-
-    for (let y = 0; y < ylen; y++) {
-        let element = elementSegments[y];
-        data.writeUint8(element.prefix);
-        encodeByteCode(mod, element.opcodes, data);
-        let vector = element.vector;
-        let xlen = vector.length;
-        data.writeULEB128(xlen);
-        for (let x = 0; x < xlen; x++) {
-            let func = vector[x];
-            let funcidx = functions.indexOf(func);
-            data.writeULEB128(funcidx);
-        }
-    }
-
-    return buf;
 }
 
-function decodeCodeSection(data, len, mod, start) {
-    let end = data.offset + len;
-    let cnt = data.readULEB128();
-    let idx = 0;
+/**
+ * Holds cache for the input wasm binary.
+ */
+class WebAssemblyModuleCache {
 
-    let functions = mod.functions;
-
-    for (let y = 0; y < cnt; y++) {
-        let tmp1 = data.offset;
-        let bytesz = data.readULEB128();
-        let tmp = data.offset;
-        let lcnt = data.readULEB128();
-        let locals = lcnt > 0 ? [] : null;
-        for(let i = 0;i < lcnt;i++) {
-            let n = data.readULEB128();
-            let t = data.readUint8();
-            locals.push({count: n, type: t});
-        }
-        let opcode_start = data.offset;
-        let opcode_end = tmp + bytesz;
-        let opcodes = decodeByteCode(data, mod);
-        let func = functions[start++];
-        func.locals = locals;
-        func.codeStart = tmp1;
-        func.opcode_start = opcode_start;
-        func.opcode_end = opcode_end;
-        func.opcodes = opcodes.opcodes;
-        data.offset = opcode_end;
-    }
-    console.log("code vector count: %d", cnt);
 }
+
+class WasmLocal {
+
+    constructor(type) {
+        this.type = type;
+        this.usage = 0;
+    }
+}
+
+class WebAssemblyCodeSection extends WebAssemblySection {
+
+    constructor(module) {
+        super(SECTION_TYPE_CODE, module);
+        
+    }
+
+    encode(options) {
+
+        let mod = this.module;
+        let funcvec = mod.functions;
+        let anyDirty = false;
+        let len = funcvec.length;
+        let org = mod._buffer;
+        let start = 0;
+        // first lets find where the our first non-import appears.
+        for (let i = 0; i < len; i++) {
+            let func = funcvec[i];
+            if (!(func instanceof ImportedFunction)) {
+                start = i;
+                break;
+            }
+        }
+
+        for (let i = start; i < len; i++) {
+            let func = funcvec[i];
+            if (func._opcodeDirty === true) {
+                anyDirty = true;
+                break;
+            }
+        }
+
+        if (!anyDirty) {
+            console.log("nothing changed in code section");
+            let end = section.dataOffset + section.size;
+            return org.slice(section.offset, end);
+        }
+
+        let sec_sz = 0;
+        let buffers = [];
+        let modcnt = 0;
+
+        for (let i = start; i < len; i++) {
+            let func = funcvec[i];
+            /*let debug = false;
+
+            if (i == 214) {
+                debugger;
+            }*/
+
+            let localsmapped;
+            let subsz = 0;
+
+            let locals = func.locals;
+            if (locals && locals.length) {
+                localsmapped = [];
+                let count = 0;              // current count of type
+                let type;                   // current type
+
+                let xlen = locals.length;
+                let narg = func.narg;
+                for (let x = narg; x < xlen; x++) {
+                    let local = locals[x];
+                    if (local.type != type) {
+                        if (type !== undefined)
+                            localsmapped.push({type: type, count: count});
+                        type = local.type;
+                        count = 1; // reset
+                    } else {
+                        count++;
+                    }
+                }
+
+                // will always miss the last one if any.
+                if (count > 0) {
+                    localsmapped.push({type: type, count: count});
+                }
+
+                xlen = localsmapped.length;
+                subsz += lengthULEB128(xlen);
+                for (let x = 0; x < xlen; x++) {
+                    let local = localsmapped[x];
+                    subsz += lengthULEB128(local.count);
+                    subsz += 1;
+                }
+
+            } else {
+                subsz += lengthULEB128(0);
+            }
+
+            let opcodesz = byteCodeComputeByteLength(mod, func.opcodes, func.locals);
+            let totsz = subsz + opcodesz;
+            totsz += lengthULEB128(subsz + opcodesz);
+            let buf = new ArrayBuffer(totsz);
+            let data = new ByteArray(buf);
+            buffers.push(buf);
+            data.writeULEB128(subsz + opcodesz);
+            let xlen = localsmapped ? localsmapped.length : 0;
+            data.writeULEB128(xlen);
+            if (xlen > 0) {
+                for (let x = 0; x < xlen; x++) {
+                    let local = localsmapped[x];
+                    data.writeULEB128(local.count);
+                    data.writeUint8(local.type);
+                }
+            }
+            let tmp = data.offset;
+            encodeByteCode(mod, func.opcodes, func.locals, data);
+            if (data.offset - tmp != opcodesz) {
+                console.error("[%d] generated opcodes %d !== %d (real vs. computed)", i, data.offset - tmp, opcodesz);
+            }
+            sec_sz += buf.byteLength;
+            modcnt++;
+
+            // 1. encode opcodes but hold for pushing it into buffers.
+            // 2. pre-compute locals + locals-count + entry-size
+            // 3. encode the above, and push it into buffers.
+            // 4. push opcode into buffers.
+        }
+
+        let cnt = funcvec.length - start;
+        let cntsz = lengthULEB128(cnt);
+        let headsz = 1 + lengthULEB128(sec_sz + cntsz); // section-type + section-length;
+        headsz += cntsz;
+        let header = new ArrayBuffer(headsz);
+        let data = new ByteArray(header);
+        data.writeUint8(SECTION_TYPE_CODE);
+        data.writeULEB128(sec_sz + cntsz);
+        data.writeULEB128(cnt);
+        buffers.unshift(header);
+
+        console.log("encoded %d of which %d where modified", cnt, modcnt);
+
+        return buffers;
+    }
+
+    static decode(module, data, size) {
+        
+        let end = data.offset + size;
+        let cnt = data.readULEB128();
+        let idx = 0;
+        let functions = module.functions;
+        let start = 0;
+
+        // first lets find where the our first non-import appears.
+        for (let i = 0; i < functions.length; i++) {
+            let func = functions[i];
+            if (!(func instanceof ImportedFunction)) {
+                start = i;
+                break;
+            }
+        }
+
+        for (let y = 0; y < cnt; y++) {
+            let tmp1 = data.offset;
+            let bytesz = data.readULEB128();
+            let tmp = data.offset;
+            let lcnt = data.readULEB128();
+            let _locals;
+            let tlocals;
+            let func = functions[start++];
+            let type = func.type;
+            if (type.argv && type.argv.length > 0) {
+                _locals = [];
+                // arguments or aka. param(s) are also locals.
+                let argv = type.argv;
+                let zlen = argv.length
+                for(let z = 0;z < zlen;z++) {
+                    let t = argv[z];
+                    let local = new WasmLocal(t);
+                    _locals.push(local);
+                }
+            }
+            if (!_locals && lcnt > 0) {
+                _locals = [];
+            }
+            if (lcnt > 0)
+                tlocals = [];
+            for(let i = 0;i < lcnt;i++) {
+                let n = data.readULEB128();
+                let t = data.readUint8();
+                tlocals.push({count: n, type: t});
+                for (let x = 0; x < n; x++) {
+                    let local = new WasmLocal(t);
+                    _locals.push(local);
+                }
+            }
+            if (data.offset == 32549)
+                console.log("debug here!");
+            let opcode_start = data.offset;
+            let opcode_end = tmp + bytesz;
+            let opcodes = decodeByteCode(data, module, _locals);
+            
+            func.narg = type.argc;
+            func.locals = _locals;
+            func._tlocals = tlocals;
+            func.codeStart = tmp1;
+            func.opcode_start = opcode_start;
+            func.opcode_end = opcode_end;
+            func.opcodes = opcodes.opcodes;
+            data.offset = opcode_end;
+        }
+        console.log("code vector count: %d", cnt);
+
+        return new WebAssemblyCodeSection(module);
+    }
+}
+
 
 function prepareModuleEncode(mod) {
     let vector = mod.types;
@@ -4937,217 +5573,185 @@ function prepareModuleEncode(mod) {
     }
 }
 
-function encodeCodeSection(mod, section, funcvec) {
 
-    let anyDirty = false;
-    let len = funcvec.length;
-    let org = mod._buffer;
-    let off = 0;
-    // first lets find where the our first non-import appears.
-    for (let i = 0; i < len; i++) {
-        let func = funcvec[i];
-        if (!(func instanceof ImportedFunction)) {
-            off = i;
-            break;
+class WasmDataSegment {
+
+    constructor() {
+        this._section = undefined;
+        this.memory = undefined;
+        this.inst = undefined;
+        this._buffer = undefined;
+    }
+
+    hasDataSegment(dataSegment) {
+        
+    }
+
+    get buffer() {
+        return this._buffer;
+    }
+}
+
+class WebAssemblyDataSection extends WebAssemblySection {
+
+    constructor(module) {
+        super(SECTION_TYPE_DATA, module);
+    }
+
+    hasDataSegment(dataSegment) {
+
+    }
+
+    encode(options) {
+        let mod = this.module;
+        let segments;
+        if (options.dataSegments) {
+            segments = options.dataSegments;
+        } else {
+            segments = this.module.dataSegments;
         }
-    }
 
-    for (let i = off; i < len; i++) {
-        let func = funcvec[i];
-        if (func._opcodeDirty === true) {
-            anyDirty = true;
-            break;
+        let secsz;
+        let tot = 0;
+        let len = segments.length;
+        for (let i = 0; i < len; i++) {
+            let seg = segments[i];
+            tot += lengthULEB128(0); // seg.kind (not implemented)
+            tot += byteCodeComputeByteLength(mod, seg.inst.opcodes, null);
+            tot += lengthULEB128(seg.size);
+            tot += seg.size;
         }
-    }
+        tot += lengthULEB128(len); // vector-length
+        secsz = tot;
+        tot += lengthULEB128(tot); // section-size
+        tot += 1;                  // section-signature
 
-    if (!anyDirty) {
-        console.log("nothing changed in code section");
-        let end = section.dataOffset + section.size;
-        return org.slice(section.offset, end);
-    }
+        if (mod._mutableDataSegments) {
 
-    let sec_sz = 0;
-    let buffers = [];
-    let modcnt = 0;
+            let src = mod._mutableDataSegments;
+            let buffer = new Uint8Array(tot); // {dst-offset, size}
+            let data = new ByteArray(buffer);
+            data.writeUint8(SECTION_TYPE_DATA);
+            data.writeULEB128(secsz);
+            data.writeULEB128(len);
+            for (let i = 0; i < len; i++) {
+                let seg = segments[i];
+                data.writeULEB128(0); // seg.kind (not implemented)
+                encodeByteCode(mod, seg.inst.opcodes, null, data);
+                data.writeULEB128(seg.size);
+                let off = seg.inst.opcodes[0].value;
+                u8_memcpy(src, off, seg.size, buffer, data.offset);
+                data.offset += seg.size;
+            }
 
-    for (let i = off; i < len; i++) {
-        let func = funcvec[i];
-        /*let debug = false;
+            return buffer;
 
-        if (i == 214) {
-            debugger;
-        }*/
-
-        if (func._opcodeDirty !== true) {
-            // just copy the code entery from the original.
-            let sub = org.slice(func.codeStart, func.opcode_end);
-            buffers.push(sub);
-            sec_sz += sub.byteLength;
         } else {
 
-            let subsz = 0;
-            let locals = func.locals;
-            let xlen = locals ? locals.length : 0;
-            subsz += lengthULEB128(xlen);
-            for (let x = 0; x < xlen; x++) {
-                let local = locals[x];
-                subsz += lengthULEB128(local.count);
-                subsz += 1;
+            let src = new Uint8Array(moduleBuffer);
+            let buffer = new Uint8Array(tot); // {dst-offset, size}
+            let data = new ByteArray(buffer);
+            data.writeUint8(SECTION_TYPE_DATA);
+            data.writeULEB128(secsz);
+            data.writeULEB128(len);
+            for (let i = 0; i < len; i++) {
+                let seg = segments[i];
+                data.writeULEB128(0); // seg.kind (not implemented)
+                encodeByteCode(mod, seg.inst.opcodes, null, data);
+                data.writeULEB128(seg.size);
+                u8_memcpy(src, seg.offset, seg.size, buffer, data.offset);
+                data.offset += seg.size;
             }
-
-            let opcodesz = byteCodeComputeByteLength(mod, func.opcodes);
-            let totsz = subsz + opcodesz;
-            totsz += lengthULEB128(subsz + opcodesz);
-            let buf = new ArrayBuffer(totsz);
-            let data = new ByteArray(buf);
-            buffers.push(buf);
-            data.writeULEB128(subsz + opcodesz);
-            data.writeULEB128(xlen);
-            for (let x = 0; x < xlen; x++) {
-                let local = locals[x];
-                data.writeULEB128(local.count);
-                data.writeUint8(local.type);
-            }
-            let tmp = data.offset;
-            encodeByteCode(mod, func.opcodes, data);
-            if (data.offset - tmp != opcodesz) {
-                console.error("[%d] generated opcodes %d !== %d (real vs. computed)", i, data.offset - tmp, opcodesz);
-            }
-            sec_sz += buf.byteLength;
-            modcnt++;
-
-            // 1. encode opcodes but hold for pushing it into buffers.
-            // 2. pre-compute locals + locals-count + entry-size
-            // 3. encode the above, and push it into buffers.
-            // 4. push opcode into buffers.
+            //
+            return buffer;
         }
+
     }
 
-    let cnt = funcvec.length - off;
-    let cntsz = lengthULEB128(cnt);
-    let headsz = 1 + lengthULEB128(sec_sz + cntsz); // section-type + section-length;
-    headsz += cntsz;
-    let header = new ArrayBuffer(headsz);
-    let data = new ByteArray(header);
-    data.writeUint8(0x0A);
-    data.writeULEB128(sec_sz + cntsz);
-    data.writeULEB128(cnt);
-    buffers.unshift(header);
+    static decode(module, data, size) {
 
-    console.log("encoded %d of which %d where modified", cnt, modcnt);
+        let cnt = data.readULEB128();
+        let segments;
+        if (!module.dataSegments) {
+            segments = [];
+            module.dataSegments = segments;
+        } else if (Array.isArray(module.dataSegments) && module.dataSegments.length == 0) {
+            segments = module.dataSegments;
 
-    return buffers;
-}
 
-function decodeDataSection(data, len, mod) {
-    let end = data.offset + len;
-    let cnt = data.readULEB128();
-    let results = [];
-    while (data.offset < end) {
-        let kind = data.readULEB128();
-        if (kind == 0x00) {
-            let inst = decodeByteCode(data, mod);
-            let data_start = inst.end;
-            data.offset = inst.end;
-            let datasz = data.readULEB128();
-            results.push({
-                memidx: 0,
-                inst: inst,
-                offset: data.offset,
-                size: datasz,
-            });
-            data.offset += datasz;
-        } else if (kind == 0x01) {
-            console.warn("data segment of type `init b*, mode passive` is not implemented");
-            break;
-        } else if (kind == 0x02) {
-            console.warn("data segment of type `init b*, mode active {memory, offset }` is not implemented");
-            let memidx = data.readULEB128();
-            break;
+        } else if (Array.isArray(module.dataSegments) && module.dataSegments.length == cnt){
+                segments = [];
+                module.dataSegments = segments;
         } else {
-            console.warn("undefined data-segment mode!");
-            break;
+            throw new TypeError("module already defines dataSegment with another count");
         }
-    }
-    console.log("data vector count: %d", cnt);
-    console.log(results);
+        let end = data.offset + size;
+        let results = [];
+        for (let i = 0; i < cnt; i++) {
+            let kind = data.readULEB128();
+            if (kind == 0x00) {
+                let inst = decodeByteCode(data, module, null);
+                let data_start = inst.end;
+                data.offset = inst.end;
+                let datasz = data.readULEB128();
+                let segment = new WasmDataSegment();
+                segment.kind = kind;
+                segment.memory = module.memory[0];
+                segment.inst = inst;
+                segment.offset = data.offset;
+                segment.size = datasz;
+                segment._buffer = data._u8.slice(data.offset, data.offset + datasz);
+                segments.push(segment);
+                data.offset += datasz;
+            } else if (kind == 0x01) {
+                console.warn("data segment of type `init b*, mode passive` is not implemented");
+                break;
+            } else if (kind == 0x02) {
+                console.warn("data segment of type `init b*, mode active {memory, offset }` is not implemented");
+                let memidx = data.readULEB128();
+                break;
+            } else {
+                console.warn("undefined data-segment mode!");
+                break;
+            }
+        }
+        console.log("data vector count: %d", cnt);
+        console.log(segments);
 
-    return results;
+        return new WebAssemblyDataSection(module);
+    }
 }
 
-function encodeDataSegmentsSection(mod, section) {
+class WebAssemblyDataCountSection extends WebAssemblySection {
 
-    let segments = mod.dataSegments;
-
-    let secsz;
-    let tot = 0;
-    let len = segments.length;
-    for (let i = 0; i < len; i++) {
-        let seg = segments[i];
-        tot += lengthULEB128(0); // seg.kind (not implemented)
-        tot += byteCodeComputeByteLength(mod, seg.inst.opcodes);
-        tot += lengthULEB128(seg.size);
-        tot += seg.size;
-    }
-    tot += lengthULEB128(len); // vector-length
-    secsz = tot;
-    tot += lengthULEB128(tot); // section-size
-    tot += 1;                  // section-signature
-
-    let src = new Uint8Array(moduleBuffer);
-    let buffer = new Uint8Array(tot); // {dst-offset, size}
-    buffers.push(buffer.buffer);
-    let data = new ByteArray(buffer);
-    data.writeUint8(0x0B);
-    data.writeULEB128(secsz);
-    data.writeULEB128(len);
-    for (let i = 0; i < len; i++) {
-        let seg = segments[i];
-        data.writeULEB128(0); // seg.kind (not implemented)
-        encodeByteCode(mod, seg.inst.opcodes, data);
-        data.writeULEB128(seg.size);
-        u8_memcpy(src, seg.offset, seg.size, buffer, data.offset);
-        data.offset += seg.size;
+    constructor(module) {
+        super(SECTION_TYPE_DATA_COUNT, module);
+        this.count = 0;
     }
 
-}
-
-function decodeCustomSection(data, section, size) {
-    let end = data.offset + len;
-    let results = [];
-    let nlen = data.readUint8();
-    let name = data.readUTF8Bytes(nlen);
-    let start = data.offset;
-    //let datasz = data.readULEB128();
-    results.push({
-        name: name,
-        start: start,
-        end : end,
-    });
-    console.log("custom section name: %s", name);
-    section.name = name;
-    console.log(results);
-
-    if (name == "producers") {
-        let info = decodeCustomProducers(start, end);
-    } else if (name == "name") {
-        let info = decodeCustomName(start, end);
-    } else if (name == "debug_info") {
-        let info = decodeDWARFDebugInfoSection(data, section);
+    encode(options) {
+        let dataSegments = this.module.dataSegments;
+        let totsz, secsz = lengthULEB128(dataSegments.length);
+        totsz = secsz;
+        totsz += lengthULEB128(secsz);
+        let buffer = new Uint8Array(totsz + 1);
+        let data = new ByteArray(buffer);
+        data.writeUint8(SECTION_TYPE_DATA_COUNT);
+        data.writeULEB128(secsz);
+        data.writeULEB128(dataSegments.length);
     }
 
-    // .debug_info
-    // .debug_loc
-    // .debug_ranges
-    // .debug_abbrev
-    // .debug_line
-    // .debug_str
-    // 
-    // are actually embedded DWARF debugging information.
-    // 
-    // https://github.com/WebAssembly/tool-conventions/blob/main/Debugging.md
-    // https://www.slideshare.net/chimerawang/dwarf-data-representation
-    // https://yurydelendik.github.io/webassembly-dwarf/#embedding-DWARF
+    static decode(module, data, size) {
+        let cnt = data.readULEB128();
+        let section = new WebAssemblyDataCountSection(module);
+        section.count = cnt;
+        if (!module.dataSegments) {
+            let vec = [];
+            vec.length = cnt;
+            module.dataSegments = vec;
+        }
+        return section;
+    }
 }
 
 function findCustomSectionByName(sections, name) {
@@ -5166,218 +5770,262 @@ function findCustomSectionByName(sections, name) {
 // known custom sections.
 // 
 
-// https://github.com/WebAssembly/tool-conventions/blob/main/DynamicLinking.md
-function decodeCustomDylink0(data, size, mod) {
-
-    let info;
-
-    let end = data.offset + size;
-    while (data.offset < end) {
-        let id = data.readUint8();
-        let sz = data.readULEB128();
-        let substart = data.offset;
-        if (id == 0x01) { // WASM_DYLINK_MEM_INFO
-            let memsz = data.readULEB128();
-            let memalignment = data.readULEB128();
-            let tablesz = data.readULEB128();
-            let tablealignment = data.readULEB128();
-            console.log({memorysize: memsz, memoryalignment: memalignment, tablesize: tablesz, tablealignment: tablealignment});
-        } else if (id == 0x02) { // WASM_DYLINK_NEEDED
-            let entries = [];
-            let cnt = data.readULEB128();
-            for (let i = 0; i < cnt; i++) {
-                let strsz = data.readULEB128();
-                let str = data.readUTF8Bytes(strsz);
-                entries.push(str);
-            }
-            console.log(entries);
-        } else if (id == 0x03) { // WASM_DYLINK_EXPORT_INFO
-            let strsz = data.readULEB128();
-            let name = data.readUTF8Bytes(strsz);
-            let flags = data.readULEB128();
-            console.log("name = %s flags = %d", name, flags);
-        } else if (id == 0x04) { // WASM_DYLINK_IMPORT_INFO
-            let strsz = data.readULEB128();
-            let name = data.readUTF8Bytes(strsz);
-            strsz = data.readULEB128();
-            let field = data.readUTF8Bytes(strsz);
-            let flags = data.readULEB128();
-            console.log("name = %s field = %s flags = %d", name, field, flags);
-        }
-
-        data.offset = substart + sz;
-    }
-}
-
-function decodeTargetFeatures(data, size, mod) {
-
-    let features = {};
-
-    let end = data.offset + size;
-    while (data.offset < end) {
-        let prefix = data.readUint8();
-        let strsz = data.readULEB128();
-        let name = data.readUTF8Bytes(strsz);
-
-        features[name] = prefix;
-    }
-
-    return features;
-}
-
-function encodeTargetFeatures() {
-
-}
-
 // https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md
 
 
-// https://github.com/WebAssembly/tool-conventions/blob/main/ProducersSection.md
-function decodeCustomProducers(data, size) {
-    let count = data.readULEB128();
-    console.log("count: %d", count);
-    let fields = {};
-    for (let i = 0; i < count; i++) {
-        let namesz = data.readULEB128();
-        let fname = data.readUTF8Bytes(namesz);
+// https://github.com/WebAssembly/tool-conventions/blob/main/DynamicLinking.md
+class WebAssemblyCustomSectionDylink0 extends WebAssemblyCustomSection {
 
-        let valcnt = data.readULEB128();
-        let values = [];
-        for (let x = 0; x < valcnt; x++) {
-            let verlen, valuesz = data.readULEB128();
-            let value = data.readUTF8Bytes(valuesz);
-            verlen = data.readULEB128(); // version string.
-            if (verlen > 0) {
-                let version = data.readUTF8Bytes(verlen);
-                values.push({value: value, version: version});
-            } else {
-                values.push(value);
-            }
-        }
-        fields[fname] = values;
+    constructor(module) {
+        super(module, "dylink.0");
     }
 
-    console.log(fields);
-    return fields;
+    encode(options) {
+
+    }
+
+    static decode(module, data, size) {
+
+        let info;
+
+        let end = data.offset + size;
+        while (data.offset < end) {
+            let id = data.readUint8();
+            let sz = data.readULEB128();
+            let substart = data.offset;
+            if (id == 0x01) { // WASM_DYLINK_MEM_INFO
+                let memsz = data.readULEB128();
+                let memalignment = data.readULEB128();
+                let tablesz = data.readULEB128();
+                let tablealignment = data.readULEB128();
+                console.log({memorysize: memsz, memoryalignment: memalignment, tablesize: tablesz, tablealignment: tablealignment});
+            } else if (id == 0x02) { // WASM_DYLINK_NEEDED
+                let entries = [];
+                let cnt = data.readULEB128();
+                for (let i = 0; i < cnt; i++) {
+                    let strsz = data.readULEB128();
+                    let str = data.readUTF8Bytes(strsz);
+                    entries.push(str);
+                }
+                console.log(entries);
+            } else if (id == 0x03) { // WASM_DYLINK_EXPORT_INFO
+                let strsz = data.readULEB128();
+                let name = data.readUTF8Bytes(strsz);
+                let flags = data.readULEB128();
+                console.log("name = %s flags = %d", name, flags);
+            } else if (id == 0x04) { // WASM_DYLINK_IMPORT_INFO
+                let strsz = data.readULEB128();
+                let name = data.readUTF8Bytes(strsz);
+                strsz = data.readULEB128();
+                let field = data.readUTF8Bytes(strsz);
+                let flags = data.readULEB128();
+                console.log("name = %s field = %s flags = %d", name, field, flags);
+            }
+
+            data.offset = substart + sz;
+        }  
+
+        return new WebAssemblyCustomSectionDylink0(module);
+    }
 }
 
-function encodeCustomProducers(producers) {
 
-    let secsz, totsz = 0;
-    let count = 0;
-    let keys = ["language", "processed-by", "sdk"];
-    let len = keys.length;
-    for (let y = 0; y < len; y++) {
-        let values, key = keys[i];
-        if (!producers.hasOwnProperty(key))
-            continue;
-        values = producers[key];
-        if (!Array.isArray(values))
-            continue;
+// https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md#target-features-section
+class WebAssemblyCustomSectionTargetFeatures extends WebAssemblyCustomSection {
 
-        let xlen = values.length;
-        for (let x = 0; x < xlen; x++) {
-            let value = values[x];
-            if (typeof value == "string") {
-                let strlen = lengthBytesUTF8(value);
-                totsz += lengthULEB128(strlen);
-                totsz += strlen;
-                totsz += lengthULEB128(0);
-            } else if (typeof value == "object" && value !== null) {
-                if (typeof value.value !== "string") {
-                    throw TypeError(".value is a required field");
-                }
-                let strlen = lengthBytesUTF8(value.value);
-                totsz += lengthULEB128(strlen);
-                totsz += strlen;
-                if (typeof value.version == "string") {
-                    let strlen = lengthBytesUTF8(value.version);
+    constructor(module) {
+        super(module, "target_features");
+    }
+
+    encode(options) {
+
+    }
+
+    static decode(module, data, size) {
+        let features = {};
+
+        let end = data.offset + size;
+        while (data.offset < end) {
+            let prefix = data.readUint8();
+            let strsz = data.readULEB128();
+            let name = data.readUTF8Bytes(strsz);
+
+            features[name] = prefix;
+        }
+
+        let section = new WebAssemblyCustomSectionTargetFeatures(module);
+        section.data = features;
+        module.target_features = features;
+        return section;
+    }
+}
+
+
+// https://github.com/WebAssembly/tool-conventions/blob/main/ProducersSection.md
+class WebAssemblyCustomSectionProducers extends WebAssemblyCustomSection {
+
+    constructor(module) {
+        super(module, "producers");
+    }
+
+    encode(options) {
+
+        let producers = this.data;
+        let secsz, totsz = 0;
+        let count = 0;
+        let keys = ["language", "processed-by", "sdk"];
+        let len = keys.length;
+        for (let y = 0; y < len; y++) {
+            let values, key = keys[y];
+            if (!producers.hasOwnProperty(key))
+                continue;
+            values = producers[key];
+            if (!Array.isArray(values))
+                continue;
+
+            let xlen = values.length;
+            for (let x = 0; x < xlen; x++) {
+                let value = values[x];
+                if (typeof value == "string") {
+                    let strlen = lengthBytesUTF8(value);
                     totsz += lengthULEB128(strlen);
                     totsz += strlen;
-                } else {
                     totsz += lengthULEB128(0);
+                } else if (typeof value == "object" && value !== null) {
+                    if (typeof value.value !== "string") {
+                        throw TypeError(".value is a required field");
+                    }
+                    let strlen = lengthBytesUTF8(value.value);
+                    totsz += lengthULEB128(strlen);
+                    totsz += strlen;
+                    if (typeof value.version == "string") {
+                        let strlen = lengthBytesUTF8(value.version);
+                        totsz += lengthULEB128(strlen);
+                        totsz += strlen;
+                    } else {
+                        totsz += lengthULEB128(0);
+                    }
+                } else {
+                    throw TypeError("unsupported value in field of producers");
                 }
-            } else {
-                throw TypeError("unsupported value in field of producers");
             }
+
+            totsz += lengthULEB128(xlen);
+
+
+            let strlen = lengthBytesUTF8(key);
+            totsz += lengthULEB128(strlen);
+            totsz += strlen;
+            count++;
         }
 
-        totsz += lengthULEB128(xlen);
-
-
-        let strlen = lengthBytesUTF8(key);
+        totsz += lengthULEB128(count);
+        let strlen = lengthBytesUTF8("producers");
         totsz += lengthULEB128(strlen);
-        totsz += strlen;
-        count++;
-    }
+        secsz = totsz;
+        totsz += lengthULEB128(totsz);
 
-    totsz += lengthULEB128(count);
-    let strlen = lengthBytesUTF8("producers");
-    totsz += lengthULEB128(strlen);
-    secsz = totsz;
-    totsz += lengthULEB128(totsz);
-
-        // actual encdong
-    let buf = new ArrayBuffer(totsz + 1);
-    let data = new ByteArray(buf);
-    data.writeUint8(SECTION_TYPE.ELEMENT);
-    data.writeULEB128(secsz);
-    data.writeULEB128(strlen);
-    data.writeUTF8Bytes("producers");
-    data.writeULEB128(count);
-
-    len = keys.length;
-    for (let y = 0; y < len; y++) {
-        let values, key = keys[i];
-        if (!producers.hasOwnProperty(key))
-            continue;
-        values = producers[key];
-        if (!Array.isArray(values))
-            continue;
-
-        let strlen = lengthBytesUTF8(key);
+            // actual encdong
+        let buf = new ArrayBuffer(totsz + 1);
+        let data = new ByteArray(buf);
+        data.writeUint8(SECTION_TYPE_CUSTOM);
+        data.writeULEB128(secsz);
         data.writeULEB128(strlen);
-        data.writeUTF8Bytes(key);
-        let xlen = values.length;
-        data.writeULEB128(xlen);
-        for (let x = 0; x < xlen; x++) {
-            let value = values[x];
-            if (typeof value == "string") {
-                let strlen = lengthBytesUTF8(value);
-                data.writeULEB128(strlen);
-                data.writeUTF8Bytes(value);
-            } else if (typeof value == "object" && value !== null) {
-                if (typeof value.value !== "string") {
-                    throw TypeError(".value is a required field");
-                }
-                let strlen = lengthBytesUTF8(value.value);
-                data.writeULEB128(strlen);
-                data.writeUTF8Bytes(value.value);
-                if (typeof value.version == "string") {
-                    let strlen = lengthBytesUTF8(value.version);
+        data.writeUTF8Bytes("producers");
+        data.writeULEB128(count);
+
+        len = keys.length;
+        for (let y = 0; y < len; y++) {
+            let values, key = keys[y];
+            if (!producers.hasOwnProperty(key))
+                continue;
+            values = producers[key];
+            if (!Array.isArray(values))
+                continue;
+
+            let strlen = lengthBytesUTF8(key);
+            data.writeULEB128(strlen);
+            data.writeUTF8Bytes(key);
+            let xlen = values.length;
+            data.writeULEB128(xlen);
+            for (let x = 0; x < xlen; x++) {
+                let value = values[x];
+                if (typeof value == "string") {
+                    let strlen = lengthBytesUTF8(value);
                     data.writeULEB128(strlen);
-                    data.writeUTF8Bytes(value.version);
+                    data.writeUTF8Bytes(value);
+                } else if (typeof value == "object" && value !== null) {
+                    if (typeof value.value !== "string") {
+                        throw TypeError(".value is a required field");
+                    }
+                    let strlen = lengthBytesUTF8(value.value);
+                    data.writeULEB128(strlen);
+                    data.writeUTF8Bytes(value.value);
+                    if (typeof value.version == "string") {
+                        let strlen = lengthBytesUTF8(value.version);
+                        data.writeULEB128(strlen);
+                        data.writeUTF8Bytes(value.version);
+                    }
                 }
             }
         }
+
+        return buf;
     }
 
-    return buf;
+    static decode(module, data, size) {
+
+        let count = data.readULEB128();
+        console.log("count: %d", count);
+        let fields = {};
+        for (let i = 0; i < count; i++) {
+            let namesz = data.readULEB128();
+            let fname = data.readUTF8Bytes(namesz);
+
+            let valcnt = data.readULEB128();
+            let values = [];
+            for (let x = 0; x < valcnt; x++) {
+                let verlen, valuesz = data.readULEB128();
+                let value = data.readUTF8Bytes(valuesz);
+                verlen = data.readULEB128(); // version string.
+                if (verlen > 0) {
+                    let version = data.readUTF8Bytes(verlen);
+                    values.push({value: value, version: version});
+                } else {
+                    values.push(value);
+                }
+            }
+            fields[fname] = values;
+        }
+
+        console.log(fields);
+
+        let section = new WebAssemblyCustomSectionProducers(module);
+        section.data = fields;
+        module.producers = fields;
+        return section;
+    }
 }
 
-function decode_name_map(data, size) {
 
-    let end = data.offset + size;
-    let cnt = data.readULEB128();
-    let map = new Map();
-    while (data.offset < end) {
-        let idx = data.readULEB128();
-        let nlen = data.readULEB128();
-        let name = data.readUTF8Bytes(nlen);
-        map.set(idx, name);
-    }
+// Common Custom Section Name 
 
-    return map;
+function canBeCustomNamed(obj) {
+    if (obj === undefined || obj === null || typeof obj !== "object")
+        return false;
+
+    if (obj instanceof WasmFunction || 
+        obj instanceof WasmLocal || 
+        obj instanceof WasmMemory ||
+        obj instanceof WasmGlobal ||
+        obj instanceof FuncType || 
+        obj instanceof WasmDataSegment ||
+        obj instanceof WasmTable ||
+        obj instanceof WasmElementSegment ||
+        obj instanceof WebAssemblyModule)
+        return true;
+
+    return false;
 }
 
 // https://webassembly.github.io/spec/core/appendix/custom.html
@@ -5399,326 +6047,497 @@ function decode_name_map(data, size) {
 // indirectnameassoc = idx namemap
 // namemap = vec(nameassoc)
 // nameassoc idx name
-function decodeCustomName(data, size, mod) {
 
-    let results = {};
+class WebAssemblyCustomSectionName extends WebAssemblyCustomSection {
 
-    let end = data.offset + size;
-    while (data.offset < end) {
-
-        let id = data.readUint8();
-        let subsz = data.readULEB128();
-        let substart = data.offset;
-        if (id == 0x01) { // function names: vec(nameassoc)
-
-            //console.log("id %d size: %d", id, subsz);
-            let functions = mod.functions;
-            let cnt = data.readULEB128();
-            let map = new Map();
-            for (let i = 0; i < cnt; i++) {
-                let idx = data.readULEB128();
-                let nlen = data.readULEB128();
-                let name = data.readUTF8Bytes(nlen);
-                let func = functions[idx];
-                map.set(func, name);
-            }
-
-            //console.log(map);
-            data.offset = substart + subsz;
-            results.functions = map;
-
-        } else if (id == 0x00) { // module name
-            let strlen = data.readULEB128();
-            results.moduleName = data.readUTF8Bytes(strlen);
-            console.log("id %d size: %d", id, subsz);
-            data.offset = substart + subsz;
-
-        } else if (id == 0x02) { // local names: vec(indirectnameassoc)
-            console.log("id %d size: %d", id, subsz);
-            data.offset = substart + subsz;
-        } else if (id == 0x03) { // label names: vec(indirectnameassoc)
-            console.log("id %d size: %d", id, subsz);
-            data.offset = substart + subsz;
-        } else if (id == 0x04) { // label names: vec(nameassoc)
-            console.log("id %d size: %d", id, subsz);
-            data.offset = substart + subsz;
-        } else if (id == 0x05) { // table names: vec(nameassoc)
-            console.log("id %d size: %d", id, subsz);
-            data.offset = substart + subsz;
-        } else if (id == 0x06) { // memory names: vec(nameassoc)
-            console.log("id %d size: %d", id, subsz);
-            data.offset = substart + subsz;
-        } else if (id == 0x07) { // global names: vec(nameassoc)
-
-            //console.log("id %d size: %d", id, subsz);
-            let map = decode_name_map(data, subsz);
-            //console.log(map);
-            data.offset = substart + subsz;
-            results.globals = map;
-
-        } else if (id == 0x08) { // element segment names: vec(nameassoc)
-            console.log("id %d size: %d", id, subsz);
-            data.offset = substart + subsz;
-        } else if (id == 0x09) { // data segment names
-
-            //console.log("id %d size: %d", id, subsz);
-            let map = decode_name_map(data, subsz);
-            //console.log(map);
-            data.offset = substart + subsz;
-            results.data = map;
-        } else {
-            console.warn("id %d size: %d", id, subsz);
-            data.offset = substart + subsz;
-        }
+    constructor(module) {
+        super(module, "name");
     }
 
-    return results;
-}
-
-function encodeCustomNameSection(mod) {
-
-    let names = mod.names;
-    let moduleName = names.moduleName;
-    let functionNames = names.functions;
-    let localNames = names.locals;
-    let labelNames = names.labels;
-    let typeNames = names.types;
-    let tableNames = names.tables;
-    let memoryNames = names.memory;
-    let globalNames = names.globals;
-    let elementSegmentNames = names.elementSegmentNames;
-    let dataSegmentNames = names.dataSegmentNames;
-
-    let subsections = [];
-
-    if (moduleName) {
-        subsections.push({id: 0x00, data: moduleName});
-    }
-
-    if (functionNames) {
-        let subsz = 0;
-        let items = [];
-
+    encode() {
+        let mod = this.module;
         let functions = mod.functions;
+        let types = mod.types;
+        let tables = mod.tables;
+        let memory = mod.memory;
+        let globals = mod.globals;
+        let elementSegments = mod.elementSegments;
+        let dataSegments = mod.dataSegments;
 
-        for (const [func, name] of functionNames) {
-            let strlen, funcidx = functions.indexOf(func);
-            if (funcidx === -1)
-                throw new ReferenceError("func not defined in mod.functions");
-            subsz += lengthULEB128(funcidx);
-            strlen = lengthBytesUTF8(name);
-            subsz += lengthULEB128(strlen);
-            subsz += strlen;
-            items.push({idx: funcidx, name: name, strsz: strlen});
+        let subsections = [];
+
+        // precheck.
+
+        if (typeof mod[__nsym] == "string") {
+            let name = mod[__nsym];
+            let secsz, strsz = lengthBytesUTF8(name);
+            secsz = strsz;
+            //secsz += lengthBytesUTF8(strsz);
+            subsections.push({id: 0x00, name: name, strsz: strsz, size: secsz});
         }
 
-        items.sort(function(a, b) {
-            if (a.idx < b.idx) {
-                return -1;
-            } else if (a.idx > b.idx) {
-                return 1;
-            } else {
-                return 0;
-            }
-        });
-
-        subsz += lengthULEB128(items.length);
-
-        subsections.push({id: 0x01, items: items, size: subsz});
-    }
-
-    if (localNames) {
-        subsections.push({id: 0x02, data: localNames});
-    }
-
-    if (labelNames) {
-        subsections.push({id: 0x03, data: labelNames});
-    }
-
-    if (typeNames) {
-        subsections.push({id: 0x04, data: typeNames});
-    }
-
-    if (tableNames) {
-        subsections.push({id: 0x05, data: tableNames});
-    }
-
-    if (memoryNames) {
-        subsections.push({id: 0x06, data: memoryNames});
-    }
-
-    if (globalNames) {
-        subsections.push({id: 0x07, data: globalNames});
-    }
-
-    if (elementSegmentNames) {
-        subsections.push({id: 0x08, data: elementSegmentNames});
-    }
-
-    if (dataSegmentNames) {
-        subsections.push({id: 0x09, data: dataSegmentNames});
-    }
-
-    let secsz, totsz = 0;
-    let len = subsections.length;
-    totsz += len; // for all id(s)
-    for (let i = 0; i < len; i++) {
-        let subsec = subsections[i];
-        totsz += lengthULEB128(subsz.size);
-        totsz += subsz.size;
-    }
-
-    let strlen = lengthBytesUTF8("names");
-    totsz += lengthULEB128(strlen);
-    totsz += strlen;
-    secsz = totsz;
-    totsz += lengthULEB128(totsz);
-
-    // actual encdong
-    let buf = new ArrayBuffer(totsz + 1);
-    let data = new ByteArray(buf);
-    data.writeUint8(SECTION_TYPE.CUSTOM);
-    data.writeULEB128(secsz);
-    data.writeULEB128(strlen);
-    data.writeUTF8Bytes("names");
-
-    if (moduleName) {
-        subsections.push({id: 0x00, data: moduleName});
-    }
-
-    function findSubsectionById(id) {
-        let len = subsections.length
-        for (let i = 0; i < len; i++) {
-            if (subsections[i].id == id) 
-                return subsections[i];
-        }
-
-        return null;
-    }
-
-    if (functionNames) {
-        
-        let sec = findSubsectionById(0x01);
-        let items = sec.items;
-        let len = items.length;
-        data.writeUint8(0x01);
-        data.writeULEB128(sec.size);
-        data.writeULEB128(len);
-        for (let i = 0; i < len; i++) {
-            let item = items[i];
-            data.writeULEB128(item.idx);
-            data.writeULEB128(item.strsz);
-            data.writeUTF8Bytes(item.name);
-        }
-        
+        let nlocals = [];
+        let nlabels = [];
+        let hasNamedLocal = false;
+        let hasNamedLabel = false;
+        let items = [];
         let subsz = 0;
-        items = obj.items;
-
-        for (const [func, name] of functionNames) {
-            let strlen, funcidx = functions.indexOf(func);
-            if (funcidx === -1)
-                throw new ReferenceError("func not defined in mod.functions");
-            subsz += lengthULEB128(funcidx);
-            strlen = lengthBytesUTF8(name);
-            subsz += lengthULEB128(strlen);
-            subsz += strlen;
-            items.push({idx: funcidx, name: name, strsz: strlen});
-        }
-
-        subsz += lengthULEB128(items.length);
-
-        subsections.push({id: 0x01, items: items, size: subsz});
-    }
-
-    if (localNames) {
-        subsections.push({id: 0x02, data: localNames});
-    }
-
-    if (labelNames) {
-        subsections.push({id: 0x03, data: labelNames});
-    }
-
-    if (typeNames) {
-        subsections.push({id: 0x04, data: typeNames});
-    }
-
-    if (tableNames) {
-        subsections.push({id: 0x05, data: tableNames});
-    }
-
-    if (memoryNames) {
-        subsections.push({id: 0x06, data: memoryNames});
-    }
-
-    if (globalNames) {
-        subsections.push({id: 0x07, data: globalNames});
-    }
-
-    if (elementSegmentNames) {
-        subsections.push({id: 0x08, data: elementSegmentNames});
-    }
-
-    if (dataSegmentNames) {
-        subsections.push({id: 0x09, data: dataSegmentNames});
-    }
-
-    return buf;
-
-    /*
-    let results = {};
-    let end = data.offset + size;
-    while (data.offset < end) {
-
-        let id = data.readUint8();
-        let subsz = data.readULEB128();
-        let substart = data.offset;
-        if (id == 0x01) { // function names
-
-            //console.log("id %d size: %d", id, subsz);
-            let functions = mod.functions;
-            let cnt = data.readULEB128();
-            let map = new Map();
-            for (let i = 0; i < cnt; i++) {
-                let idx = data.readULEB128();
-                let nlen = data.readULEB128();
-                let name = data.readUTF8Bytes(nlen);
-                let func = functions[idx];
-                map.set(func, name);
+        let len = functions ? functions.length : 0;
+        for (let i = 0; i < len; i++) {
+            let func = functions[i];
+            let locals = func.locals;
+            if (locals) {
+                let names;
+                let xlen = locals.length;
+                for (let x = 0; x < xlen; x++) {
+                    let local = locals[x];
+                    if (typeof local[__nsym] != "string")
+                        continue;
+                    if (!names) {
+                        names = [];
+                        nlocals.push({funcidx: i, names: names});
+                    }
+                    names.push({idx: x, name: local[__nsym]})
+                }
+            }
+            let labels = func.labels;
+            if (labels) {
+                let names;
+                let xlen = labels.length;
+                for (let x = 0; x < xlen; x++) {
+                    let label = labels[x];
+                    if (typeof label[__nsym] != "string")
+                        continue;
+                    if (!names) {
+                        names = [];
+                        nlabels.push({funcidx: i, names: names});
+                    }
+                    names.push({idx: x, name: label[__nsym]})
+                }
             }
 
-            //console.log(map);
-            data.offset = substart + subsz;
-            results.functions = map;
-
-        } else if (id == 0x00) { // module name
-            console.log("id %d size: %d", id, subsz);
-            data.offset = substart + subsz;
-        } else if (id == 0x02) { // local names
-            console.log("id %d size: %d", id, subsz);
-            data.offset = substart + subsz;
-        } else if (id == 0x07) { // global names
-
-            //console.log("id %d size: %d", id, subsz);
-            let map = decode_name_map(data, subsz);
-            //console.log(map);
-            data.offset = substart + subsz;
-            results.globals = map;
-
-        } else if (id == 0x09) { // data segment names
-
-            //console.log("id %d size: %d", id, subsz);
-            let map = decode_name_map(data, subsz);
-            //console.log(map);
-            data.offset = substart + subsz;
-            results.data = map;
-        } else {
-            console.warn("id %d size: %d", id, subsz);
-            data.offset = substart + subsz;
+            if (typeof func[__nsym] != "string" || func[__nsym].length == 0)
+                continue;
+            let name = func[__nsym];
+            subsz += lengthULEB128(i);  // funcidx
+            let strsz = lengthBytesUTF8(name);
+            subsz += lengthULEB128(strsz);
+            subsz += strsz;
+            items.push({idx: i, name: name, strsz: strsz});
         }
+
+        if (items.length > 0) {
+            subsz += lengthULEB128(items.length);
+            subsections.push({id: 0x01, items: items, size: subsz});
+        }
+
+        if (nlocals.length > 0) {
+
+            let subsz = 0;
+            let ylen = nlocals.length;
+            for (let y = 0; y < ylen; y++) {
+                let assoc = nlocals[y];
+                let names = assoc.names;
+                let xlen = names.length;
+                subsz += lengthULEB128(assoc.funcidx);
+                subsz += lengthULEB128(names.length);
+                for (let x = 0; x < xlen; x++) {
+                    let pair = names[x];
+                    let strsz = lengthBytesUTF8(pair.name);
+                    subsz += lengthULEB128(pair.idx);
+                    subsz += lengthULEB128(strsz);
+                    subsz += strsz;
+                    pair.strsz = strsz;
+                }
+            }
+            subsz += lengthULEB128(nlocals.length);
+            subsections.push({id: 0x02, items: nlocals, size: subsz});
+
+        } else {
+            nlocals = undefined;
+        }
+
+        if (nlabels.length > 0) {
+
+            let subsz = 0;
+            let ylen = nlabels.length;
+            for (let y = 0; y < ylen; y++) {
+                let assoc = nlabels[y];
+                let names = assoc.names;
+                let xlen = names.length;
+                subsz += lengthULEB128(assoc.funcidx);
+                subsz += lengthULEB128(names.length);
+                for (let x = 0; x < xlen; x++) {
+                    let pair = names[x];
+                    let strsz = lengthBytesUTF8(pair.name);
+                    subsz += lengthULEB128(pair.idx);
+                    subsz += lengthULEB128(strsz);
+                    subsz += strsz;
+                    pair.strsz = strsz;
+                }
+            }
+            subsz += lengthULEB128(nlabels.length);
+            subsections.push({id: 0x03, items: nlabels, size: subsz});
+
+        } else {
+            nlabels = undefined;
+        }
+
+        // types
+        items = [];
+        subsz = 0;
+        len = types.length;
+        for (let i = 0; i < len; i++) {
+            let type = types[i];
+            if (typeof type[__nsym] != "string" || type[__nsym].length == 0)
+                continue;
+            let name = type[__nsym];
+            subsz += lengthULEB128(i);  // typeidx
+            let strsz = lengthBytesUTF8(name);
+            subsz += lengthULEB128(strsz);
+            subsz += strsz;
+            items.push({idx: i, name: name, strsz: strsz});
+        }
+
+        if (items.length > 0) {
+            subsz += lengthULEB128(items.length);
+            subsections.push({id: 0x04, items: items, size: subsz});
+        }
+
+        // tables
+        items = [];
+        subsz = 0;
+        len = tables ? tables.length : 0;
+        for (let i = 0; i < len; i++) {
+            let tbl = tables[i];
+            if (typeof tbl[__nsym] != "string" || tbl[__nsym].length == 0)
+                continue;
+            let name = tbl[__nsym];
+            subsz += lengthULEB128(i);  // tblidx
+            let strsz = lengthBytesUTF8(name);
+            subsz += lengthULEB128(strsz);
+            subsz += strsz;
+            items.push({idx: i, name: name, strsz: strsz});
+        }
+
+        if (items.length > 0) {
+            subsz += lengthULEB128(items.length);
+            subsections.push({id: 0x05, items: items, size: subsz});
+        }
+
+        // memory/memories
+        items = [];
+        subsz = 0;
+        len = memory ? memory.length : 0;
+        for (let i = 0; i < len; i++) {
+            let mem = memory[i];
+            if (typeof mem[__nsym] != "string" || mem[__nsym].length == 0)
+                continue;
+            let name = mem[__nsym];
+            subsz += lengthULEB128(i);  // memidx
+            let strsz = lengthBytesUTF8(name);
+            subsz += lengthULEB128(strsz);
+            subsz += strsz;
+            items.push({idx: i, name: name, strsz: strsz});
+        }
+
+        if (items.length > 0) {
+            subsz += lengthULEB128(items.length);
+            subsections.push({id: 0x06, items: items, size: subsz});
+        }
+
+        // globals
+        items = [];
+        subsz = 0;
+        len = globals ? globals.length : 0;
+        for (let i = 0; i < len; i++) {
+            let glob = globals[i];
+            if (typeof glob[__nsym] != "string" || glob[__nsym].length == 0)
+                continue;
+            let name = glob[__nsym];
+            subsz += lengthULEB128(i);  // globalidx
+            let strsz = lengthBytesUTF8(name);
+            subsz += lengthULEB128(strsz);
+            subsz += strsz;
+            items.push({idx: i, name: name, strsz: strsz});
+        }
+
+        if (items.length > 0) {
+            subsz += lengthULEB128(items.length);
+            subsections.push({id: 0x07, items: items, size: subsz});
+        }
+
+        // element segments
+        items = [];
+        subsz = 0;
+        len = elementSegments ? elementSegments.length : 0;
+        for (let i = 0; i < len; i++) {
+            let segment = elementSegments[i];
+            if (typeof segment[__nsym] != "string" || segment[__nsym].length == 0)
+                continue;
+            let name = segment[__nsym];
+            subsz += lengthULEB128(i);  // element-idx
+            let strsz = lengthBytesUTF8(name);
+            subsz += lengthULEB128(strsz);
+            subsz += strsz;
+            items.push({idx: i, name: name, strsz: strsz});
+        }
+
+        if (items.length > 0) {
+            subsz += lengthULEB128(items.length);
+            subsections.push({id: 0x08, items: items, size: subsz});
+        }
+
+        // data-segments
+        items = [];
+        subsz = 0;
+        len = dataSegments ? dataSegments.length : 0;
+        for (let i = 0; i < len; i++) {
+            let segment = dataSegments[i];
+            if (typeof segment[__nsym] != "string" || segment[__nsym].length == 0)
+                continue;
+            let name = segment[__nsym];
+            subsz += lengthULEB128(i);  // data-segment-idx
+            let strsz = lengthBytesUTF8(name);
+            subsz += lengthULEB128(strsz);
+            subsz += strsz;
+            items.push({idx: i, name: name, strsz: strsz});
+        }
+
+        if (items.length > 0) {
+            subsz += lengthULEB128(items.length);
+            subsections.push({id: 0x09, items: items, size: subsz});
+        }
+
+        // as we are checking each name index in order, then it appears in that order.
+
+        let secsz = 0;
+        let totsz = 0;
+        len = subsections.length;
+        totsz += len; // for all sub-section id(s)
+        for (let i = 0; i < len; i++) {
+            let subsec = subsections[i];
+            totsz += lengthULEB128(subsec.size);
+            totsz += subsec.size;
+        }
+
+        let strlen = lengthBytesUTF8("name");
+        totsz += lengthULEB128(strlen);
+        totsz += strlen;
+        secsz = totsz;
+        totsz += lengthULEB128(totsz);
+
+        // actual encdong
+        let buf = new ArrayBuffer(totsz + 1);
+        let data = new ByteArray(buf);
+        data.writeUint8(SECTION_TYPE_CUSTOM);
+        data.writeULEB128(secsz);
+        data.writeULEB128(strlen);
+        data.writeUTF8Bytes("name");
+
+
+        let ylen = subsections.length;
+        for (let y = 0; y < ylen; y++) {
+            let subsec = subsections[y];
+            if (subsec.id == 0x00) {
+                data.writeUint8(subsec.id);
+                data.writeULEB128(subsec.size);
+                data.writeULEB128(subsec.strsz);
+                data.writeUTF8Bytes(subsec.name);
+            } else if (subsec.id == 0x02 || subsz.id == 0x03) {
+                // indirect name map
+                let items = subsec.items;
+                let xlen = items.length;
+                data.writeUint8(subsec.id);
+                data.writeULEB128(subsec.size);
+                data.writeULEB128(xlen);
+                for (let x = 0; x < xlen; x++) {
+                    let item = items[x];
+                    let subpairs = item.names;
+                    let zlen = subpairs.length;
+                    data.writeULEB128(item.idx);
+                    data.writeULEB128(zlen);
+                    for (let x = 0; x < zlen; x++) {
+                        let pair = subpairs[x];
+                        data.writeULEB128(pair.idx);
+                        data.writeULEB128(pair.strsz);
+                        data.writeUTF8Bytes(pair.name);
+                    }
+                }
+            } else {
+                let items = subsec.items;
+                let xlen = items.length;
+                data.writeUint8(subsec.id);
+                data.writeULEB128(subsec.size);
+                data.writeULEB128(xlen);
+                for (let x = 0; x < xlen; x++) {
+                    let pair = items[x];
+                    data.writeULEB128(pair.idx);
+                    data.writeULEB128(pair.strsz);
+                    data.writeUTF8Bytes(pair.name);
+                }
+            }
+        }
+
+        if (data.offset != buf.byteLength)
+            console.error("computed name section length (real = %d vs. computed = %d)", data.offset, buf.byteLength);
+
+        return buf;
     }
 
-    return results;*/
+    static decode(module, data, size) {
 
+        let results = {};
+        let sectionIds = [];
+        let end = data.offset + size;
+        while (data.offset < end) {
+
+            let id = data.readUint8();
+            let subsz = data.readULEB128();
+            let substart = data.offset;
+            sectionIds.push(id);
+            if (id == 0x01) { // function names: vec(nameassoc)
+
+                //console.log("id %d size: %d", id, subsz);
+                let functions = module.functions;
+                let cnt = data.readULEB128();
+                for (let i = 0; i < cnt; i++) {
+                    let idx = data.readULEB128();
+                    let nlen = data.readULEB128();
+                    let name = data.readUTF8Bytes(nlen);
+                    let func = functions[idx];
+                    func[__nsym] = name;
+                }
+
+                //console.log(map);
+                data.offset = substart + subsz;
+
+            } else if (id == 0x00) { // module name
+
+                let strlen = data.readULEB128();
+                module[__nsym] = data.readUTF8Bytes(strlen);
+                console.log("id %d size: %d", id, subsz);
+                data.offset = substart + subsz;
+
+            } else if (id == 0x02) { // local names: vec(indirectnameassoc)
+                console.log("id %d size: %d", id, subsz);
+                data.offset = substart + subsz;
+            } else if (id == 0x03) { // label names: vec(indirectnameassoc)
+                console.log("id %d size: %d", id, subsz);
+                data.offset = substart + subsz;
+            } else if (id == 0x04) { // type names: vec(nameassoc)
+                
+                console.log("id %d size: %d", id, subsz);
+
+                let types = module.types;
+                let cnt = data.readULEB128();
+                for (let i = 0; i < cnt; i++) {
+                    let idx = data.readULEB128();
+                    let nlen = data.readULEB128();
+                    let name = data.readUTF8Bytes(nlen);
+                    let type = types[idx];
+                    type[__nsym] = name;
+                }
+
+                data.offset = substart + subsz;
+
+            } else if (id == 0x05) { // table names: vec(nameassoc)
+                console.log("id %d size: %d", id, subsz);
+
+                let tables = module.tables;
+                let cnt = data.readULEB128();
+                for (let i = 0; i < cnt; i++) {
+                    let idx = data.readULEB128();
+                    let nlen = data.readULEB128();
+                    let name = data.readUTF8Bytes(nlen);
+                    let tbl = tables[idx];
+                    tbl[__nsym] = name;
+                }
+
+                data.offset = substart + subsz;
+            } else if (id == 0x06) { // memory names: vec(nameassoc)
+                console.log("id %d size: %d", id, subsz);
+
+                let mems = module.memory;
+                let cnt = data.readULEB128();
+                for (let i = 0; i < cnt; i++) {
+                    let idx = data.readULEB128();
+                    let nlen = data.readULEB128();
+                    let name = data.readUTF8Bytes(nlen);
+                    let mem = mems[idx];
+                    mem[__nsym] = name;
+                }
+
+                data.offset = substart + subsz;
+
+            } else if (id == 0x07) { // global names: vec(nameassoc)
+
+                let globals = module.globals;
+                let cnt = data.readULEB128();
+                for (let i = 0; i < cnt; i++) {
+                    let idx = data.readULEB128();
+                    let nlen = data.readULEB128();
+                    let name = data.readUTF8Bytes(nlen);
+                    let glob = globals[idx];
+                    glob[__nsym] = name;
+                }
+
+                //console.log(map);
+                data.offset = substart + subsz;
+
+            } else if (id == 0x08) { // element segment names: vec(nameassoc)
+               
+                let segments = module.elementSegments;
+                let cnt = data.readULEB128();
+                for (let i = 0; i < cnt; i++) {
+                    let idx = data.readULEB128();
+                    let nlen = data.readULEB128();
+                    let name = data.readUTF8Bytes(nlen);
+                    let segment = segments[idx];
+                    segment[__nsym] = name;
+                }
+
+                data.offset = substart + subsz;
+            } else if (id == 0x09) { // data segment names
+
+                let segments = module.dataSegments;
+                let cnt = data.readULEB128();
+                if (segments.length == 0)
+                    cnt = 0; // skip
+
+                for (let i = 0; i < cnt; i++) {
+                    let idx = data.readULEB128();
+                    let nlen = data.readULEB128();
+                    let name = data.readUTF8Bytes(nlen);
+                    let segment = segments[idx];
+                    segment[__nsym] = name;
+                }
+
+                data.offset = substart + subsz;
+            } else {
+                console.warn("id %d size: %d", id, subsz);
+                data.offset = substart + subsz;
+            }
+        }
+
+        let section = new WebAssemblyCustomSectionName(module);
+        section._sections = sectionIds;
+        return section;
+    }
+
+    remove(obj) {
+        delete obj[__nsym];
+        this.markDirty();
+    }
+
+    rename(obj, newName) {
+        obj[__nsym] = newName;
+        this.markDirty();
+    }
+
+    isNamed(obj) {
+        return typeof obj[__nsym] == "string";
+    }
 }
 
 function isValidSectionType(type) {
@@ -5726,42 +6545,226 @@ function isValidSectionType(type) {
 }
 
 function encodeWebAssemblyBinary(mod, options) {
-    // check script.js for impl.
+    // check outputAction() in script.js for impl.
 }
 
 class WebAssemblyModule {
 
     constructor() {
-
+        this._version = undefined;
     }
+
+    // globals
 
     getGlobalByName(name, module) {
         /*if (!this.names || !this.names.globals)
             throw TypeError("module must export the custom name section");
         let names = this.names.globals;
         let globals = this.globals;*/
+
+        if (typeof name != "string")
+            throw new TypeError("name must be string");
+
+        if (typeof module == "string" && module.length > 0) {
+            let imports = this.imports;
+            let len = imports.length;
+            let results = [];
+            for (let i = 0; i < len; i++) {
+                let imp = imports[i];
+                if (imp.name == name && imp.module == module) {
+                    return imp;
+                }
+            }
+
+            return null;
+        }
+
+        let globals = this.globals;
+        let len = globals.length;
+        for (let i = 0; i < len; i++) {
+            let glob = globals[i];
+            if (glob[__nsym] == name) {
+                return glob;
+            }
+        }
+
         let imports = this.imports;
-        let len = imports.length;
-        let hasmod = typeof module == "string";
-        let results = [];
+        len = imports.length;
         for (let i = 0; i < len; i++) {
             let imp = imports[i];
-            if (imp.name == name && (!hasmod || module == imp.module)) {
+            if ((imp instanceof ImportedGlobal) && imp.name == name) {
                 return imp;
             }
         }
-        let exports = this.exports;
-        len = exports.length;
+        let exported = this.exports;
+        len = exported.length;
         for (let i = 0; i < len; i++) {
-            let exp = exports[i];
+            let exp = exported[i];
             if (exp instanceof ExportedGlobal && exp.name == name) {
                 return exp.global;
             }
         }
 
         // WebAssembly by itself has no internal need for globals if they are not imported/exported
+        
         return null;
     }
+
+    replaceGlobal(oldGlobal, newGlobal, byAddress) {
+
+        byAddress = (byAddress === true);
+        let gvalues = [];
+        let oldIsImport = false;
+        let isSameType = false;
+        let firstInvalid = -1;
+        let firstNonImport = 0;
+        let newIndex = -1;
+        let globals = this.globals;
+        let len = globals.length;
+        for (let i = 0; i < len; i++) {
+            let glob = globals[i];
+            if (glob instanceof WasmGlobal) {
+                firstNonImport = i;
+                break;
+            }
+        }
+
+        if (globals.indexOf(newGlobal) !== -1)
+            throw new ReferenceError("merging globals not implemented");
+
+        if (oldGlobal instanceof ImportedGlobal)
+            byAddress = false;
+
+        if ((oldGlobal instanceof ImportedGlobal && newGlobal instanceof ImportedGlobal) || (oldGlobal instanceof WasmGlobal && newGlobal instanceof WasmGlobal))
+            isSameType = true;
+
+        if (isSameType) {
+            let idx = globals.indexOf(oldGlobal);
+            globals[idx] = newGlobal;
+        } else {
+            
+            let idx = globals.indexOf(oldGlobal);
+            globals.splice(idx, 1);
+
+            if (newGlobal instanceof ImportedGlobal) {
+                let firstNonImport = 0;
+                let len = globals.length;
+                for (let i = 0; i < len; i++) {
+                    let glob = globals[i];
+                    if (!(glob instanceof ImportedGlobal)) {
+                        firstNonImport = i;
+                        break;
+                    }
+                }
+                globals.splice(firstNonImport, 0, newGlobal);
+            } else {
+                globals.push(newGlobal);
+            }
+        }
+        
+        let rawValue;
+        
+        if (oldGlobal.init.length == 2 && oldGlobal.init[0].opcode == 0x41 && oldGlobal.init[1].opcode == 0x0B) {
+            rawValue = oldGlobal.init[0].value;
+        } else {
+            throw new TypeError("globals initial value unsupported");
+        }
+
+        let start = 0;
+        let imports = this.imports;
+        len = imports.length;
+        for (let i = 0; i < len; i++) {
+            let imp = imports[i];
+            if (imp instanceof ImportedFunction) {
+                start++;
+            }
+        }
+
+        let functions = this.functions;
+        let ylen = functions.length;
+        for (let y = start; y < ylen; y++) {
+            let func = functions[y];
+            let opcodes = func.opcodes;
+            let xlen = opcodes.length;
+            let xend = xlen - 1;
+            let dirty = false;
+            let last = null;
+            for (let x = 0; x < xlen; x++) { // do get opcodes.length to local as handlers might alter opcode around them.
+                let op = opcodes[x];
+                if (op.opcode == 0x23 || op.opcode == 0x24) {
+
+                    if (op.global == oldGlobal) {
+                        op.global = newGlobal;
+                        op.x = newIndex;
+                        dirty = true;
+                    }
+                } else if (byAddress === true && op.opcode == 0x41) { // i32.const
+                    let val = op.value;
+                    let idx = gvalues.indexOf(val);
+                    if (val == rawValue) {
+                        let inst = {opcode: 0x23, global: newGlobal, x: newIndex};
+                        opcodes[x] = inst;
+                        dirty = true;
+                    } else if (val == 0 && x < xlen - 1) {
+                        let peek = opcodes[x + 1];
+                        if (peek.opcode == 0x28 && peek.offset == rawValue) {
+                            let inst = {opcode: 0x23, global: newGlobal, x: newIndex};
+                            opcodes[x] = inst;
+                            opcodes.splice(x + 1, 1);
+                            xlen--;
+                            dirty = true;
+                        } else if (peek.opcode == 0x36 && peek.offset == rawValue) {
+                            let inst = {opcode: 0x24, global: newGlobal, x: newIndex};
+                            opcodes[x] = inst;
+                            opcodes.splice(x + 1, 1);
+                            xlen--;
+                            dirty = true;
+                        }
+                    }
+                }
+            }
+
+            if (dirty)
+                func._opcodeDirty = true;
+        }
+
+        // as replacing globals basically might shift the index in which its arrange simply mark the whole
+        // code section as dirty..
+        this.findSection(CHUNK_TYPE.BYTECODE).markDirty();
+
+        return true;
+
+        // marks every function that uses a global defined after the replaced one as dirty to force update.
+        if (firstInvalid !== -1) {
+            let functions = this.functions;
+            let ylen = functions.length;
+            for (let y = start; y < ylen; y++) {
+                let func = functions[y];
+                if (func._opcodeDirty)
+                    continue;
+                let dirty = false;
+                let opcodes = func.opcodes;
+                let xlen = opcodes.length;
+                for (let x = 0; x < xlen; x++) { // do get opcodes.length to local as handlers might alter opcode around them.
+                    let op = opcodes[x];
+                    if (op.opcode == 0x23 || op.opcode == 0x24) {
+                        let idx = op.x;
+                        if (op.x >= firstInvalid) {
+                            dirty = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (dirty)
+                    func._opcodeDirty = true;
+            }
+        }
+
+        return true;
+    }
+
+    // exports
 
     appendExport(name, value) {
 
@@ -5855,10 +6858,436 @@ class WebAssemblyModule {
 
     }
 
-    removeExport() {
+    removeExportByName(name) {
+
+    }
+
+    removeExportByRef(obj) {
+        // there is nothing in the spec which prevents a object to be exported more than once..
+        if (obj instanceof WasmFunction) {
+
+            let matched = [];
+            let exported = this.exports;
+            let len = exported.length;
+            for (let i = 0; i < len; i++) {
+                let exp = exported[i];
+                if (!(exp instanceof ExportedFunction))
+                    continue;
+                if (exp.function == obj) {
+                    matched.push(i);
+                }
+            }
+
+            // removes in reverse..
+            for (let i = matched.length - 1; i >= 0; i--) {
+                let idx = matched[i];
+                exported.splice(idx, 1);
+            }
+
+            return matched.length;
+
+        } else if (obj instanceof WasmGlobal) {
+
+            let matched = [];
+            let exported = this.exports;
+            let len = exported.length;
+            for (let i = 0; i < len; i++) {
+                let exp = exported[i];
+                if (!(exp instanceof ExportedGlobal))
+                    continue;
+                if (exp.global == obj) {
+                    matched.push(i);
+                }
+            }
+
+            // removes in reverse..
+            for (let i = matched.length - 1; i >= 0; i--) {
+                let idx = matched[i];
+                exported.splice(idx, 1);
+            }
+
+            return matched.length;
+
+        } else if (obj instanceof WasmTable) {
+
+            let matched = [];
+            let exported = this.exports;
+            let len = exported.length;
+            for (let i = 0; i < len; i++) {
+                let exp = exported[i];
+                if (!(exp instanceof ExportedTable))
+                    continue;
+                if (exp.table == obj) {
+                    matched.push(i);
+                }
+            }
+
+            // removes in reverse..
+            for (let i = matched.length - 1; i >= 0; i--) {
+                let idx = matched[i];
+                exported.splice(idx, 1);
+            }
+
+            return matched.length;
+
+        } else if (obj instanceof WasmMemory) {
+
+            let matched = [];
+            let exported = this.exports;
+            let len = exported.length;
+            for (let i = 0; i < len; i++) {
+                let exp = exported[i];
+                if (!(exp instanceof ExportedMemory))
+                    continue;
+                if (exp.memory == obj) {
+                    matched.push(i);
+                }
+            }
+
+            // removes in reverse..
+            for (let i = matched.length - 1; i >= 0; i--) {
+                let idx = matched[i];
+                exported.splice(idx, 1);
+            }
+
+            return matched.length;
+        }
+
+
+        return 0;
+    }
+
+    // getCustomSectionsByName(name)
+    customSections(name) {
+        let results = [];
+        const sections = this.sections;
+        let len = sections.length;
+        for (let i = 0; i < len; i++) {
+            let section = sections[i];
+            if (section.type == 0x00 && section.name == name) {
+                results.push(section);
+            }
+        }
+    }
+
+    // getSectionByType(type)
+    
+    findSection(search) {
+
+        if (typeof search == "string") {
+
+            let sections = this.sections;
+            let len = sections.length;
+            for (let i = 0; i < len; i++) {
+                let sec = sections[i];
+                if (sec.type == 0x00 && sec.name == search) {
+                    return sec;
+                }
+            }
+
+        } else if (Number.isInteger(search)){
+
+            let sections = this.sections;
+            let len = sections.length;
+            for (let i = 0; i < len; i++) {
+                let sec = sections[i];
+                if (sec.type == search) {
+                    return sec;
+                }
+            }
+
+        }
+
+        return null;
+    }
+
+    findAllSections(search) {
+
+        let results = [];
+
+        if (typeof search == "string") {
+
+            let sections = this.sections;
+            let len = sections.length;
+            for (let i = 0; i < len; i++) {
+                let sec = sections[i];
+                if (sec.type == 0x00 && sec.name == search) {
+                    results.push(sec);
+                }
+            }
+
+        } else if (typeof search == "regexp") {
+
+            let sections = this.sections;
+            let len = sections.length;
+            for (let i = 0; i < len; i++) {
+                let sec = sections[i];
+                if (sec.type == 0x00 && search.exec(sec.name)) {
+                    results.push(sec);
+                }
+            }
+
+        } else if (Number.isInteger(search)){
+
+            let sections = this.sections;
+            let len = sections.length;
+            for (let i = 0; i < len; i++) {
+                let sec = sections[i];
+                if (sec.type == search) {
+                    results.push(sec);
+                }
+            }
+
+        } else {
+            throw new TypeError("search argument is invalid");
+        }
+
+        return results;
+    }
+
+    // memory & data segments
+
+    /**
+     * Computes and constructs a ArrayBuffer which built up like the initial memory of the module. Which makes
+     * access and mutation at addresses possible. If mutable is set to true, the data segments of the module is also
+     * @param  {WasmMemory|ImportedMemory} memory The memory for which to compute the initial memory.
+     * @param  {Boolean} mutable [description]
+     * @return {ArrayBuffer}         [description]
+     */
+    computeInitialMemory(memory, mutable) {
+        mutable = (mutable === true);
+
+        if (mutable && this._mutableDataSegments) {
+            return this._mutableDataSegments;
+        }
+
+        let segments = this.dataSegments
+        let len = segments.length;
+        let min = 0xFFFFFFFF;   // wasm-32 max
+        let max = 0;
+        for (let i = 0; i < len; i++) {
+            let segment = segments[i];
+            if (segment.memory !== memory)
+                continue;
+            let val = segment.inst.opcodes[0].value;
+            let end = val + segment.size;
+            if (end > max) {
+                max = end;
+            }
+            if (val < min) {
+                min = val;
+            }
+        }
+
+        let mem = new Uint8Array(max);
+
+        for (let i = 0; i < len; i++) {
+            let segment = segments[i];
+            let off = segment.inst.opcodes[0].value;
+            let buf = segment._buffer;
+            u8_memcpy(buf, 0, buf.byteLength, mem, off);
+        }
+
+        if (mutable) {
+            this._mutableDataSegments = mem;
+        }
+
+        return mem;
+    }
+
+    computeInitialMemoryMaxAddress() {
+        let segments = this.dataSegments
+        let len = segments.length;
+        let min = segments[0].inst.opcodes[0].value;
+        let max = 0;
+        for (let i = 0; i < len; i++) {
+            let seg = segments[i];
+            let val = seg.inst.opcodes[0].value;
+            let end = val + seg.size;
+            if (end > max) {
+                max = end;
+            }
+            if (val < min) {
+                min  = val;
+            }
+        }
+
+        return max;
+        //return {min: min: max: max};
+    }
+
+    getDataSegmentByName(name) {
+
+        let dataSegments = this.dataSegments;
+        let len = dataSegments.length;
+        for (let i = 0; i < len; i++) {
+            let segment = dataSegments[i];
+            if (typeof segment[__nsym] != "string")
+                continue
+            if (segment[__nsym] === name) {
+                return segment;
+            }
+        }
+
+        return null;
+    }
+    
+    /**
+     * Mutates all references to oldMemory to be instead reference newMemory.
+     * @param  {oldMemory} oldMemory [description]
+     * @param  {newMemory} newMemory [description]
+     * @return {[type]}           [description]
+     */
+    replaceMemory(oldMemory, newMemory) {
+
+    }
+
+    // Functions
+
+    getFunctionByName(name, checkExports) {
+
+        checkExports = (checkExports === true);
+        let functions = this.functions;
+        let len = functions.length
+        for (let i = 0; i < len; i++) {
+            let func = functions[i];
+            if (typeof func[__nsym] == "string" && func[__nsym] == name) {
+                return func;
+            }
+        }
+
+        if (!checkExports)
+            return null;
+
+        let exported = this.exports;
+        len = exported.length
+        for (let i = 0; i < len; i++) {
+            let exp = exported[i];
+            if (!(exp instanceof ExportedFunction)) {
+                continue;
+            }
+            if (exp.name == name) {
+                return exp.function;
+            }
+        }
+
+        return null;
+    }
+
+    // Table utilities
+    
+    getTableByName(name) {
+
+    }
+
+    // Support for common custom sections
+
+    /**
+     * Adopts names from the exports if a name not already given to that value.
+     */
+    adoptNamesFromExports() {
+
+    }
+
+    // assemble binary
+
+    encode(options) {
+        let exported = [];
+        let excludeSections = [];
+        let sections = this.sections;
+        let len = sections.length;
+        let buffers = [];
+        this._buffer = moduleBuffer;
+
+        if (Array.isArray(options.exclude)) {
+            let exclude = options.exclude;
+            let ylen = sections.length;
+            let xlen = exclude.length;
+
+            for (let y = 0; y < ylen; y++) {
+                let sec = sections[y];
+                let match = false;
+                for (let x = 0; x < xlen; x++) {
+                    let p = exclude[x];
+                    if (p.type != sec.type) {
+                        continue;
+                    } else {
+                        if (p.type === 0x00) {
+
+                            if (typeof p.name == "string" && p.name == sec.name) {
+                                match = true;
+                                break;
+                            }
+
+                        } else {
+                            match = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (match) {
+                    excludeSections.push(sec);
+                }
+            }
+        }
+
+        let header = new Uint8Array(8);
+        let data = new DataView(header.buffer);
+        buffers.push(header.buffer);
+        data.setUint8(0, 0x00); // \0asm
+        data.setUint8(1, 0x61);
+        data.setUint8(2, 0x73);
+        data.setUint8(3, 0x6D);
+        data.setUint32(4, 0x1, true);
+
+        prepareModuleEncode(this);
+
+        for (let i = 0;i < len;i++) {
+            let section = sections[i];
+            let excluded = excludeSections.indexOf(section) !== -1;
+            let isExported = exported[i];
+            let type = section.type;
+            if (excluded) {
+                //
+                if (type == SECTION_TYPE.DATA) {
+                    let buf = new Uint8Array(3);
+                    buf[0] = SECTION_TYPE.DATA;
+                    buf[1] = 1;
+                    buf[2] = 0;
+                    buffers.push(buf.buffer);
+                } else {
+                    continue;
+                }
+            } else if (section instanceof WebAssemblySection) {
+                let sub = section.encode({});
+                if (Array.isArray(sub)) {
+                    let xlen = sub.length;
+                    for (let x = 0; x < xlen; x++) {
+                        buffers.push(sub[x]);
+                    }
+                } else {
+                    buffers.push(sub);
+                }
+            } else {
+                let end = section.dataOffset + section.size;
+                let sub = moduleBuffer.slice(section.offset, end);
+                buffers.push(sub);
+            }
+        }
+
+
+        return buffers;
+    }
+
+    //
+
+    static disassembleWebAssemblyBinary(buffer, options) {
 
     }
 }
+
+WebAssemblyModule.Name = __nsym;
 
 // https://webassembly.github.io/spec/core/binary/modules.html#binary-version
 // https://coinexsmartchain.medium.com/wasm-introduction-part-1-binary-format-57895d851580
@@ -5923,7 +7352,8 @@ function parseWebAssemblyBinary(buf) {
     let cnt = chunks.length;
     for (let i = 0; i < cnt; i++) {
         let sec = chunks[i];
-        if (sec.type != 0x00) {
+        sec.index = i;
+        if (sec.type != SECTION_TYPE_CUSTOM) {
             filtered.push(sec);
             continue;
         }
@@ -5939,6 +7369,16 @@ function parseWebAssemblyBinary(buf) {
     let impfncnt = 0;
     let funcvec;
     let mod = new WebAssemblyModule();
+    mod._version = version;
+    mod.dataSegments = [];
+    mod.elementSegments = [];
+    mod.exports = [];
+    mod.functions = [];
+    mod.globals = [];
+    mod.imports = [];
+    mod.memory = [];
+    mod.tables = [];
+    mod.types = [];
     cnt = filtered.length;
     for (let i = 0; i < cnt; i++) {
         let chunk = filtered[i];
@@ -5947,54 +7387,131 @@ function parseWebAssemblyBinary(buf) {
         data.offset = chunk.dataOffset;
         switch (type) {
             case 0x01:  // type
-                mod.types = decodeTypeSection(data, size, mod);
+            {
+                let sec = WebAssemblyFuncTypeSection.decode(mod, data, size);
+                chunks[chunk.index] = sec;
+                sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                 break;
+            }
             case 0x02:  // import
-                mod.imports = decodeImportSection(data, size, mod);
-                impfncnt = mod.functions ? mod.functions.length : 0;
+            {
+                let sec = WebAssemblyImportSection.decode(mod, data, size);
+                chunks[chunk.index] = sec;
+                sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                //mod.imports = decodeImportSection(data, size, mod);
+                //impfncnt = mod.functions ? mod.functions.length : 0;
                 break;
+            }
             case 0x03:  // function
-                decodeFuncSection(data, size, mod);
+            {
+                let sec = WebAssemblyFunctionSection.decode(mod, data, size);
+                chunks[chunk.index] = sec;
+                sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                //decodeFuncSection(data, size, mod);
                 break;
+            }
             case 0x04:  // table
-                decodeTableSection(data, size, mod);
+            {
+                let sec = WebAssemblyTableSection.decode(mod, data, size);
+                chunks[chunk.index] = sec;
+                sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                //decodeTableSection(data, size, mod);
                 break;
+            }
             case 0x05:  // memory
-                decodeMemorySection(data, size, mod);
+            {
+                let sec = WebAssemblyMemorySection.decode(mod, data, size);
+                chunks[chunk.index] = sec;
+                sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                //decodeMemorySection(data, size, mod);
                 break;
+            }
             case 0x06:  // global
-                decodeGlobalSection(data, size, mod);
+            {
+                let sec = WebAssemblyGlobalSection.decode(mod, data, size);
+                chunks[chunk.index] = sec;
+                sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                //decodeGlobalSection(data, size, mod);
                 break;
+            }
             case 0x07:  // export
-                decodeExportSection(data, size, mod);
+            {
+                let sec = WebAssemblyExportSection.decode(mod, data, size);
+                chunks[chunk.index] = sec;
+                sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                //decodeExportSection(data, size, mod);
                 break;
+            }
             case 0x08:  // start
-                decodeStartSection(data, size, mod);
+            {
+                let sec = WebAssemblyStartSection.decode(mod, data, size);
+                chunks[chunk.index] = sec;
+                sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                //decodeStartSection(data, size, mod);
                 break;
+            }
             case 0x09:  // element
-                decodeElementSection(data, size, mod);
+            {
+                let sec = WebAssemblyElementSection.decode(mod, data, size);
+                chunks[chunk.index] = sec;
+                sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                //decodeElementSection(data, size, mod);
                 break;
+            }
             case 0x0A:  // code
-                decodeCodeSection(data, size, mod, impfncnt);
+            {
+                let sec = WebAssemblyCodeSection.decode(mod, data, size);
+                chunks[chunk.index] = sec;
+                sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                //decodeCodeSection(data, size, mod, impfncnt);
                 break;
+            }
             case 0x0B:  // data
-                mod.dataSegments = decodeDataSection(data, size, mod);
+            {
+                let sec = WebAssemblyDataSection.decode(mod, data, size);
+                //mod.dataSegments = decodeDataSection(data, size, mod);
+                chunks[chunk.index] = sec;
+                sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                 break;
+            }
+            case 0x0C:  // data-count
+            {
+                let sec = WebAssemblyDataCountSection.decode(mod, data, size);
+                //mod.dataSegments = decodeDataSection(data, size, mod);
+                chunks[chunk.index] = sec;
+                sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                break;
+            }
             case 0x00: // custom
             {
+                let sec;
                 let name = chunk.name;
                 switch (name) {
                     case 'producers':
-                        mod.producers = decodeCustomProducers(data, size, size);
+                        sec = WebAssemblyCustomSectionProducers.decode(mod, data, size);
+                        chunks[chunk.index] = sec;
+                        mod.producers = sec.data;
+                        chunk.data = sec.data;
+                        sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                         break;
                     case 'name':
-                        mod.names = decodeCustomName(data, size, mod);
+                        sec = WebAssemblyCustomSectionName.decode(mod, data, size);
+                        chunks[chunk.index] = sec;
+                        sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                         break;
                     case 'dylink.0':
-                        mod.dylink0 = decodeCustomDylink0(data, size, mod);
+                        sec = WebAssemblyCustomSectionDylink0.decode(mod, data, size);
+                        chunks[chunk.index] = sec;
+                        mod.dylink0 = sec.data;
+                        chunk.data = sec.data;
+                        sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                         break;
                     case 'target_features':
-                        mod.features = decodeTargetFeatures(data, size, mod);
+                        sec = WebAssemblyCustomSectionTargetFeatures.decode(mod, data, size);
+                        chunks[chunk.index] = sec;
+                        mod.features = sec.data;
+                        chunk.data = sec.data;
+                        sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                         break;
                     default:
                         break;  // do nothing;
@@ -6007,7 +7524,7 @@ function parseWebAssemblyBinary(buf) {
     }
 
     if (dwarfsec.length > 0 && typeof decodeDWARFDebugSections == "function") {
-        let ret = decodeDWARFDebugSections(data, dwarfsec);
+        //let ret = decodeDWARFDebugSections(data, dwarfsec);
     }
 
     mod.sections = chunks;
