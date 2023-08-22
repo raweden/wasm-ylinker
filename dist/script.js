@@ -293,6 +293,40 @@ function showWasmInfoStats(mod, sections) {
 		tr.appendChild(td);
 		tbody.appendChild(tr);
 	}
+
+	let inst_stats = computeInstructionStatistics(mod);
+	console.log(inst_stats);
+
+	table = document.createElement("table");
+	table.classList.add("data-table");
+	container.appendChild(table);
+	thead = document.createElement("thead");
+	thead.innerHTML = "<tr><th>opcode</th><th>name</th><th>count</th><th>unaligned</th></tr>";
+	table.appendChild(thead);
+	tbody = document.createElement("tbody");
+	table.appendChild(tbody);
+
+	for (const [opcode, stat] of inst_stats) {
+
+		let tr = document.createElement("tr");
+		tbody.appendChild(tr);
+
+		let td = document.createElement("td");
+		td.textContent = opcode.toString(16);
+		tr.appendChild(td);
+
+		td = document.createElement("td");
+		td.textContent = stat.inst.name;
+		tr.appendChild(td);
+
+		td = document.createElement("td");
+		td.textContent = stat.usage;
+		tr.appendChild(td);
+
+		td = document.createElement("td");
+		td.textContent = stat.unalignedCount;
+		tr.appendChild(td);
+	}
 }
 
 function findModuleByType(mod, type) {
@@ -660,6 +694,9 @@ let _workflowActions = {
 		params: [{name: "initial-data", type: "file", role: "output", types: [{description: "WebAssembly Files", accept: {"application/wasm": [".wasm"]}}]}],
 		handler: extractDataSegmentsAction
 	},
+	filterModuleExports: {
+		handler: filterModuleExports
+	},
 	output: {
 		params: [{name: "wasm-binary", type: "file", role: "output", types: [{description: "WebAssembly Files", accept: {"application/wasm": [".wasm"]}}]}],
 		handler: outputAction
@@ -691,6 +728,9 @@ let _workflowActions = {
 	},
 	generateModinfo : {
 		handler: generateKLDModuleInfo,
+	},
+	generateVirtualMemoryWrapper: {
+		handler: generateVirtualMemoryWrapperAction,
 	}
 };
 
@@ -921,7 +961,12 @@ let _netbsdKernMainWorkflow = {
 				consume: true,
 				exclude: [".bss"]
 			}
-		}, /*{
+		}, {
+			action: "filterModuleExports",
+			options: {
+				names: ["__wasm_call_ctors", "__indirect_function_table", "global_start", "syscall", "syscall_trap"]
+			}
+		},/*{
 			action: "configureBindingTemplate",
 			options: {
 				format: "javascript",
@@ -1131,7 +1176,7 @@ function getWorkflowParameterValues() {
 	let files = [];
 	let viewMap = _workflowParamViews;
 	let params = _workflowParameters;
-	let len = params.length;
+	let len = !Array.isArray(params) ? 0 : params.length;
 	let values = {};
 	for (let i = 0; i < len; i++) {
 		let param = params[i];
@@ -2215,7 +2260,7 @@ function postOptimizeKernMainAction(ctx, mod, options) {
 		let typeidx = indexOfFuncType(mod, argv, type.retv);
 		if (typeidx == -1) {
 			typeidx = mod.types.length;
-			let newtype = new FuncType();
+			let newtype = new WasmType();
 	        newtype.argc = argv.length;
 	        newtype.argv = argv;
 	        newtype.retc = type.retc;
@@ -2310,6 +2355,10 @@ function postOptimizeKernMainAction(ctx, mod, options) {
 	}
 }
 
+function generateVirtualMemoryWrapperAction(ctx, module, options) {
+	generateVirtualMemoryWrapper(module);
+}
+
 function postOptimizeKernSideAction(ctx, module, options) {
 
 }
@@ -2363,312 +2412,404 @@ function removeExportFor(mod, obj) {
 	}
 }
 
+// mapping of placeholder atomic operations to dedicated wasm instructions.
+const atomic_op_replace_map = [
+	{ 	// atomic operations.
+		name: "atomic_notify",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE00, 2, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_wait32",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE01, 2, 0);
+			return true;
+		}
+	}, {
+		name: ["wasm_atomic_fence", "wasm32_atomic_fence"],
+		replace: function(inst, index, arr) {
+			arr[index] = {opcode: 0xFE03, memidx: 0};
+			return true;
+		}
+	}, {
+		name: "atomic_load8",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE12, 0, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_store8",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE19, 0, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_add8",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE20, 0, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_sub8",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE27, 0, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_and8",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE2E, 0, 0);
+			return true;
+		}
+	},{
+		name: "atomic_or8",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE35, 0, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_xor8",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE3C, 0, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_xchg8",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE43, 0, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_cmpxchg8",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE4A, 0, 0);
+			return true;
+		}
+	},  {
+		name: "atomic_load16",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE13, 1, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_store16",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE1A, 1, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_add16",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE21, 1, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_sub16",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE28, 1, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_and16",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE2F, 1, 0);
+			return true;
+		}
+	},{
+		name: "atomic_or16",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE36, 1, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_xor16",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE3D, 1, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_xchg16",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE44, 1, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_cmpxchg16",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE4B, 0, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_load32",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE10, 1, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_store32",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE17, 2, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_add32",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE1E, 2, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_sub32",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE25, 2, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_and32",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE2C, 2, 0);
+			return true;
+		}
+	},{
+		name: "atomic_or32",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE33, 2, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_xor32",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE3A, 2, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_xchg32",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE41, 2, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_cmpxchg32",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE48, 2, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_wait64",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE02, 3, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_load64",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE11, 3, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_store64",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE18, 3, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_add64",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE1F, 3, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_sub64",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE26, 3, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_and64",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE2D, 3, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_or64",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE34, 3, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_xor64",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE3B, 3, 0);
+			return true;
+		}
+	}, {
+		name: "atomic_xchg64",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE42, 3, 0);
+			return true;
+		}
+	},{
+		name: "atomic_cmpxchg64",
+		replace: function(inst, index, arr) {
+			arr[index] = new AtomicInst(0xFE49, 3, 0);
+			return true;
+		}
+	}
+];
+
+// other common operations which could be replaced:
+// popcount32 -> i32.popcnt
+
+// mapping of memcpy/memset into dedicated wasm instructions.
+const memory_op_replace_map = [{ 							// memory operations.
+		name: "memcpy",
+		replace: memcpyReplaceHandler
+	}, {
+		name: "__memcpy",
+		replace: memcpyReplaceHandler
+	}, {
+		name: "memcpy_early",
+		replace: memcpyReplaceHandler
+	}, {
+		name: "memset",
+		// replacing memset vs. memory.fill is where it gets complicated, memset returns which the 
+		// memory.fill instruction does not. check for drop instruction but if not found we must fake
+		// the return of memset 
+		replace: memset_to_inst_handler
+}];
+
+function localUsedInRange(instructions, local, start, end) {
+
+	end = Math.min(instructions.length, end);
+
+	for (let i = start; i < end; i++) {
+		let inst  = instructions[i];
+		if (inst.opcode == 0x20 || inst.opcode == 0x21 || inst.opcode == 0x22) {
+			if (inst.local == local)
+				return true;
+		}
+	}
+
+	return false;
+}
+
+function memcpyReplaceHandler(inst, index, arr, func) {
+
+	let after = index + 1 < arr.length ? arr[index + 1] : null;
+	if (after) {
+		let opcode = after.opcode;
+		if (opcode == 0x1A) { 			// drop
+			arr[index] = {opcode: 0xfc0a, memidx1: 0, memidx2: 0};
+			arr.splice(index + 1, 1); // remove drop
+			return index + 1 < arr.length ? arr[index + 1] : true;
+		} else if (opcode == 0x22) { 	// local.tee
+			arr[index] = {opcode: 0xfc0a, memidx1: 0, memidx2: 0};
+			after.opcode = 0x20; // replace local.tee with local.get
+			let tee, dstidx, dst = traverseStack(func, arr, index - 1, 2);
+			dstidx = arr.indexOf(dst);
+			tee = {opcode: 0x22, local: after.local}; // local.tee
+			arr.splice(dstidx + 1, 0, tee);
+			return after;
+		} else if (opcode == 0x21) { 	// local.set
+			arr[index] = {opcode: 0xfc0a, memidx1: 0, memidx2: 0};
+			let tee, opidx, dst = traverseStack(func, arr, index - 1, 2);
+			opidx = arr.indexOf(dst);
+			tee = {opcode: 0x22, local: after.local}; // local.tee
+			arr.splice(opidx + 1, 0, tee);
+			opidx = arr.indexOf(after);
+			arr.splice(opidx, 1);
+			// TODO: assert that .local is not used prior to after memset instruction.
+			return opidx < arr.length ? arr[opidx] : arr[arr.length - 1];
+		} else {
+			let local;
+			if (!func.__memoplocal) {
+				local = new WasmLocal(WA_TYPE_I32);
+				func.__memoplocal = local;
+				func.locals.push(local);
+			} else {
+				local = func.__memoplocal;
+			}
+
+			let tee, opidx, dst = traverseStack(func, arr, index - 1, 2);
+			opidx = arr.indexOf(dst);
+			if (localUsedInRange(arr, local, opidx, index)) {
+				console.error("local is in use!");
+				return false;
+			}
+			arr[index] = {opcode: 0xfc0a, memidx1: 0, memidx2: 0};
+			let lget = {opcode: 0x20, local: local};
+			arr.splice(index + 1, 0, lget);		// inserts a local.get for dest after memory.copy
+			tee = {opcode: 0x22, local: local}; // local.tee for the dest of memory.copy
+			arr.splice(opidx + 1, 0, tee);
+			// TODO: assert that .local is not used prior to after memset instruction.
+			return lget;
+		}
+	}
+	
+	return false;
+}
+
+function memset_to_inst_handler(inst, index, arr, func) {
+	let after = index + 1 < arr.length ? arr[index + 1] : null;
+	if (after) {
+		let opcode = after.opcode;
+		if (opcode == 0x1A) { 			// drop
+			arr[index] = {opcode: 0xfc0b, memidx: 0};
+			arr.splice(index + 1, 1); // remove drop
+			return index + 1 < arr.length ? arr[index + 1] : true;
+		} else if (opcode == 0x22) { 	// local.tee
+			arr[index] = {opcode: 0xfc0b, memidx: 0};
+			after.opcode = 0x20; // replace local.tee with local.get
+			let tee, dstidx, dst = traverseStack(func, arr, index - 1, 2);
+			dstidx = arr.indexOf(dst);
+			tee = {opcode: 0x22, local: after.local}; // local.tee
+			arr.splice(dstidx + 1, 0, tee);
+			return after;
+		} else if (opcode == 0x21) { 	// local.set
+			arr[index] = {opcode: 0xfc0b, memidx: 0};
+			let tee, opidx, dst = traverseStack(func, arr, index - 1, 2);
+			opidx = arr.indexOf(dst);
+			tee = {opcode: 0x22, local: after.local}; // local.tee
+			arr.splice(opidx + 1, 0, tee);
+			opidx = arr.indexOf(after);
+			arr.splice(opidx, 1);
+			// TODO: assert that .local is not used prior to after memset instruction.
+			return opidx < arr.length ? arr[opidx] : arr[arr.length - 1];
+		} else {
+			let local;
+			if (!func.__memoplocal) {
+				local = new WasmLocal(WA_TYPE_I32);
+				func.__memoplocal = local;
+				func.locals.push(local);
+			} else {
+				local = func.__memoplocal;
+			}
+
+			let tee, opidx, dst = traverseStack(func, arr, index - 1, 2);
+			opidx = arr.indexOf(dst);
+			if (localUsedInRange(arr, local, opidx, index)) {
+				console.error("local is in use!");
+				return false;
+			}
+			arr[index] = {opcode: 0xfc0b, memidx: 0};
+			let lget = {opcode: 0x20, local: local};
+			arr.splice(index + 1, 0, lget);		// inserts a local.get for dest after memory.copy
+			tee = {opcode: 0x22, local: local}; // local.tee for the dest of memory.copy
+			arr.splice(opidx + 1, 0, tee);
+			// TODO: assert that .local is not used prior to after memset instruction.
+			return lget;
+		}
+	}
+	
+	return false;
+}
+
 let _namedGlobals;
 
 function postOptimizeWasm(ctx, mod) {
 
-	let opsopt = [];
-
-	function memcpyReplaceHandler(inst, index, arr) {
-		let peek = arr[index + 1];
-		if (peek.opcode == 0x1A) { // drop
-			arr[index] = {opcode: 0xfc0a, memidx1: 0, memidx2: 0};
-			arr.splice(index + 1, 1);
-			return true;
-		} else {
-			console.warn("call to memcpy does not drop return value");
-		}
-		return true;
-	}
-	// TODO: we are missing atomic_fence, but cannot find this in the actual wasm proposal.
-	const inst_replace = [
-		{ 	// atomic operations.
-			name: "atomic_notify",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE00, 0, 0);
-			}
-		}, {
-			name: "atomic_wait32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE01, 0, 0);
-			}
-		}, {
-			name: "wasm_atomic_fence",
-			replace: function(inst, index, arr) {
-				return {opcode: 0xFE03, memidx: 0};
-			}
-		}, {
-			name: "atomic_load8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE12, 0, 0);
-			}
-		}, {
-			name: "atomic_store8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE19, 0, 0);
-			}
-		}, {
-			name: "atomic_add8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE20, 0, 0);
-			}
-		}, {
-			name: "atomic_sub8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE27, 0, 0);
-			}
-		}, {
-			name: "atomic_and8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE2E, 0, 0);
-			}
-		},{
-			name: "atomic_or8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE35, 0, 0);
-			}
-		}, {
-			name: "atomic_xor8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE3C, 0, 0);
-			}
-		}, {
-			name: "atomic_xchg8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE43, 0, 0);
-			}
-		}, {
-			name: "atomic_cmpxchg8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE4A, 0, 0);
-			}
-		},  {
-			name: "atomic_load16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE13, 0, 0);
-			}
-		}, {
-			name: "atomic_store16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE1A, 0, 0);
-			}
-		}, {
-			name: "atomic_add16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE21, 0, 0);
-			}
-		}, {
-			name: "atomic_sub16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE28, 0, 0);
-			}
-		}, {
-			name: "atomic_and16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE2F, 0, 0);
-			}
-		},{
-			name: "atomic_or16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE36, 0, 0);
-			}
-		}, {
-			name: "atomic_xor16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE3D, 0, 0);
-			}
-		}, {
-			name: "atomic_xchg16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE44, 0, 0);
-			}
-		}, {
-			name: "atomic_cmpxchg16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE4B, 0, 0);
-			}
-		}, {
-			name: "atomic_load32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE10, 0, 0);
-			}
-		}, {
-			name: "atomic_store32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE17, 0, 0);
-			}
-		}, {
-			name: "atomic_add32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE1E, 0, 0);
-			}
-		}, {
-			name: "atomic_sub32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE25, 0, 0);
-			}
-		}, {
-			name: "atomic_and32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE2C, 0, 0);
-			}
-		},{
-			name: "atomic_or32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE33, 0, 0);
-			}
-		}, {
-			name: "atomic_xor32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE3A, 0, 0);
-			}
-		}, {
-			name: "atomic_xchg32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE41, 0, 0);
-			}
-		}, {
-			name: "atomic_cmpxchg32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE48, 0, 0);
-			}
-		}, {
-			name: "atomic_wait64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE02, 0, 0);
-			}
-		}, {
-			name: "atomic_load64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE11, 0, 0);
-			}
-		}, {
-			name: "atomic_store64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE18, 0, 0);
-			}
-		}, {
-			name: "atomic_add64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE1F, 0, 0);
-			}
-		}, {
-			name: "atomic_sub64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE26, 0, 0);
-			}
-		}, {
-			name: "atomic_and64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE2D, 0, 0);
-			}
-		}, {
-			name: "atomic_or64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE34, 0, 0);
-			}
-		}, {
-			name: "atomic_xor64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE3B, 0, 0);
-			}
-		}, {
-			name: "atomic_xchg64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE42, 0, 0);
-			}
-		},{
-			name: "atomic_cmpxchg64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE49, 0, 0);
-			}
-		}, { 							// memory operations.
-			name: "memcpy",
-			replace: memcpyReplaceHandler
-		}, {
-			name: "__memcpy",
-			replace: memcpyReplaceHandler
-		}, {
-			name: "memcpy_early",
-			replace: memcpyReplaceHandler
-		}/*, {
-			name: "memset",
-			// replacing memset vs. memory.fill is where it gets complicated, memset returns which the 
-			// memory.fill instruction does not. check for drop instruction but if not found we must fake
-			// the return of memset 
-			replace: function(inst, index, arr) {
-				let peek = arr[index + 1];
-				if (peek.opcode == 0x1A) { // drop
-					arr[index] = {opcode: 0xfc0b, memidx: 0};
-					arr.splice(index + 1, 1);
-					return true;
-				} else {
-					console.warn("call to memcpy does not drop return value");
-				}
-				return true;
-			}
-		}*/
-	];
-	
-	let funcmap = new Map();
-	let names = [];
-	let ylen = inst_replace.length;
-	for (let y = 0; y < ylen; y++) {
-		let handler = inst_replace[y];
-		names.push(handler.name);
-	}
-
-	let functions = mod.functions;
-	ylen = functions.length;
-	for (let y = 0; y < ylen; y++) {
-		let idx, name, func = functions[y];
-		if (typeof func[__nsym] != "string")
-			continue;
-		name = func[__nsym];
-		idx = names.indexOf(name);
-		if (idx === -1)
-			continue;
-		let handler = inst_replace[idx];
-		handler.func = func;
-		handler.count = 0;
-		funcmap.set(name, handler);
-	}
-
-	// run trough all WebAssembly code to find call-sites where we call funcidx
-	let start = 0;
-	for (let y = 0; y < ylen; y++) {
-		let func = functions[y];
-		if (!(func instanceof ImportedFunction)) {
-			start = y;
-			break;
-		}
-	}
-
-	for (let y = start; y < ylen; y++) {
-		let func = functions[y];
-		let opcodes = func.opcodes;
-		// NOTE: don't try to optimize the opcodes.length, handlers might alter instructions around them.
-		for (let x = 0; x < opcodes.length; x++) {
-			let op = opcodes[x];
-			if (op.opcode == 0x10) {
-				if (funcmap.has(op.func)) {
-					let handler = funcmap.get(op.func);
-					handler.count++;
-					let res = handler.replace(op, x, opcodes);
-					if (res === op) {
-						// do nothing
-					} else if (typeof res == "boolean") {
-
-					} else if (typeof res == "number" && Number.isInteger(res)) {
-
-					} else if (typeof res == "object" && res !== null) {
-						opcodes[x] = res;
-						func._opcodeDirty = true;
-					}
-				}
-			}
-		}
-	}
+	replaceCallInstructions(ctx, mod, null, atomic_op_replace_map);
+	replaceCallInstructions(ctx, mod, null, memory_op_replace_map);	
 
 	{	
 		let glob = mod.getGlobalByName("__stack_pointer");
@@ -2712,332 +2853,16 @@ function postOptimizeWasm(ctx, mod) {
 
 function postOptimizeAtomicInst(ctx, mod) {
 
-	let opsopt = [];
-
-	function memcpyReplaceHandler(inst, index, arr) {
-		let peek = arr[index + 1];
-		if (peek.opcode == 0x1A) { // drop
-			arr[index] = {opcode: 0xfc0a, memidx1: 0, memidx2: 0};
-			arr.splice(index + 1, 1);
-			return true;
-		} else {
-			console.warn("call to memcpy does not drop return value");
-		}
-		return true;
-	}
-	// TODO: we are missing atomic_fence, but cannot find this in the actual wasm proposal.
-	const inst_replace = [
-		{ 	// atomic operations.
-			name: "atomic_notify",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE00, 0, 0);
-			}
-		}, {
-			name: "atomic_wait32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE01, 0, 0);
-			}
-		}, {
-			name: "wasm_atomic_fence",
-			replace: function(inst, index, arr) {
-				return {opcode: 0xFE03, memidx: 0};
-			}
-		}, {
-			name: "atomic_load8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE12, 0, 0);
-			}
-		}, {
-			name: "atomic_store8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE19, 0, 0);
-			}
-		}, {
-			name: "atomic_add8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE20, 0, 0);
-			}
-		}, {
-			name: "atomic_sub8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE27, 0, 0);
-			}
-		}, {
-			name: "atomic_and8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE2E, 0, 0);
-			}
-		},{
-			name: "atomic_or8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE35, 0, 0);
-			}
-		}, {
-			name: "atomic_xor8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE3C, 0, 0);
-			}
-		}, {
-			name: "atomic_xchg8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE43, 0, 0);
-			}
-		}, {
-			name: "atomic_cmpxchg8",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE4A, 0, 0);
-			}
-		},  {
-			name: "atomic_load16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE13, 0, 0);
-			}
-		}, {
-			name: "atomic_store16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE1A, 0, 0);
-			}
-		}, {
-			name: "atomic_add16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE21, 0, 0);
-			}
-		}, {
-			name: "atomic_sub16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE28, 0, 0);
-			}
-		}, {
-			name: "atomic_and16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE2F, 0, 0);
-			}
-		},{
-			name: "atomic_or16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE36, 0, 0);
-			}
-		}, {
-			name: "atomic_xor16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE3D, 0, 0);
-			}
-		}, {
-			name: "atomic_xchg16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE44, 0, 0);
-			}
-		}, {
-			name: "atomic_cmpxchg16",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE4B, 0, 0);
-			}
-		}, {
-			name: "atomic_load32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE10, 0, 0);
-			}
-		}, {
-			name: "atomic_store32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE17, 0, 0);
-			}
-		}, {
-			name: "atomic_add32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE1E, 0, 0);
-			}
-		}, {
-			name: "atomic_sub32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE25, 0, 0);
-			}
-		}, {
-			name: "atomic_and32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE2C, 0, 0);
-			}
-		},{
-			name: "atomic_or32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE33, 0, 0);
-			}
-		}, {
-			name: "atomic_xor32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE3A, 0, 0);
-			}
-		}, {
-			name: "atomic_xchg32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE41, 0, 0);
-			}
-		}, {
-			name: "atomic_cmpxchg32",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE48, 0, 0);
-			}
-		}, {
-			name: "atomic_wait64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE02, 0, 0);
-			}
-		}, {
-			name: "atomic_load64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE11, 0, 0);
-			}
-		}, {
-			name: "atomic_store64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE18, 0, 0);
-			}
-		}, {
-			name: "atomic_add64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE1F, 0, 0);
-			}
-		}, {
-			name: "atomic_sub64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE26, 0, 0);
-			}
-		}, {
-			name: "atomic_and64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE2D, 0, 0);
-			}
-		}, {
-			name: "atomic_or64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE34, 0, 0);
-			}
-		}, {
-			name: "atomic_xor64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE3B, 0, 0);
-			}
-		}, {
-			name: "atomic_xchg64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE42, 0, 0);
-			}
-		},{
-			name: "atomic_cmpxchg64",
-			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE49, 0, 0);
-			}
-		}
-	];
-	
-	let funcmap = new Map();
-	let names = [];
-	let ylen = inst_replace.length;
-	for (let y = 0; y < ylen; y++) {
-		let handler = inst_replace[y];
-		names.push(handler.name);
-	}
-
-	
-	let functions = mod.functions;
-	ylen = functions.length;
-	for (let y = 0; y < ylen; y++) {
-		let idx, name, func = functions[y];
-		if (typeof func[__nsym] != "string")
-			continue;
-		name = func[__nsym];
-		idx = names.indexOf(name);
-		if (idx === -1)
-			continue;
-		let handler = inst_replace[idx];
-		handler.func = func;
-		handler.count = 0;
-		funcmap.set(name, handler);
-	}
-
-	// run trough all WebAssembly code to find call-sites where we call funcidx
-	let start = 0;
-	for (let y = 0; y < ylen; y++) {
-		let func = functions[y];
-		if (!(func instanceof ImportedFunction)) {
-			start = y;
-			break;
-		}
-	}
-
-	for (let y = start; y < ylen; y++) {
-		let func = functions[y];
-		let opcodes = func.opcodes;
-		// NOTE: don't try to optimize the opcodes.length, handlers might alter instructions around them.
-		for (let x = 0; x < opcodes.length; x++) {
-			let op = opcodes[x];
-			if (op.opcode == 0x10) {
-				if (funcmap.has(op.func)) {
-					let handler = funcmap.get(op.func);
-					handler.count++;
-					let res = handler.replace(op, x, opcodes);
-					if (res === op) {
-						// do nothing
-					} else if (typeof res == "boolean") {
-
-					} else if (typeof res == "number" && Number.isInteger(res)) {
-
-					} else if (typeof res == "object" && res !== null) {
-						opcodes[x] = res;
-						func._opcodeDirty = true;
-					}
-				}
-			}
-		}
-	}
-
-	//
+	replaceCallInstructions(ctx, mod, null, atomic_op_replace_map)
 }
 
 function postOptimizeMemInstAction(ctx, mod) {
 
-	let opsopt = [];
+	replaceCallInstructions(ctx, mod, null, memory_op_replace_map);
 
-	function memcpyReplaceHandler(inst, index, arr) {
-		let peek = arr[index + 1];
-		if (peek.opcode == 0x1A) { // drop
-			arr[index] = {opcode: 0xfc0a, memidx1: 0, memidx2: 0};
-			arr.splice(index + 1, 1);
-			return true;
-		} else {
-			console.warn("call to memcpy does not drop return value");
-		}
-		return true;
-	}
+	/* Dont know is this is the version I want to keep?
 	// TODO: we are missing atomic_fence, but cannot find this in the actual wasm proposal.
-	const inst_replace = [
-		{ 							// memory operations.
-			name: "memcpy",
-			replace: memcpyReplaceHandler
-		}, {
-			name: "__memcpy",
-			replace: memcpyReplaceHandler
-		}, {
-			name: "memcpy_early",
-			replace: memcpyReplaceHandler
-		}/*, {
-			name: "memset",
-			// replacing memset vs. memory.fill is where it gets complicated, memset returns which the 
-			// memory.fill instruction does not. check for drop instruction but if not found we must fake
-			// the return of memset 
-			replace: function(inst, index, arr) {
-				let peek = arr[index + 1];
-				if (peek.opcode == 0x1A) { // drop
-					arr[index] = {opcode: 0xfc0b, memidx: 0};
-					arr.splice(index + 1, 1);
-					return true;
-				} else {
-					console.warn("call to memcpy does not drop return value");
-				}
-				return true;
-			}
-		}*/
-	];
+	const inst_replace = [];
 
 	let funcmap = new Map();
 	let functions = mod.functions;
@@ -3085,22 +2910,235 @@ function postOptimizeMemInstAction(ctx, mod) {
 			let op = opcodes[x];
 			if (op.opcode == 0x10) {
 				if (funcmap.has(op.func)) {
-					let handler = funcmap.get(op.func);
+					let call = op.func;
+					let handler = funcmap.get(call);
 					handler.count++;
 					let res = handler.replace(op, x, opcodes);
 					if (res === op) {
 						// do nothing
+						if (op.func !== call) { // if the function referenced has been changed, decrement ref count.
+							func._opcodeDirty = true;
+							call.usage--;
+						}
 					} else if (typeof res == "boolean") {
-
-					} else if (typeof res == "number" && Number.isInteger(res)) {
-
+						if (res === true) {
+							call.usage--; // decrement ref count..
+							func._opcodeDirty = true;
+						}
 					} else if (typeof res == "object" && res !== null) {
-						opcodes[x] = res;
+						let idx = opcodes.indexOf(res);
+						if (idx !== -1) {
+							y = idx;
+						}
+						call.usage--;
 						func._opcodeDirty = true;
 					}
 				}
 			}
 		}
+	}
+	*/
+}
+
+/**
+ * Each object in the `inst_replace` should have atleast the following properties:
+ * name<String, String[]> specifies the name(s) of the function call to replace.
+ * replace: <Boolean|Instruction> function(inst, index, opcodes)
+ * 
+ * If the replace callback returns a Boolean true the call is seen as replaced, and usage is decrement function call replaced.
+ * A boolean false indicates that the opcode was not changed by replace callback.
+ * The return of a Instruction which is referenced in the opcodes array indicates a jump to that instruction, which must be used if
+ * the replace callback handler alters/removes more than one instruction or if the replace callback handler encapsules the original
+ * instruction inside for example a conditional closure.
+ *
+ * TODO: we could actually return is a array of WasmFunction on which usage was altered.
+ * 
+ * @param  {Object} ctx         
+ * @param  {WebAssemblyModule} mod          
+ * @param  {Array} functions A optional selection of functions in which to replace the matching call-sites. If not specified the replace happens on all function in the specified module.
+ * @param  {Array} inst_replace A array of objects in the format described above.
+ * @return {void}              
+ */
+function replaceCallInstructions(ctx, mod, functions, inst_replace) {
+
+	let opsopt = [];
+	
+	let namemap = new Map();
+	let funcmap = new Map();
+	let names = [];
+	let ylen = inst_replace.length;
+	for (let y = 0; y < ylen; y++) {
+		let handler = inst_replace[y];
+		let name = handler.name;
+		if (typeof name == "string") {
+			if (namemap.has(name)) {
+				let tmp = namemap.get(name);
+				if (!Array.isArray(tmp)) {
+					tmp = [tmp];
+					namemap.set(name, tmp);
+				}
+				tmp.push(handler);
+			} else {
+				namemap.set(name, handler);
+			}
+		} else if (Array.isArray(name)) {
+			let names = name;
+			let xlen = names.length;
+			for (let x = 0; x < xlen; x++) {
+				name = names[x];
+				if (namemap.has(name)) {
+					let tmp = namemap.get(name);
+					if (!Array.isArray(tmp)) {
+						tmp = [tmp];
+						namemap.set(name, tmp);
+					}
+					tmp.push(handler);
+				} else {
+					namemap.set(name, handler);
+				}
+			}
+		}
+		
+	}
+
+	
+	let fns = mod.functions;
+	ylen = fns.length;
+	for (let y = 0; y < ylen; y++) {
+		let idx, name, func = fns[y];
+		if (typeof func[__nsym] != "string")
+			continue;
+		name = func[__nsym];
+		if (!namemap.has(name))
+			continue;
+		let handler = namemap.get(name);
+		funcmap.set(func, handler);
+	}
+
+	fns = Array.isArray(functions) ? functions : mod.functions;
+	ylen = fns.length;
+	for (let y = 0; y < ylen; y++) {
+		let opcodes, func = fns[y];
+		if (func instanceof ImportedFunction) {
+			continue;
+		}
+
+		opcodes = func.opcodes;
+		// NOTE: don't try to optimize the opcodes.length, handlers might alter instructions around them.
+		for (let x = 0; x < opcodes.length; x++) {
+			let op = opcodes[x];
+			if (op.opcode == 0x10) {
+				if (funcmap.has(op.func)) {
+					let call = op.func;
+					let zlen = 1;
+					let handler, handlers = funcmap.get(call);
+					if (Array.isArray(handlers)) {
+						handler = handlers[0];
+						zlen = handlers.length;
+					} else {
+						handler = handlers;
+					}
+					//handler.count++;
+					let res = handler.replace(op, x, opcodes, func);
+					if (res === false && zlen > 1) {
+						let z = 1;
+						while (res === false && z < zlen) {
+							handler = handlers[z++];
+							res = handler.replace(op, x, opcodes, func);
+						}
+					}
+					if (res === op) {
+						// do nothing
+						if (op.func !== call) { // if the function referenced has been changed, decrement ref count.
+							func._opcodeDirty = true;
+							call.usage--;
+						}
+					} else if (typeof res == "boolean") {
+						if (res === true) {
+							call.usage--; // decrement ref count..
+							func._opcodeDirty = true;
+						}
+					} else if (typeof res == "object" && res !== null) {
+						let idx = opcodes.indexOf(res);
+						if (idx !== -1) {
+							x = idx;
+						}
+						call.usage--;
+						func._opcodeDirty = true;
+					}
+				}
+			}
+		}
+	}
+
+	//
+}
+
+// Handling exports on generated WebAssembly Module
+
+/**
+ * Updates the exports of a module based on a set of filter
+ *
+ * options.callback = <Boolean> function(export)
+ * or
+ * options.names = Array of strings.
+ * 
+ * @param  {[type]} ctx     [description]
+ * @param  {[type]} mod     [description]
+ * @param  {[type]} options [description]
+ * @return {[type]}         [description]
+ */
+function filterModuleExports(ctx, mod, options) {
+
+	let callback, names, regexps;
+	if (typeof options.callback == "function") {
+		callback = options.callback;
+	} else if (Array.isArray(options.names)) {
+		names = options.names;
+		let len = names.length;
+		for (let i = 0; i < len; i++) {
+			let val = names[i];
+			if (val instanceof RegExp) {
+				if (!regexps)
+					regexps = [];
+				regexps.push(val);
+			}
+		}
+	} else {
+		throw new TypeError("names or callback must be provided");
+	}
+
+	let exps = mod.exports;
+	let len = exps.length;
+	let idx = 0;
+	while (idx < len) {
+		let exp = exps[idx];
+		let keep;
+		if (callback) {
+			keep = callback(exp);
+		} else {
+			let name = exp.name;
+			keep = names.indexOf(exp.name) !== -1;
+			if (keep === false && regexps) {
+				let ylen = regexps.length;
+				for(let i = 0;i < ylen;i++){
+					let regexp = regexps[i];
+					if (name.search(regexp) !== -1) {
+						keep = true;
+						break;
+					}
+				}
+			}
+		}
+
+		if (!keep) {
+			exps.splice(idx, 1);
+			// dont increment idx..
+			len--;
+		} else {
+			idx++;
+		}
+
 	}
 }
 
@@ -3364,8 +3402,14 @@ function generateNetbsdWebAssembly(ctx, mod) {
 		__wasmkern_envp: "__wasmkern_envp",
 		__physmemlimit: "rump_physmemlimit",
 		__curphysmem: "curphysmem",
+		lwp0uarea: "lwp0uarea",
 		opfs_ext4_head: "opfs_ext4_head",		// opfs+ext4 driver location
 		opfs_blkdev_head: "opfs_blkdev_head",	// opfs-blkdev
+		__first_avail: "__first_avail",
+		avail_end: "avail_end",
+		l2_addr: "PDPpaddr",
+		bootinfo: "bootinfo",
+		__wasm_meminfo: "__wasm_meminfo"
 	};
 
 	for (let p in rump_variant) {
@@ -3437,6 +3481,32 @@ function generateNetbsdWebAssembly(ctx, mod) {
 	mod.imports.push(g2);
 	mod.removeExportByRef(g1);
 
+	function replace_x86curlwp(inst, index, arr) {
+		let peek = index < arr.length ? arr[index + 1] : null;
+		if (peek === null || peek.opcode != 0x1A) { // drop
+			arr[index] = {opcode: 0x23, global: g2};
+			inst.func.usage--;	// decrement reference count
+			return true;
+		} else {
+			console.warn("call to x86curlwp does drop return value");
+		}
+		return true;
+	}
+
+	function replace_wasm_nop(inst, index, arr) {
+		arr[index] = {opcode: 0x01};
+		inst.func.usage--;	// decrement reference count
+		return true;
+	}
+
+	
+
+	replaceCallInstructions(ctx, mod, null, [{name: "x86_curlwp", replace: replace_x86curlwp},
+		{name: "wasm_inst_nop", replace: replace_wasm_nop}]);
+
+	let func = mod.getFunctionByName("x86_curlwp");
+	console.log(func);
+
 	let sec = targetModule.findSection(SECTION_TYPE.IMPORT);
 	sec.markDirty();
 	sec = targetModule.findSection(SECTION_TYPE.EXPORT);
@@ -3503,202 +3573,242 @@ function postOptimizeTinybsdUserBinary(ctx, mod) {
 		{ 	// atomic operations.
 			name: "atomic_notify",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE00, 0, 0);
+				arr[index] = new AtomicInst(0xFE00, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_wait32",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE01, 0, 0);
+				arr[index] = new AtomicInst(0xFE01, 0, 0);
+				return true;
 			}
 		}, {
 			name: "wasm_atomic_fence",
 			replace: function(inst, index, arr) {
 				return {opcode: 0xFE03, memidx: 0};
+				return true;
 			}
 		}, {
 			name: "atomic_load8",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE12, 0, 0);
+				arr[index] = new AtomicInst(0xFE12, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_store8",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE19, 0, 0);
+				arr[index] = new AtomicInst(0xFE19, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_add8",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE20, 0, 0);
+				arr[index] = new AtomicInst(0xFE20, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_sub8",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE27, 0, 0);
+				arr[index] = new AtomicInst(0xFE27, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_and8",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE2E, 0, 0);
+				arr[index] = new AtomicInst(0xFE2E, 0, 0);
+				return true;
 			}
 		},{
 			name: "atomic_or8",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE35, 0, 0);
+				arr[index] = new AtomicInst(0xFE35, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_xor8",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE3C, 0, 0);
+				arr[index] = new AtomicInst(0xFE3C, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_xchg8",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE43, 0, 0);
+				arr[index] = new AtomicInst(0xFE43, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_cmpxchg8",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE4A, 0, 0);
+				arr[index] = new AtomicInst(0xFE4A, 0, 0);
+				return true;
 			}
 		},  {
 			name: "atomic_load16",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE13, 0, 0);
+				arr[index] = new AtomicInst(0xFE13, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_store16",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE1A, 0, 0);
+				arr[index] = new AtomicInst(0xFE1A, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_add16",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE21, 0, 0);
+				arr[index] = new AtomicInst(0xFE21, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_sub16",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE28, 0, 0);
+				arr[index] = new AtomicInst(0xFE28, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_and16",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE2F, 0, 0);
+				arr[index] = new AtomicInst(0xFE2F, 0, 0);
+				return true;
 			}
 		},{
 			name: "atomic_or16",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE36, 0, 0);
+				arr[index] = new AtomicInst(0xFE36, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_xor16",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE3D, 0, 0);
+				arr[index] = new AtomicInst(0xFE3D, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_xchg16",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE44, 0, 0);
+				arr[index] = new AtomicInst(0xFE44, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_cmpxchg16",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE4B, 0, 0);
+				arr[index] = new AtomicInst(0xFE4B, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_load32",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE10, 0, 0);
+				arr[index] = new AtomicInst(0xFE10, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_store32",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE17, 0, 0);
+				arr[index] = new AtomicInst(0xFE17, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_add32",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE1E, 0, 0);
+				arr[index] = new AtomicInst(0xFE1E, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_sub32",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE25, 0, 0);
+				arr[index] = new AtomicInst(0xFE25, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_and32",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE2C, 0, 0);
+				arr[index] = new AtomicInst(0xFE2C, 0, 0);
+				return true;
 			}
 		},{
 			name: "atomic_or32",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE33, 0, 0);
+				arr[index] = new AtomicInst(0xFE33, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_xor32",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE3A, 0, 0);
+				arr[index] = new AtomicInst(0xFE3A, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_xchg32",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE41, 0, 0);
+				arr[index] = new AtomicInst(0xFE41, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_cmpxchg32",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE48, 0, 0);
+				arr[index] = new AtomicInst(0xFE48, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_wait64",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE02, 0, 0);
+				arr[index] = new AtomicInst(0xFE02, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_load64",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE11, 0, 0);
+				arr[index] = new AtomicInst(0xFE11, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_store64",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE18, 0, 0);
+				arr[index] = new AtomicInst(0xFE18, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_add64",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE1F, 0, 0);
+				arr[index] = new AtomicInst(0xFE1F, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_sub64",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE26, 0, 0);
+				arr[index] = new AtomicInst(0xFE26, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_and64",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE2D, 0, 0);
+				arr[index] = new AtomicInst(0xFE2D, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_or64",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE34, 0, 0);
+				arr[index] = new AtomicInst(0xFE34, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_xor64",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE3B, 0, 0);
+				arr[index] = new AtomicInst(0xFE3B, 0, 0);
+				return true;
 			}
 		}, {
 			name: "atomic_xchg64",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE42, 0, 0);
+				arr[index] = new AtomicInst(0xFE42, 0, 0);
+				return true;
 			}
 		},{
 			name: "atomic_cmpxchg64",
 			replace: function(inst, index, arr) {
-				return new AtomicInst(0xFE49, 0, 0);
+				arr[index] = new AtomicInst(0xFE49, 0, 0);
+				return true;
 			}
 		}, { 							// memory operations.
 			name: "memcpy",
@@ -4292,6 +4402,56 @@ function analyzeForkEntryPoint(ctx, module, options) {
 	// 	     in such case the rewind call stack is not needed and a dirty-cheat could be done.
 
 }
+
+// 
+
+// Virtual Memory was here..
+
+// Generate statistics of instructions
+
+function computeInstructionStatistics(mod) {
+
+	let map = new Map();
+	let stats = new Map();
+	let len = opcode_info.length;
+	for (let i = 0; i < len; i++) {
+		let inst = opcode_info[i];
+		let op = inst.opcode;
+		let kvo = {op: op, usage: 0, inst: inst};
+		let type = inst.type & 0x0F;
+		if (type == 0x03) {
+			kvo.unalignedCount = 0; // number of aligned usage.
+		}
+		stats.set(op, kvo);
+		map.set(op, inst);
+	}
+
+	let functions = mod.functions;
+	let ylen = functions.length;
+	for (let y = 0; y < ylen; y++) {
+		let fn = functions[y];
+		if (fn instanceof ImportedFunction)
+			continue;
+		let instructions = fn.opcodes;
+		let xlen = instructions.length;
+		for (let x = 0; x < xlen; x++) {
+			let inst = instructions[x];
+			let kvo = stats.get(inst.opcode);
+			let info = kvo.inst;
+			kvo.usage++;
+			let align = (info.type >> 8) & 0xFF;
+			if (align !== 0) {
+				if (inst.align !== (align - 1)) {
+					kvo.unalignedCount++;
+				}
+			}
+		}
+	}
+
+
+	return stats;
+}
+
 
 let __uiInit = false;
 

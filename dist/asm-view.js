@@ -1,5 +1,6 @@
 
-let url = "./examples/kern.wasm"
+//let url = "./examples/init.wasm"
+let url = "./testing/uvm/netbsd-kern.wasm"
 let txtdata = "97040109 7F230041 106B2200 24000240 41002D00 C1B00641 0871450D 00410041 002802 C4B0064101 6A3602C4 B0060B02 40024041 002802D4 B0062201 450D0041 002802D0 B0062102 0C010B41 00210241 00410036 02D0B006 41002101 41004100 3602D4B0 060B0340 02402001 20024F0D 00200141 046A2203 21040340 02402004 2002490D 00200321 010C030B 02402001 28020022 05280200 22062004 28020022 07280200 2208490D 00024020 06200847 0D002005 28020420 07280204 4D0D010B 20012007 36020020 04200536 02004100 2802D0B0 0621020B 20044104 6A21040C 000B0B41 002802D4 B0062104 41818080 04210702 40034020 0420024F 0D010240 02402004 28020022 01280200 22054102 490D0002 40200520 074D0D00 41002D00 ECC10641 FF017145 0D002000 20053602 0041A36F 41B81520 0010291A 20042802 0021010B 20012802 0C200128 02081100 00200428 02002202 28020021 07200241 01360200 41002802 C8B00622 010D0141 002802D0 B0062102 0B200441 046A2104 0C010B0B 02404100 2802D4B0 06220441 00460D00 200441A0 DC0410B8 06410028 02C8B006 21010B41 00200136 02D4B006 41004100 2802CCB0 06220236 02D0B006 41004100 3602C8B0 06410041 003602CC B0060C01 0B0B0240 41002D00 ECC10645 0D004100 41C09201 41001029 1A0B0240 41A4C50A 41106A22 04410041 00FE4800 00220245 0D002004 20021084 070B10C8 2E200041 106A2400 0B";
 let buffer;
 
@@ -863,6 +864,7 @@ function decodeByteCodeForEdit(data, mod) {
 let lineGuters = [];
 let binLines = [];
 let txtLines = [];
+const opclsmap = new Map();
 
 function setupAsmViewer() {
 	let asmViewer = document.createElement("div");
@@ -873,7 +875,7 @@ function setupAsmViewer() {
 	asmGuter.classList.add("gutter");
 	let offsetValue = 0;
 	asmViewer.appendChild(asmGuter);
-	let lncnt = 283;
+	let lncnt = 600;
 
 	for (let i = 0;i < lncnt;i++) {
 		let ruleElement = document.createElement("div");
@@ -964,14 +966,22 @@ function renderIndirectCall(element, inst, fn, module) {
 function renderCall(element, inst, fn, module) {
 	element.appendChild(document.createTextNode('\x20'));
 	let v = document.createElement("span");
-	v.textContent = module.names && module.names.functions.has(inst.funcidx) ? module.names.functions.get(inst.funcidx) : inst.funcidx;
+    let func = inst.func;
+	v.textContent = typeof func[__nsym] == "string" ? func[__nsym] : module.functions.indexOf(func);
 	element.appendChild(v);
 	element.appendChild(document.createTextNode('\x20'));
 	v = document.createElement("span");
 	v.classList.add("stack-signature");
-	let type = module.functions[inst.funcidx].type;
+	let type = func.type;
 	v.textContent = "[" + (type.argc > 0 ? type.argv.map(type_name).join(", ") : '') + "] → [" + (type.retc > 0 ? type.retv.map(type_name).join(", ") : '') + "]";
 	element.appendChild(v);
+}
+
+class WebAssemblyBinaryEditView {
+
+    constructor() {
+
+    }
 }
 
 function renderAsmView(opcodes, fn, module) {
@@ -1012,6 +1022,13 @@ function renderAsmView(opcodes, fn, module) {
 
 		e1.textContent = (op._loc).toString(16).padStart(4, '0');
 
+        while (e2.lastChild) {
+            e2.removeChild(e2.lastChild);
+        }
+
+        let opcls = opclsmap.get(op.opcode);
+        opcls.render_bin(e2, module, fn, op, opcls);
+        /*
 		let txt = "";
 		let instElement = document.createElement("span");
 		instElement.classList.add("instr");
@@ -1028,12 +1045,14 @@ function renderAsmView(opcodes, fn, module) {
 		} else if (op.opcode == 0x20 || op.opcode == 0x21 || op.opcode == 0x22) {
 			e2.appendChild(document.createTextNode('\x20'));
 			let v = document.createElement("span");
-			v.textContent = toHex(op.x);
+            let idx = fn.locals.indexOf(op.local);
+			v.textContent = toHex(idx);
 			e2.appendChild(v);
 		} else if (op.opcode == 0x23 || op.opcode == 0x24) {
             e2.appendChild(document.createTextNode('\x20'));
             let v = document.createElement("span");
-            v.textContent = toHex(op.x);
+            let globalidx = module.globals.indexOf(op.global);
+            v.textContent = toHex(globalidx);
             e2.appendChild(v);
         } else if (op.opcode == 0x28 || op.opcode == 0x36) {
 			e2.appendChild(document.createTextNode('\x20'));
@@ -1047,16 +1066,19 @@ function renderAsmView(opcodes, fn, module) {
 		} else if (op.opcode == 0x10) {
             e2.appendChild(document.createTextNode('\x20'));
             let v = document.createElement("span");
-            v.textContent = toHex(op.funcidx);
+            let funcidx = module.functions.indexOf(op.func);
+            v.textContent = toHex(funcidx);
             e2.appendChild(v);
         } else if (op.opcode == 0x11) {
             e2.appendChild(document.createTextNode('\x20'));
             let v = document.createElement("span");
-            v.textContent = toHex(op.tableidx);
+            let tableidx = module.tables.indexOf(op.table);
+            v.textContent = toHex(tableidx);
             e2.appendChild(v);
             e2.appendChild(document.createTextNode('\x20'));
             v = document.createElement("span");
-            v.textContent = toHex(op.typeidx);
+            let typeidx = module.types.indexOf(op.type);
+            v.textContent = toHex(typeidx);
             e2.appendChild(v);
         } else if (op.opcode == 0x0c || op.opcode == 0x0d) {
             e2.appendChild(document.createTextNode('\x20'));
@@ -1068,10 +1090,17 @@ function renderAsmView(opcodes, fn, module) {
             let v = document.createElement("span");
             if (typeof op.type == "number") {
                 v.textContent = toHex(op.type);
-            } else if (op.type instanceof FuncType) {
-                v.textContent = toHex(op.type.typeidx);
+            } else if (op.type instanceof WasmType) {
+                let typeidx = module.types.indexOf(op.type);
+                v.textContent = toHex(typeidx);
             }
             e2.appendChild(v);
+        }
+        */
+
+        let lastChild = e2.lastElementChild;
+        if (lastChild && lastChild.classList.contains("eol") == false) {
+            lastChild.classList.add("eol");
         }
 
 		txt = "";
@@ -1097,7 +1126,11 @@ function renderAsmView(opcodes, fn, module) {
 		let sep = document.createElement("span");
 		sep.classList.add("asm-text-prefix");
 		sep.textContent = ";";
-		clearElement(e3);
+
+        while (e3.lastChild) {
+            e3.removeChild(e3.lastChild);
+        }
+
 		e3.appendChild(sep);
 
 		if (indent > 0) {
@@ -1111,6 +1144,9 @@ function renderAsmView(opcodes, fn, module) {
             }
 		}
 
+        opcls.render_wat(e3, module, fn, op, opcls);
+
+        /*
 		e3.appendChild(instElement);
 
 		if (op.opcode == 0x41) {
@@ -1121,32 +1157,34 @@ function renderAsmView(opcodes, fn, module) {
 		} else if (op.opcode == 0x20 || op.opcode == 0x21 || op.opcode == 0x22) {
 			e3.appendChild(document.createTextNode('\x20'));
 			let v = document.createElement("span");
-			let idx = op.x;
+			let idx = fn.locals.indexOf(op.local);
 			v.textContent = idx < argc ? "arg" + (idx).toString() : (op.x).toString();
 			e3.appendChild(v);
 			e3.appendChild(document.createTextNode('\x20'));
 			v = document.createElement("span");
 			v.classList.add("stack-signature");
             if (op.opcode == 0x22) {
-                let tn = type_name(locals[op.x]);
+                let tn = type_name(op.local.type);
                 v.textContent = "[" + tn + "] → [" + tn + "]";
             } else if (op.opcode == 0x21) {
-                v.textContent = "[" + type_name(locals[op.x]) + "] → []";
+                v.textContent = "[" + type_name(op.local.type) + "] → []";
             } else {
-                v.textContent = "[] → [" + type_name(locals[op.x]) + "]";
+                v.textContent = "[] → [" + type_name(op.local.type) + "]";
             }
 			e3.appendChild(v);
 		} else if (op.opcode == 0x23 || op.opcode == 0x24) {
 			e3.appendChild(document.createTextNode('\x20'));
 			let v = document.createElement("span");
 			v.classList.add("variable");
-            if (module.globals[op.x] instanceof ImportedGlobal) {
-                let glob = module.globals[op.x];
+            let glob = op.global;
+            let globidx = module.globals.indexOf(glob);
+            if (glob instanceof ImportedGlobal) {
                 v.textContent = glob.module + '.' + glob.name;
-            } else if (module.names && module.names.globals && module.names.globals.has(op.x)) {
-                v.textContent = module.names.globals.get(op.x);
+            } else if (module.names && module.names.globals && module.names.globals.has(globidx)) {
+                v.textContent = module.names.globals.get(globidx);
             } else {
-                v.textContent = ((op.x).toString());
+                //let globidx = module.globals.indexOf(glob);
+                v.textContent = ((globidx).toString());
             }
 			e3.appendChild(v);
 		} else if (op.opcode == 0x28 || op.opcode == 0x36) {
@@ -1178,13 +1216,13 @@ function renderAsmView(opcodes, fn, module) {
                     ts.textContent = "[] → [" + typename + "]";
                     e3.appendChild(ts);
                 }
-            } else if (op.type instanceof FuncType) {
+            } else if (op.type instanceof WasmType) {
                 let type = op.type;
                 let ts = document.createElement("span");
                 ts.textContent = "[" + (type.argc > 0 ? type.argv.map(type_name).join(", ") : '') + "] → [" + (type.retc > 0 ? type.retv.map(type_name).join(", ") : '') + "]";
                 e3.appendChild(ts);
             }
-        }
+        }*/
 
 		if (op.opcode == 0x02 || op.opcode == 0x03) {
 			blkstack.push(op);
@@ -1225,17 +1263,30 @@ function renderAsmView(opcodes, fn, module) {
 	element.textContent = txtbody;
 }
 
+function getWasmFunctionByName(module, name) {
+
+    let names = module.names.functions;
+
+    for (const [key, value] of names) {
+        if (value == name) {
+            return key;
+        }
+    }
+
+    return null;
+}
+
 fetch(url).then(function(res) {
 
 	res.arrayBuffer().then(function(buf) {
 
 		moduleBuffer = buf;
 		let mod = parseWebAssemblyBinary(buf);
-        let fn = mod.functions[5589];
+        let fn = mod.getFunctionByName("procfs_do_pid_stat");
 		//let fn = mod.functions[1463];
         //let fn = mod.functions[178];
 		let opcodes = fn.opcodes;
-		byteCodeComputeByteLength(mod, opcodes, true);
+		byteCodeComputeByteLength(mod, opcodes, fn.locals, true);
 		renderAsmView(opcodes, fn, mod);
 
 	}, console.error);
@@ -1264,6 +1315,35 @@ function localTest() {
 
 	renderAsmView(opcodes, null, null)
 }
+
+(function() {
+    let ylen = inst_render.length;
+    let xlen = opcode_info.length;
+
+    for (let y = 0; y < ylen; y++) {
+
+        let match, obj = inst_render[y];
+        for (let x = 0; x < xlen; x++) {
+            let inst = opcode_info[x];
+            if (obj.opcode == inst.opcode) {
+                match = inst;
+                break;
+            }
+        }
+
+        if (match) {
+            if (typeof match.render_bin == "function" || typeof match.render_wat == "function") {
+                throw TypeError("instruction renderer alrady set");
+            }
+
+            match.render_bin = obj.render_bin;
+            match.render_wat = obj.render_wat;
+            opclsmap.set(match.opcode, match);
+        } else {
+            console.warn("no matching instruction %s", (obj.opcode).toString(16));
+        }
+    }
+})();
 
 setupAsmViewer();
 //localTest();

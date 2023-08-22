@@ -39,6 +39,7 @@ const SECTION_TYPE_ELEMENT = 9;
 const SECTION_TYPE_CODE = 0x0A;
 const SECTION_TYPE_DATA = 0x0B;
 const SECTION_TYPE_DATA_COUNT = 0x0C;
+const SECTION_TYPE_TAG = 0x0D;
 const SECTION_TYPE_CUSTOM = 0x00;
 
 function type_name(type) {
@@ -264,6 +265,9 @@ function instname(opt1, opt2) {
         case 0x0F: return "return";
         case 0x10: return "call";
         case 0x11: return "call_indirect";
+        // https://github.com/WebAssembly/tail-call/blob/main/proposals/tail-call/Overview.md
+        // return_call          0x12    [t3* t1*] -> [t4*]
+        // return_call_indirect 0x13    [t3* t1* i32] -> [t4*]
         case 0x1A: return "drop";
         case 0x1B: return "select";
         case 0x20: return "local.get";
@@ -788,6 +792,99 @@ class TableSetInst extends Inst {
     }
 }
 
+class TryInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+    }
+}
+
+class CatchInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+    }
+}
+
+class CatchAllInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+    }
+}
+
+class DelegateInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+    }
+}
+
+class ThrowInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+    }
+}
+
+class ReThrowInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+    }
+}
+
+/**
+ * walks the bytecode backwards to find the instruction which is the nearest instruction that would end up at position.
+ * For example finding the memory address for a i32.store, it takes into account that stack might have been used in instruction
+ * or a tree of instruction prior. This by counting push & pull to the stack from instructions.
+ * 
+ * @param  {WasmFunction} fn       The WebAssembly function scope.
+ * @param  {Array}   instructions [description]
+ * @param  {integer}   fromIndex    The index to start from, should be the index directly prior to the instruction which consumes the values.
+ * @param  {integer}   relative     The signatures are in reverse, so for example src in memory.copy would be at position 2.
+ * @return {Instruction}                [description]
+ */
+function traverseStack(fn, instructions, fromIndex, relative) {
+    let count = -1;
+    for (let i = fromIndex; i >= 0; i--) {
+        let inst = instructions[i];
+        let opcls = opclsmap.get(inst.opcode);
+        let pullv, pushv;
+        if (typeof opcls.push == "function") {
+            pushv = opcls.push(fn, inst);
+        } else {
+            pushv = opcls.push;
+        }
+
+        if (pushv == WA_TYPE_I32 || pushv == WA_TYPE_I64 || pushv == WA_TYPE_F32 || pushv == WA_TYPE_F64 || pushv == WA_TYPE_V128  || pushv == WA_TYPE_NUMRIC  || pushv == WA_TYPE_ANY) {
+            count++;
+        }
+
+        if (Array.isArray(pushv)) {
+            debugger;
+        }
+
+        if (count == relative) {
+            return inst;
+        }
+
+        if (typeof opcls.pull == "function") {
+            pullv = opcls.pull(fn, inst);
+        } else {
+            pullv = opcls.pull;
+        }
+
+        if (Array.isArray(pullv)) {
+            count -= pullv.length;
+        } else if (pullv && pullv != WA_TYPE_VOID) {
+            count--;
+        }
+    }
+
+    return undefined;
+}
+
 function InstTraversal(opcodes) {
 
     let atEnd = false;
@@ -919,7 +1016,7 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
                     sz += 1;
                 } else if (typeof inst.typeidx == "number") {
                     sz += lengthSLEB128(inst.typeidx);
-                } else if (inst.type instanceof FuncType) {
+                } else if (inst.type instanceof WasmType) {
                     let typeidx = types.indexOf(inst.type);
                     if (typeidx === -1)
                         throw new ReferenceError("typeidx not found");
@@ -930,6 +1027,54 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
             case 0x05: // else <in2*> 0x0B
                 sz += 1;
                 break;
+            
+            // wasm-eh
+            case 0x06: // try bt
+            {
+                sz += 1;
+                if (typeof inst.type == "number") {
+                    let type = inst.type;
+                    if (type != 0x40 && !isValidValueType(type))
+                        throw TypeError("invalid valuetype");
+                    sz += 1;
+                } else if (inst.type instanceof WasmType) {
+                    let typeidx = types.indexOf(inst.type);
+                    if (typeidx === -1)
+                        throw new ReferenceError("typeidx not found");
+                    sz += lengthSLEB128(typeidx);
+                }
+                break;
+            }
+            case 0x07: // catch x
+            {
+                sz += 1;
+                let tagidx = mod.tags.indexOf(inst.tag);
+                if (tagidx === -1)
+                    throw new ReferenceError("tagidx not found");
+                sz += lengthULEB128(tagidx);
+                break;
+            }
+            case 0x19: // catch_all
+                sz += 1;
+                break;
+            case 0x18: // delegate rd
+                sz += 1;
+                sz += lengthULEB128(inst.relative_depth);
+                break;
+            case 0x08: // throw x
+            {
+                sz += 1;
+                let tagidx = mod.tags.indexOf(inst.tag);
+                if (tagidx === -1)
+                    throw new ReferenceError("tagidx not found");
+                sz += lengthULEB128(tagidx);
+                break;
+            }
+            case 0x09: // rethrow rd
+                sz += 1;
+                sz += lengthULEB128(inst.relative_depth);
+                break;
+
             case 0x0C: // br
                 sz += 1;
                 sz += lengthULEB128(inst.labelidx);
@@ -975,6 +1120,9 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
                 sz += lengthULEB128(tableidx);
                 break;
             }
+            // https://github.com/WebAssembly/tail-call/blob/main/proposals/tail-call/Overview.md
+            // return_call          0x12    [t3* t1*] -> [t4*]
+            // return_call_indirect 0x13    [t3* t1* i32] -> [t4*]
             case 0x41: // i32.const
                 sz += 1;
                 sz += lengthSLEB128(inst.value);
@@ -1252,9 +1400,14 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
                 sz += 1;
                 break;
             case 0xD2: // ref.func
+            {
+                let funcidx = functions.indexOf(inst.func);
+                if (funcidx === -1)
+                    throw new ReferenceError("funcidx not found");
                 sz += 1;
-                sz += lengthULEB128(inst.funcidx);
+                sz += lengthULEB128(funcidx);
                 break;
+            }
             case 0xfc:
             {
                 switch (b2) {
@@ -1270,15 +1423,25 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
                         sz += lengthULEB128(b2);
                         break;
                     case  8: // memory.init
+                    {
+                        let dataidx = mod.dataSegments.indexOf(inst.dataSegment);
+                        if (dataidx === -1)
+                            throw new ReferenceError("dataidx not found");
                         sz += 1;
                         sz += lengthULEB128(b2);
-                        sz += lengthULEB128(inst.dataidx);
+                        sz += lengthULEB128(dataidx);
                         break;
+                    }
                     case  9: // data.drop
+                    {
+                        let dataidx = mod.dataSegments.indexOf(inst.dataSegment);
+                        if (dataidx === -1)
+                            throw new ReferenceError("dataidx not found");
                         sz += 1;
                         sz += lengthULEB128(b2);
-                        sz += lengthULEB128(inst.dataidx);
+                        sz += lengthULEB128(dataidx);
                         break;
+                    }
                     case 10: // memory.copy 0x00 0x00
                         sz += 3; // b1 + 2 8-byte reserved (from/to memidx)
                         sz += lengthULEB128(b2);
@@ -1289,37 +1452,73 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
                         break;
                     //
                     case 12: // table.init
+                    {
+                        let elemidx, tblidx = tables.indexOf(inst.table);
+                        if (tblidx === -1)
+                            throw new ReferenceError("tableidx not found");
+                        elemidx = mod.elementSegments.indexOf(inst.elem);
+                        if (elemidx === -1)
+                            throw new ReferenceError("elemidx not found");
                         sz += 1;
                         sz += lengthULEB128(b2);
-                        sz += lengthULEB128(inst.tableidx);
-                        sz += lengthULEB128(inst.elemidx);
+                        sz += lengthULEB128(tblidx);
+                        sz += lengthULEB128(elemidx);
                         break;
+                    }
                     case 13: // elem.drop
+                    {
+                        let elemidx = mod.elementSegments.indexOf(inst.elem);
+                        if (elemidx === -1)
+                            throw new ReferenceError("elemidx not found");
                         sz += 1;
                         sz += lengthULEB128(b2);
-                        sz += lengthULEB128(inst.elemidx);
+                        sz += lengthULEB128(elemidx);
                         break;
+                    }
                     case 14: // table.copy
+                    {
+                        let tblidx2, tblidx1 = tables.indexOf(inst.table1);
+                        if (tblidx === -1)
+                            throw new ReferenceError("tableidx not found");
+                        tblidx2 = tables.indexOf(inst.table2);
+                        if (tblidx === -1)
+                            throw new ReferenceError("tableidx not found");
                         sz += 1;
                         sz += lengthULEB128(b2);
-                        sz += lengthULEB128(inst.tableidx1);
-                        sz += lengthULEB128(inst.tableidx2);
+                        sz += lengthULEB128(tblidx1);
+                        sz += lengthULEB128(tblidx2);
                         break;
+                    }
                     case 15: // table.grow
+                    {
+                        let tblidx = tables.indexOf(inst.table);
+                        if (tblidx === -1)
+                            throw new ReferenceError("tableidx not found");
                         sz += 1;
                         sz += lengthULEB128(b2);
-                        sz += lengthULEB128(inst.tableidx);
+                        sz += lengthULEB128(tblidx);
                         break;
+                    }
                     case 16: // table.size
+                    {
+                        let tblidx = tables.indexOf(inst.table);
+                        if (tblidx === -1)
+                            throw new ReferenceError("tableidx not found");
                         sz += 1;
                         sz += lengthULEB128(b2);
-                        sz += lengthULEB128(inst.tableidx);
+                        sz += lengthULEB128(tblidx);
                         break;
+                    }
                     case 17: // table.fill
+                    {
+                        let tblidx = tables.indexOf(inst.table);
+                        if (tblidx === -1)
+                            throw new ReferenceError("tableidx not found");
                         sz += 1;
                         sz += lengthULEB128(b2);
-                        sz += lengthULEB128(inst.tableidx);
+                        sz += lengthULEB128(tblidx);
                         break;
+                    }
                 }
                 break;
             } 
@@ -1814,13 +2013,66 @@ function decodeByteCode(data, mod, locals) {
                 blkstack[lastidx] = inst;
                 break;
             }
+
             // https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/Exceptions.md#control-flow-operators
-            // 0x06 try bt
-            // 0x07 catch x
-            // 0x19 catch_all
-            // 0x18 delegate rd
-            // 0x08 throw x
-            // 0x09 rethrow rd
+            // changes to binary format: https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/Exceptions.md#tag-index-space
+            case 0x06: // try bt
+            {
+                let inst = new TryInst(op_code);
+                let type = data.readUint8();
+                if (type == 0x40) { // empty
+                    inst.type = type;
+                } else if (isValidValueType(type)) {
+                    inst.type = type;
+                } else {
+                    data.offset--; // rewind
+                    type = data.readSLEB128(32);
+                    if (type > 0) {
+                        inst.type = types[type];
+                    } else {
+                        throw new RangeError("if typeidx is invalid");
+                    }
+                }
+                opcodes.push(inst);
+                break;
+            }
+            case 0x07: // catch x
+            {
+                let inst = new CatchInst(op_code);
+                let tagidx = data.readULEB128();
+                inst.tag = mod.tags[tagidx];
+                opcodes.push(inst);
+                break;
+            }
+            case 0x19: // catch_all
+            {
+                let inst = new CatchAllInst(op_code);
+                opcodes.push(inst);
+                break;
+            }
+            case 0x18: // delegate rd
+            {
+                let inst = new DelegateInst(op_code);
+                inst.relative_depth = data.readULEB128();
+                opcodes.push(inst);
+                break;
+            }
+            case 0x08: // throw x
+            {
+                let inst = new ThrowInst(op_code);
+                let tagidx = data.readULEB128();
+                inst.tag = mod.tags[tagidx];
+                opcodes.push(inst);
+                break;
+            }
+            case 0x09: // rethrow rd
+            {
+                let inst = new ReThrowInst(op_code);
+                inst.relative_depth = data.readULEB128();
+                opcodes.push(inst);
+                break;
+            }
+
             case 0x0C: // br l
                 opcodes.push({opcode: op_code, labelidx: data.readULEB128()});
                 break;
@@ -1860,6 +2112,9 @@ function decodeByteCode(data, mod, locals) {
                 //opcodes.push({opcode: op_code, tableidx: data.readULEB128(), typeidx: data.readULEB128()});
                 break;
             }
+            // https://github.com/WebAssembly/tail-call/blob/main/proposals/tail-call/Overview.md
+            // return_call          0x12    [t3* t1*] -> [t4*]
+            // return_call_indirect 0x13    [t3* t1* i32] -> [t4*]
             case 0x41: // i32.const     [] -> [i32]
                 opcodes.push({opcode: op_code, value: data.readSLEB128(32)});
                 break;
@@ -1894,7 +2149,7 @@ function decodeByteCode(data, mod, locals) {
             case 0x1B: // select            [t t i32] -> [t]
                 opcodes.push({opcode: op_code});
                 break;
-            case 0x1C: // select t*         [t t i32] -> [t]
+            case 0x1C: // select t* :vec(valtype) [t t i32] -> [t]
                 opcodes.push({opcode: op_code});
                 break;
             case 0x20: // local.get         [] -> [t]
@@ -2142,8 +2397,14 @@ function decodeByteCode(data, mod, locals) {
                 opcodes.push({opcode: op_code});
                 break;
             case 0xD2: // ref.func x    [] -> [funcref]
-                opcodes.push({opcode: op_code, funcidx: data.readULEB128()});
+            {
+                let func, funcidx = data.readULEB128();
+                if (funcidx >= functions.length)
+                    throw new RangeError("funcidx out of range");
+                func = functions[funcidx];
+                opcodes.push({opcode: op_code, func: func});
                 break;
+            }
             case 0xfc:
             {
                 let sub = data.readULEB128();
@@ -2159,36 +2420,102 @@ function decodeByteCode(data, mod, locals) {
                         opcodes.push({opcode: (op_code << 8) | sub});
                         break;
                     case  8: // memory.init             [i32 i32 i32] -> []
-                        opcodes.push({opcode: (op_code << 8) | sub, dataidx: data.readULEB128()});
+                    {
+                        let dataSegment, dataidx = data.readULEB128();
+                        if (dataidx < 0 || dataidx >= mod.dataSegments.length)
+                            throw new RangeError("dataidx out of range");
+                        dataSegment = mod.dataSegments[dataidx];
+                        opcodes.push({opcode: (op_code << 8) | sub, dataSegment: dataSegment});
                         break;
+                    }
                     case  9: // data.drop               [] -> []
-                        opcodes.push({opcode: (op_code << 8) | sub, dataidx: data.readULEB128()});
+                    {
+                        let dataSegment, dataidx = data.readULEB128();
+                        if (dataidx < 0 || dataidx >= mod.dataSegments.length)
+                            throw new RangeError("dataidx out of range");
+                        dataSegment = mod.dataSegments[dataidx];
+                        opcodes.push({opcode: (op_code << 8) | sub, dataSegment: dataSegment});
                         break;
+                    }
                     case 10: // memory.copy 0x00 0x00   [i32 i32 i32] -> []
+                    {
                         opcodes.push({opcode: (op_code << 8) | sub, memidx1: data.readUint8(), memidx2: data.readUint8()});
                         break;
+                    }
                     case 11: // memory.fill 0x00        [i32 i32 i32] -> []
+                    {
                         opcodes.push({opcode: (op_code << 8) | sub, memidx: data.readUint8()});
                         break;
+                    }
                     //
                     case 12: // table.init              [i32 i32 i32] -> []
-                        opcodes.push({opcode: (op_code << 8) | sub, tableidx: data.readULEB128(), elemidx: data.readULEB128()});
+                    {
+                        let tbl, elem, idx = data.readULEB128();
+                        if (idx < 0 || idx >= tables.length)
+                            throw new RangeError("tableidx out of range");
+                        tbl = tables[idx];
+                        idx = data.readULEB128();
+                        if (idx < 0 || idx >= mod.elementSegments.length)
+                            throw new RangeError("elemidx out of range");
+                        elem = mod.elementSegments[idx];
+
+                        opcodes.push({opcode: (op_code << 8) | sub, table: tbl, elem: elem});
                         break;
+                    }
                     case 13: // elem.drop               [] -> []
-                        opcodes.push({opcode: (op_code << 8) | sub, elemidx: data.readULEB128()});
+                    {
+                        let elem, idx = data.readULEB128();
+                        if (idx < 0 || idx >= mod.elementSegments.length)
+                            throw new RangeError("elemidx out of range");
+                        elem = mod.elementSegments[idx];
+
+                        opcodes.push({opcode: (op_code << 8) | sub, elem: elem});
                         break;
-                    case 14: // table.copy              [i32 i32 i32] -> []
-                        opcodes.push({opcode: (op_code << 8) | sub, tableidx1: data.readULEB128(), tableidx2: data.readULEB128()});
+                    }
+                    case 14: // table.copy x y          [i32 i32 i32] -> []
+                    {
+                        let tbl1, tbl2, tblidx = data.readULEB128();
+                        if (tblidx < 0 || tblidx >= tables.length)
+                            throw new RangeError("tableidx out of range");
+                        tbl1 = tables[tblidx];
+                        tblidx = data.readULEB128();
+                        if (tblidx < 0 || tblidx >= tables.length)
+                            throw new RangeError("tableidx out of range");
+                        tbl2 = tables[tblidx];
+
+                        opcodes.push({opcode: (op_code << 8) | sub, table1: tbl1, table2: tbl2});
                         break;
+                    }
                     case 15: // table.grow              [t i32] -> [i32]
-                        opcodes.push({opcode: (op_code << 8) | sub, tableidx: data.readULEB128()});
+                    {
+                        let tbl, tblidx = data.readULEB128();
+                        if (tblidx < 0 || tblidx >= tables.length)
+                            throw new RangeError("tableidx out of range");
+                        tbl = tables[tblidx];
+
+                        opcodes.push({opcode: (op_code << 8) | sub, table: tbl});
                         break;
+                    }
                     case 16: // table.size              [] -> [i32]
-                        opcodes.push({opcode: (op_code << 8) | sub, tableidx: data.readULEB128()});
+                    {
+                        let tbl, tblidx = data.readULEB128();
+                        if (tblidx < 0 || tblidx >= tables.length)
+                            throw new RangeError("tableidx out of range");
+                        tbl = tables[tblidx];
+
+                        opcodes.push({opcode: (op_code << 8) | sub, table: tbl});
                         break;
+                    }
                     case 17: // table.fill              [i32 t i32] -> []
-                        opcodes.push({opcode: (op_code << 8) | sub, tableidx: data.readULEB128()});
+                    {
+                        let tbl, tblidx = data.readULEB128();
+                        if (tblidx < 0 || tblidx >= tables.length)
+                            throw new RangeError("tableidx out of range");
+                        tbl = tables[tblidx];
+
+                        opcodes.push({opcode: (op_code << 8) | sub, table: tbl});
                         break;
+                    }
                 }
                 break;
             } 
@@ -2637,18 +2964,20 @@ function encodeByteCode(mod, opcodes, locals, data) {
             case 0x03: // loop bt in* 0x0B
             case 0x04: // if bt in* 0x0B || if in1* 0x05 in2* 0x0B
             {
-                data.writeUint8(b1);
                 if (typeof inst.type == "number") {
                     let type = inst.type;
                     if (!(type == 0x40 || type == 0x7F || type == 0x7E || type == 0x7D || type == 0x7C || type == 0x7B  || type == 0x70 || type == 0x6F))
                         throw TypeError("invalid valuetype");
+                    data.writeUint8(b1);
                     data.writeUint8(type);
                 } else if (typeof inst.typeidx == "number") {
+                    data.writeUint8(b1);
                     data.writeSLEB128(inst.typeidx);
-                } else if (inst.type instanceof FuncType) {
-                    if (!Number.isInteger(inst.type.typeidx))
-                        throw TypeError("FuncType.typeidx must be set before encode");
-                    let typeidx = inst.type.typeidx;
+                } else if (inst.type instanceof WasmType) {
+                    let typeidx = types.indexOf(inst.type);
+                    if (typeidx === -1)
+                        throw new ReferenceError("typeidx not found");
+                    data.writeUint8(b1);
                     data.writeSLEB128(typeidx);
                 }
                 break;
@@ -2656,6 +2985,56 @@ function encodeByteCode(mod, opcodes, locals, data) {
             case 0x05: // else in2* 0x0B
                 data.writeUint8(b1);
                 break;
+            
+            // wasm-eh
+            case 0x06: // try bt
+            {
+                if (typeof inst.type == "number" && (inst.type == 0x40 || isValidValueType(inst.type))) {
+                    data.writeUint8(b1);
+                    data.writeUint8(inst.type);
+                } else if (inst.type instanceof WasmType) {
+                    let typeidx = types.indexOf(inst.type);
+                    if (typeidx === -1)
+                        throw new ReferenceError("typeidx not found");
+                    data.writeUint8(b1);
+                    data.writeSLEB128(typeidx);
+                } else {
+                    throw TypeError("inst.type is invalid");
+                }
+                break;
+            }
+            case 0x07: // catch x
+            {
+                let tagidx = mod.tags.indexOf(inst.tag);
+                if (tagidx === -1)
+                    throw new ReferenceError("tagidx not found");
+
+                data.writeUint8(b1);
+                data.writeULEB128(tagidx);
+                break;
+            }
+            case 0x19: // catch_all
+                data.writeUint8(b1);
+                break;
+            case 0x18: // delegate rd
+                data.writeUint8(b1);
+                data.writeULEB128(inst.relative_depth);
+                break;
+            case 0x08: // throw x
+            {
+                let tagidx = mod.tags.indexOf(inst.tag);
+                if (tagidx === -1)
+                    throw new ReferenceError("tagidx not found");
+
+                data.writeUint8(b1);
+                data.writeULEB128(tagidx);
+                break;
+            }
+            case 0x09: // rethrow rd
+                data.writeUint8(b1);
+                data.writeULEB128(inst.relative_depth);
+                break;
+
             case 0x0C: // br
                 data.writeUint8(b1);
                 data.writeULEB128(inst.labelidx);
@@ -2702,6 +3081,9 @@ function encodeByteCode(mod, opcodes, locals, data) {
                 data.writeULEB128(tableidx);
                 break;
             }
+            // https://github.com/WebAssembly/tail-call/blob/main/proposals/tail-call/Overview.md
+            // return_call          0x12    [t3* t1*] -> [t4*]
+            // return_call_indirect 0x13    [t3* t1* i32] -> [t4*]
             case 0x41: // i32.const
                 data.writeUint8(b1);
                 data.writeSLEB128(inst.value);
@@ -2780,19 +3162,19 @@ function encodeByteCode(mod, opcodes, locals, data) {
             case 0x25: // table.get
             {
                 data.writeUint8(b1);
-                let tableidx = tables.indexOf(inst.table);
-                if (tableidx === -1)
+                let tblidx = tables.indexOf(inst.table);
+                if (tblidx === -1)
                     throw new ReferenceError("tableidx not found");
-                data.writeULEB128(tableidx);
+                data.writeULEB128(tblidx);
                 break;
             }
             case 0x26: // table.set
             {
                 data.writeUint8(b1);
-                let tableidx = tables.indexOf(inst.table);
-                if (tableidx === -1)
+                let tblidx = tables.indexOf(inst.table);
+                if (tblidx === -1)
                     throw new ReferenceError("tableidx not found");
-                data.writeULEB128(tableidx);
+                data.writeULEB128(tblidx);
                 break;
             }
             case 0x28: // i32.load
@@ -2987,9 +3369,14 @@ function encodeByteCode(mod, opcodes, locals, data) {
                 data.writeUint8(b1);
                 break;
             case 0xD2: // ref.func
+            {
+                let funcidx = functions.indexOf(inst.func);
+                if (funcidx === -1)
+                    throw new ReferenceError("funcidx not found");
                 data.writeUint8(b1);
-                data.writeULEB128(inst.funcidx);
+                data.writeULEB128(funcidx);
                 break;
+            }
             case 0xfc:
             {
                 switch (b2) {
@@ -3005,59 +3392,108 @@ function encodeByteCode(mod, opcodes, locals, data) {
                         data.writeULEB128(b2);
                         break;
                     case  8: // memory.init
+                    {
+                        let dataidx = mod.dataSegments.indexOf(inst.dataSegment);
+                        if (dataidx === -1)
+                            throw new ReferenceError("dataidx not found");
                         data.writeUint8(b1);
                         data.writeULEB128(b2);
-                        data.writeULEB128(inst.dataidx);
+                        data.writeULEB128(dataidx);
                         break;
+                    }
                     case  9: // data.drop
+                    {
+                        let dataidx = mod.dataSegments.indexOf(inst.dataSegment);
+                        if (dataidx === -1)
+                            throw new ReferenceError("dataidx not found");
                         data.writeUint8(b1);
                         data.writeULEB128(b2);
-                        data.writeULEB128(inst.dataidx);
+                        data.writeULEB128(dataidx);
                         break;
+                    }
                     case 10: // memory.copy 0x00 0x00
+                    {
                         data.writeUint8(b1);
                         data.writeULEB128(b2);
                         data.writeUint8(inst.memidx1);
                         data.writeUint8(inst.memidx2);
                         break;
+                    }
                     case 11: // memory.fill 0x00
+                    {
                         data.writeUint8(b1);
                         data.writeULEB128(b2);
                         data.writeUint8(inst.memidx);
                         break;
-                    //
+                    }
                     case 12: // table.init
+                    {
+                        let elemidx, tblidx = tables.indexOf(inst.table);
+                        if (tblidx === -1)
+                            throw new ReferenceError("tableidx not found");
+                        elemidx = mod.elementSegments.indexOf(inst.elem);
+                        if (elemidx === -1)
+                            throw new ReferenceError("elemidx not found");
                         data.writeUint8(b1);
                         data.writeULEB128(b2);
-                        data.writeULEB128(inst.tableidx);
-                        data.writeULEB128(inst.elemidx);
+                        data.writeULEB128(tblidx);
+                        data.writeULEB128(elemidx);
                         break;
+                    }
                     case 13: // elem.drop
+                    {
+                        let elemidx = mod.elementSegments.indexOf(inst.elem);
+                        if (elemidx === -1)
+                            throw new ReferenceError("elemidx not found");
                         data.writeUint8(b1);
                         data.writeULEB128(b2);
-                        data.writeULEB128(inst.elemidx);
+                        data.writeULEB128(elemidx);
                         break;
+                    }
                     case 14: // table.copy
+                    {
+                        let tblidx2, tblidx1 = tables.indexOf(inst.table1);
+                        if (tblidx1 === -1)
+                            throw new ReferenceError("tableidx not found");
+                        tblidx2 = tables.indexOf(inst.table2);
+                        if (tblidx2 === -1)
+                            throw new ReferenceError("tableidx not found");
                         data.writeUint8(b1);
                         data.writeULEB128(b2);
-                        data.writeULEB128(inst.tableidx1);
-                        data.writeULEB128(inst.tableidx2);
+                        data.writeULEB128(tblidx1);
+                        data.writeULEB128(tblidx2);
                         break;
+                    }
                     case 15: // table.grow
+                    {
+                        let tblidx = tables.indexOf(inst.table);
+                        if (tblidx === -1)
+                            throw new ReferenceError("tableidx not found");
                         data.writeUint8(b1);
                         data.writeULEB128(b2);
-                        data.writeULEB128(inst.tableidx);
+                        data.writeULEB128(tblidx);
                         break;
+                    }
                     case 16: // table.size
+                    {
+                        let tblidx = tables.indexOf(inst.table);
+                        if (tblidx === -1)
+                            throw new ReferenceError("tableidx not found");
                         data.writeUint8(b1);
                         data.writeULEB128(b2);
-                        data.writeULEB128(inst.tableidx);
+                        data.writeULEB128(tblidx);
                         break;
+                    }
                     case 17: // table.fill
+                    {
+                        let tblidx = tables.indexOf(inst.table);
+                        if (tblidx === -1)
+                            throw new ReferenceError("tableidx not found");
                         data.writeUint8(b1);
                         data.writeULEB128(b2);
-                        data.writeULEB128(inst.tableidx);
+                        data.writeULEB128(tblidx);
                         break;
+                    }
                 }
                 break;
             } 
@@ -3835,12 +4271,14 @@ class ByteArray {
             do {
                 let byte = Number(value & mask);
                 value >>= 7n;
+                if (value < 0n) // protecting against overflow (causing negative value)
+                    value = 0n;
                 cnt++;
                 if (value != 0 || cnt < padTo) {
                     byte = (byte | 0x80);
                 }
                 u8[off++] = byte;
-            } while (value > 0n);
+            } while (value != 0n);
 
             // pad with 0x80 and emit a nyll byte at the end.
             if (cnt < padTo) {
@@ -3863,13 +4301,15 @@ class ByteArray {
         do {
             let byte = value & 0x7f;
             value >>= 7;
+            if (value < 0)
+                value = 0;
             cnt++;
             if (value != 0 || cnt < padTo) {
                 byte = (byte | 0x80);
             }
             u8[off++] = byte;
 
-        } while (value > 0);
+        } while (value != 0);
 
         // pad with 0x80 and emit a nyll byte at the end.
         if (cnt < padTo) {
@@ -4037,6 +4477,9 @@ function lengthULEB128(value, padTo) {
     if (typeof value == "bigint") {
         do {
             value >>= 7n;
+            if (value < 0n) // protecting against overflow (causing negative value)
+                value = 0n;
+
             if (value != 0n) {
                 cnt++;
             } else {
@@ -4046,13 +4489,16 @@ function lengthULEB128(value, padTo) {
                 return cnt;
             }
 
-        } while (value > 0n);
+        } while (value != 0n);
 
         throw TypeError("should never get here!");
     }
 
     do {
         value >>= 7;
+        if (value < 0)
+            value = 0;
+
         if (value != 0) {
             cnt++;
         } else {
@@ -4062,7 +4508,7 @@ function lengthULEB128(value, padTo) {
             return cnt;
         }
 
-    } while (value > 0);
+    } while (value != 0);
 
     throw TypeError("should never get here!");
 }
@@ -4207,6 +4653,15 @@ class WasmGlobal {
     }
 };
 
+class WasmTable {
+
+    constructor() {
+        this.reftype = undefined;
+        this.min = undefined;
+        this.max = undefined;
+    }
+}
+
 class WasmFunction {
 
     constructor() {
@@ -4214,11 +4669,68 @@ class WasmFunction {
     }
 };
 
-class FuncType {
+class WasmType {
 
     constructor() {
-
+        this.argv = null;
+        this.argc = 0;
+        this.retv = null;
+        this.retc = 0;
     }
+
+    static isEqual(type1, type2) {
+        if (type1 === type2) {
+            return true;
+        }
+
+        if (type1.argc != type2.argc) {
+            return false;
+        }
+
+        if (type1.retc != type2.retc) {
+            return false;
+        }
+
+        let argc = type1.argc;
+        let retc = type1.retc;
+
+        if (argc != 0) {
+
+            if (!Array.isArray(type1.retv) || !Array.isArray(type2.retv))
+                throw new Error("type inconsistency");
+
+            let a1 = type1.argv;
+            let a2 = type2.argv;
+
+            for (let x = 0; x < argc; x++) {
+                if (a1[x] !== a2[x]) {
+                    return false;
+                }
+            }
+
+            if (!match)
+                continue;
+        }
+
+        if (retc != 0) {
+
+            let r1 = type1.retv;
+            let r2 = type2.retv;
+
+            if (!Array.isArray(type1.retv) || !Array.isArray(type2.retv))
+                throw new Error("type inconsistency");
+
+            for (let x = 0; x < retc; x++) {
+                if (r1[x] !== r2[x]) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+
 };
 
 class WebAssemblyFuncTypeSection extends WebAssemblySection {
@@ -4312,7 +4824,7 @@ class WebAssemblyFuncTypeSection extends WebAssemblySection {
                 let type = data.readUint8();
                 retv.push(type);
             }
-            let functype = new FuncType();
+            let functype = new WasmType();
             functype.argc = argc;
             functype.argv = argv;
             functype.retc = retc;
@@ -4371,12 +4883,28 @@ class ImportedGlobal {
     }
 };
 
+class ImportedTag {
+
+    constructor() {
+        this.module = undefined;
+        this.name = undefined;
+        this.type = undefined;
+    }
+};
+
 class WasmMemory {
 
     constructor() {
         this.min = null;
         this.max = null;
         this.shared = false;
+    }
+};
+
+class WasmTag {
+
+    constructor() {
+        this.type = false;
     }
 };
 
@@ -4390,6 +4918,7 @@ class WebAssemblyImportSection extends WebAssemblySection {
     encode(options) {
 
         let imports = this.module.imports;
+        let types = this.module.types;
         let total = 0;
         let ylen = imports.length;
         let cnt = 0;
@@ -4407,7 +4936,10 @@ class WebAssemblyImportSection extends WebAssemblySection {
 
             if (imp instanceof ImportedFunction) {
                 total += 1; // type
-                total += lengthULEB128(imp.type.typeidx);
+                let idx = types.indexOf(imp.type);
+                if (idx == -1)
+                    throw new ReferenceError(".type not defined");
+                total += lengthULEB128(idx);
                 cnt++;
             } else if (imp instanceof ImportedGlobal) {
                 total += 3; // type, valuetype, mutable
@@ -4425,6 +4957,13 @@ class WebAssemblyImportSection extends WebAssemblySection {
                 if (imp.max !== null) {
                     total += lengthULEB128(imp.max);
                 }
+                cnt++;
+            } else if (imp instanceof ImportedTag) {
+                total += 2; // type, attribute
+                let idx = types.indexOf(imp.type);
+                if (idx == -1)
+                    throw new ReferenceError(".type not defined");
+                total += lengthULEB128(idx);
                 cnt++;
             } else {
                 console.error("unsupported import type");
@@ -4452,7 +4991,8 @@ class WebAssemblyImportSection extends WebAssemblySection {
 
             if (imp instanceof ImportedFunction) {
                 data.writeUint8(0x00);
-                data.writeULEB128(imp.type.typeidx);
+                let idx = types.indexOf(imp.type);
+                data.writeULEB128(idx);
             } else if (imp instanceof ImportedGlobal) {
                 data.writeUint8(0x03);
                 data.writeUint8(imp.type);
@@ -4488,6 +5028,11 @@ class WebAssemblyImportSection extends WebAssemblySection {
                 if (imp.max !== null) {
                     data.writeULEB128(imp.max);
                 }
+            } else if (imp instanceof ImportedTag) {
+                data.writeUint8(0x04);
+                data.writeUint8(imp.attr);
+                let idx = types.indexOf(imp.type);
+                data.writeULEB128(idx);
             } else {
                 console.error("unsupported import type");
                 continue;
@@ -4569,6 +5114,14 @@ class WebAssemblyImportSection extends WebAssemblySection {
                     module.globals = [];
                 }
                 module.globals.push(imp);
+            } else if (type == 0x04) {  // tag (wasm exception handling)
+                imp = new ImportedTag();
+                imp.attr = data.readUint8();
+                imp.type = types[data.readULEB128()];
+                if (!module.tags) {
+                    module.tags = [];
+                }
+                module.tags.push(imp);
             } else {
                 console.error("found unsupported import type %d", type);
                 continue;
@@ -4776,6 +5329,93 @@ class WebAssemblyTableSection extends WebAssemblySection {
         console.log(tables);
 
         return new WebAssemblyTableSection(module);
+    }
+}
+
+class WebAssemblyTagSection extends WebAssemblySection {
+
+    constructor(module) {
+        super(SECTION_TYPE_TAG, module);
+        
+    }
+
+    encode(options) {
+
+        let mod = this.module;
+        let secsz, totsz = 0;
+        let types = mod.types;
+        let tags = mod.tags;
+        let len = tags.length;
+        let start = 0;
+        let cnt = 0;
+
+        // get the number of imports in begining.
+        for (let i = 0; i < len; i++) {
+            let tag = tags[i];
+            if (!(tag instanceof ImportedTag)) {
+                start = i;
+                break;
+            }
+        }
+
+        for (let i = start; i < len; i++) {
+            let idx, tag = tags[i];
+            if (tag instanceof ImportedTag)
+                throw new ReferenceError("imports mixed");
+
+            idx = types.indexOf(tag.type);
+            if (idx === -1)
+                throw new ReferenceError("missing type spec");
+            totsz += lengthULEB128(idx);
+
+            cnt++;
+        }
+
+        totsz += cnt; // accounting for tag.attr
+        totsz += lengthULEB128(cnt);
+        secsz = totsz;
+        totsz += lengthULEB128(secsz);
+
+        // actual encdong
+        let buf = new ArrayBuffer(totsz + 1);
+        let data = new ByteArray(buf);
+        data.writeUint8(SECTION_TYPE_TAG);
+        data.writeULEB128(secsz);
+        data.writeULEB128(cnt);
+
+        for (let i = start; i < len; i++) {
+            let idx, tag = tags[i];
+            idx = types.indexOf(tag.type);
+            data.writeUint8(tag.attr);
+            data.writeULEB128(idx);
+        }
+
+        return buf;
+    }
+
+    static decode(module, data, size) {
+        
+        let types = module.types;
+        let typemax = types.length - 1;
+        let cnt = data.readULEB128();
+        let tags;
+        if (!module.tags)
+            module.tags = [];
+        tags = module.tags;
+        for (let i = 0; i < cnt; i++) {
+            let tag = new WasmTag();
+            tag.attr = data.readUint8();
+            let idx = data.readULEB128();
+            if (idx < 0 || idx > typemax)
+                throw new ReferenceError("missing type spec");
+            tag.type = types[idx];
+            tags.push(tag);
+        }
+
+        console.log("table vector count: %d", cnt);
+        console.log(tags);
+
+        return new WebAssemblyTagSection(module);
     }
 }
 
@@ -6018,9 +6658,10 @@ function canBeCustomNamed(obj) {
         obj instanceof WasmLocal || 
         obj instanceof WasmMemory ||
         obj instanceof WasmGlobal ||
-        obj instanceof FuncType || 
+        obj instanceof WasmType || 
         obj instanceof WasmDataSegment ||
         obj instanceof WasmTable ||
+        obj instanceof WasmTag ||
         obj instanceof WasmElementSegment ||
         obj instanceof WebAssemblyModule)
         return true;
@@ -6063,6 +6704,7 @@ class WebAssemblyCustomSectionName extends WebAssemblyCustomSection {
         let globals = mod.globals;
         let elementSegments = mod.elementSegments;
         let dataSegments = mod.dataSegments;
+        let tags = mod.tags;
 
         let subsections = [];
 
@@ -6309,6 +6951,27 @@ class WebAssemblyCustomSectionName extends WebAssemblyCustomSection {
             subsections.push({id: 0x09, items: items, size: subsz});
         }
 
+        // tags
+        items = [];
+        subsz = 0;
+        len = tags ? tags.length : 0;
+        for (let i = 0; i < len; i++) {
+            let tag = tags[i];
+            if (typeof tag[__nsym] != "string" || tag[__nsym].length == 0)
+                continue;
+            let name = tag[__nsym];
+            subsz += lengthULEB128(i);  // tag-idx
+            let strsz = lengthBytesUTF8(name);
+            subsz += lengthULEB128(strsz);
+            subsz += strsz;
+            items.push({idx: i, name: name, strsz: strsz});
+        }
+
+        if (items.length > 0) {
+            subsz += lengthULEB128(items.length);
+            subsections.push({id: 0x0a, items: items, size: subsz});
+        }
+
         // as we are checking each name index in order, then it appears in that order.
 
         let secsz = 0;
@@ -6514,6 +7177,22 @@ class WebAssemblyCustomSectionName extends WebAssemblyCustomSection {
                 }
 
                 data.offset = substart + subsz;
+            } else if (id == 0x0a) { // tag names (11 according to spec, 10 from wat2wasm)
+
+                let tags = module.tags;
+                let cnt = data.readULEB128();
+                if (tags.length == 0)
+                    cnt = 0; // skip
+
+                for (let i = 0; i < cnt; i++) {
+                    let idx = data.readULEB128();
+                    let nlen = data.readULEB128();
+                    let name = data.readUTF8Bytes(nlen);
+                    let tag = tags[idx];
+                    tag[__nsym] = name;
+                }
+
+                data.offset = substart + subsz;
             } else {
                 console.warn("id %d size: %d", id, subsz);
                 data.offset = substart + subsz;
@@ -6552,6 +7231,746 @@ class WebAssemblyModule {
 
     constructor() {
         this._version = undefined;
+    }
+
+    /**
+     * The WebAssemblyModule on which the method is called is considered to be the target, 
+     * the object representation of wasmModule will be altered to fit into the target module.
+     *
+     * This action leaves the module provided in wasmModule argument in a unusable state; it will not encode
+     * after this action is applied, encoding will throw a reference error. To mark this module as unusable
+     * the tables for functions, types and more set to null.
+     *
+     * Its possible to merge for example merge within a single module as well, replacing a call to one function
+     * with a call to another function from the same module.
+     *
+     * If type declartion with matching signature is found within the target module that is to be
+     * used within the resulting object representation, opcode are change accordingly. If a type
+     * declartion does not exists in target, its added.
+     *
+     * The `replacementMap` argument allows for references to be replaced at both sides;
+     * for example a imported function in `wasmModule` can be replaced with a actual method from this.
+     *
+     * data-segments are inserted if there is no conflict for that address range, RELOC based data segments
+     * could allow data-segments in the `wasmModule` to be merged at a non-conflict location.
+     * 
+     * @param  {[type]} wasmModule [description]
+     * @param  {Map} replacementMap 
+     * @return {[type]}            [description]
+     */
+    mergeWithModule(wasmModule, replacementMap) {
+
+        if (wasmModule != this) {
+            throw new ReferenceError("merge with self not allowed"); // use mergeWithModule(null, map) to merge within the module itself.
+        }
+
+        let funcmap = new Map();
+        let memmap = new Map();
+        let tblmap = new Map();
+        let glbmap = new Map();
+        let tagmap = new Map();
+
+        if (wasmModule) {
+
+            // merges the type table of the two modules.
+            let oldtypes = []; // types to be replaced in wasmModule
+            let newtypes = []; // replacment for above, index mapped; oldtypes[i] = newtypes[i]
+            let addtypes = []; // types to be added to this
+
+            let stypes = this.types;
+            let otypes = wasmModule.types;
+            let xlen = otypes.length;
+            let ylen = stypes.length;
+            for (let x = 0; x < xlen; x++) {
+                let t1 = otypes[x];
+                let anymatch = false;
+                for (let y = 0; y < ylen; y++) {
+                    let t2 = stypes[y];
+                    if (WasmType.isEqual(t1, t2)) {
+                        oldtypes.push(t1);
+                        newtypes.push(t2);
+                        anymatch = true;
+                        break;
+                    }
+                }
+
+                if (!anymatch) {
+                    addtypes.push(t1);
+                }
+            }
+
+            // replacing in tags.
+            let tags = wasmModule.tags;
+            if (tags) {
+                let len = tags.length;
+                for (let i = 0; i < len; i++) {
+                    let tag = tags[i];
+                    let idx = oldtypes.indexOf(tag.type);
+                    if (idx !== -1) {
+                        tag.type = newtypes[idx];
+                    }
+                }
+            }
+
+            // replacing in functions & opcode
+            let functions = wasmModule.functions;
+            if (functions) {
+                let xlen = functions.length;
+                for (let x = 0; x < xlen; x++) {
+                    let func = functions[x];
+                    let idx = oldtypes.indexOf(func.type);
+                    if (idx !== -1) {
+                        func.type = newtypes[idx];
+                    }
+                    if (func instanceof ImportedFunction)
+                        continue;
+
+                    let opcodes = func.opcodes;
+                    let ylen = opcodes.length;
+                    for (let y = 0; y < ylen; y++) {
+                        let inst = opcodes[y];
+                        switch (inst.opcode) {
+                            case 0x02:
+                            case 0x03:
+                            case 0x04:
+                            case 0x06:
+                            case 0x11:
+                            {
+                                let type = inst.type;
+                                let idx = oldtypes.indexOf(type);
+                                if (idx !== -1) {
+                                    inst.type = newtypes[idx];
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            xlen = addtypes.length;
+            for (let x = 0; x < xlen; x++) {
+                let type = addtypes[x];
+                stypes.push(type);
+            }
+
+            // leave wasmModule unusable (won't encode any longer anyhow)
+            wasmModule.types = null;
+            
+
+            // find in opcode:
+            // - block
+            // - loop
+            // - if
+            // - try
+            // - call_indirect
+            // 
+            // replace in:
+            // - WasmFunction | ImportedFunction
+            // - WasmTag | ImportedTag
+            // types
+        }
+        
+        for (const [object, replacement] of replacementMap) {
+            console.log(`${key} = ${value}`);
+
+            // esnure not equal
+            if (object === replacement) {
+                throw new ReferenceError("replacement cannot be equal original");
+            }
+
+            if (typeof object != "object" || object === null || typeof replacement != "object" || object === null) {
+                throw new TypeError("not an object");
+            }
+
+            if ((object instanceof ImportedFunction) || (object instanceof WasmFunction)) {
+
+                // ensure that replacement is of correct type
+                if (!((replacement instanceof ImportedFunction) || (replacement instanceof WasmFunction))) {
+                    throw new TypeError("wrong type");
+                }
+
+                if (!WasmType.isEqual(object.type, replacement.type)) {
+                    throw new TypeError("singature mismatch");
+                }
+
+                let target;
+                if (this.functions.contains(object)) {
+                    target = this;
+                } else if (wasmModule && wasmModule.functions.contains(object)) {
+                    target = wasmModule;
+                } else {
+                    throw new ReferenceError("func not defined");
+                }
+
+                funcmap.set(object, replacement);
+
+                // find opcode:
+                // - call       0x10
+                // - ref.func   0xd2
+                // replace in:
+                // functions
+                // imports (replace/remove as needed)
+                // element-segments
+            }
+
+            if ((object instanceof ImportedMemory) || (object instanceof WasmMemory)) {
+
+                // ensure that replacement is of correct type
+                if (!((replacement instanceof ImportedMemory) || (replacement instanceof WasmMemory))) {
+                    throw new TypeError("wrong type");
+                }
+
+                let target;
+                if (this.memory.contains(object)) {
+                    target = this;
+                } else if (wasmModule.memory.contains(object)) {
+                    target = wasmModule;
+                } else {
+                    throw new ReferenceError("func not defined");
+                }
+
+                memmap.set(object, replacement);
+
+                // find in opcode: 
+                // memory.size  0x3f
+                // memory.grow  0x40
+                // memory.copy  (0xfc << 8) | 10
+                // memory.fill  (0xfc << 8) | 11 
+                // memory.init  (0xfc << 8) | 8
+                // 
+                // replace in:
+                // memory
+                // imports (replace/remove as needed)
+            }
+
+            if ((object instanceof ImportedTable) || (object instanceof WasmTable)) {
+
+                // ensure that replacement is of correct type
+                if (!((replacement instanceof ImportedTable) || (replacement instanceof WasmTable))) {
+                    throw new TypeError("wrong type");
+                }
+
+                if (object.reftype != replacement.reftype) {
+                    throw new TypeError("reftype mismatch");
+                }
+
+                let target;
+                if (this.tables.contains(object)) {
+                    target = this;
+                } else if (wasmModule.tables.contains(object)) {
+                    target = wasmModule;
+                } else {
+                    throw new ReferenceError("func not defined");
+                }
+
+                tblmap.set(object, replacement);
+
+                // find in opcode:
+                // - call_indirect  0x11
+                // - table.set      0x26
+                // - table.get      0x25
+                // - table.size     (0xfc << 8) | 16
+                // - table.grow     (0xfc << 8) | 15
+                // - table.init     (0xfc << 8) | 12
+                // - table.copy     (0xfc << 8) | 14
+                // - table.fill     (0xfc << 8) | 17
+                //
+                // replace in:
+                // tables
+                // imports (replace/remove as needed)
+            }
+
+            if ((object instanceof ImportedGlobal) || (object instanceof WasmGlobal)) {
+
+                // ensure that replacement is of correct type
+                if (!((replacement instanceof ImportedGlobal) || (replacement instanceof WasmGlobal))) {
+                    throw new TypeError("wrong type");
+                }
+
+                let target;
+                if (this.globals.contains(object)) {
+                    target = this;
+                } else if (wasmModule.globals.contains(object)) {
+                    target = wasmModule;
+                } else {
+                    throw new ReferenceError("func not defined");
+                }
+
+                glbmap.set(object, replacement);
+
+                // find:
+                // - global.set     0x24
+                // - global.get     0x23
+                // 
+                // (globals are also allowed in expr as in global.init, dataSegment.init)
+                // 
+                // replace in:
+                // globals
+                // imports (replace/remove as needed)
+            }
+
+            if ((object instanceof ImportedTag) || (object instanceof WasmTag)) {
+
+                // ensure that replacement is of correct type
+                if (!((replacement instanceof ImportedTag) || (replacement instanceof WasmTag))) {
+                    throw new TypeError("wrong type");
+                }
+
+                if (!WasmType.isEqual(object.type, replacement.type)) {
+                    throw new TypeError("singature mismatch");
+                }
+
+                let target;
+                if (this.tags.contains(object)) {
+                    target = this;
+                } else if (wasmModule.tags.contains(object)) {
+                    target = wasmModule;
+                } else {
+                    throw new ReferenceError("func not defined");
+                }
+
+                tagmap.set(object, replacement);
+
+                // find:
+                // - throw      0x08
+                // - catch      0x07
+                // 
+                // replace in:
+                // tags
+                // imports (replace/remove as needed)
+            }
+
+        }
+
+        if (funcmap.size > 0) {
+
+            // find opcode:
+            // - call       0x10
+            // - ref.func   0xd2
+            // replace in:
+            // functions
+            // imports (replace/remove as needed)
+            // element-segments
+
+            let xlen = functions.length;
+            for (let x = 0; x < xlen; x++) {
+                let func = functions[x];
+                let idx = oldtypes.indexOf(func.type);
+                if (idx !== -1) {
+                    func.type = newtypes[idx];
+                }
+                if (func instanceof ImportedFunction)
+                    continue;
+
+                let opcodes = func.opcodes;
+                let ylen = opcodes.length;
+                for (let y = 0; y < ylen; y++) {
+                    let inst = opcodes[y];
+                    switch (inst.opcode) {
+                        case 0x10:
+                        case 0xd2:
+                        {
+                            let func = inst.func;
+                            if (funcmap.has(func)) {
+                                inst.func = funcmap.get(func);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (memmap.size > 0) {
+            
+            // find in opcode: 
+            // memory.size  0x3f
+            // memory.grow  0x40
+            // memory.copy  (0xfc << 8) | 10
+            // memory.fill  (0xfc << 8) | 11 
+            // memory.init  (0xfc << 8) | 8
+            // 
+            // replace in:
+            // memory
+            // imports (replace/remove as needed)
+
+            let xlen = functions.length;
+            for (let x = 0; x < xlen; x++) {
+                let func = functions[x];
+                let idx = oldtypes.indexOf(func.type);
+                if (idx !== -1) {
+                    func.type = newtypes[idx];
+                }
+                if (func instanceof ImportedFunction)
+                    continue;
+
+                let opcodes = func.opcodes;
+                let ylen = opcodes.length;
+                for (let y = 0; y < ylen; y++) {
+                    let inst = opcodes[y];
+                    switch (inst.opcode) {
+                        case 0x3f:
+                        case 0x40:
+                        case 0xfc0b:
+                        case 0xfc08:
+                        {
+                            let mem = inst.mem;
+                            if (memmap.has(mem)) {
+                                inst.mem = memmap.get(mem);
+                            }
+                            break;
+                        }
+                        case 0xfc0a:
+                        {
+                            let mem = inst.mem1;
+                            if (memmap.has(mem)) {
+                                inst.mem1 = memmap.get(mem);
+                            }
+
+                            mem = inst.mem2;
+                            if (memmap.has(mem)) {
+                                inst.mem2 = memmap.get(mem);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            for (const [oldmem, newmem] of memmap) {
+
+                /*let target;
+                let same = false;
+                if (this.memory.contains(oldmem)) {
+                    target = this;
+                } else if (wasmModule.memory.contains(oldmem)) {
+                    target = wasmModule;
+                } else {
+                    throw new ReferenceError("original not defined");
+                }
+
+                if (this.memory.contains(newmem)) {
+                    same = (target === this);
+                } else if (wasmModule.memory.contains(newmem)) {
+                    same = (target === wasmModule);
+                } else {
+                    throw new ReferenceError("replacement not defined");
+                }*/
+
+                let memory = this.memory;
+                let idx = memory.indexOf(newmem);
+
+                if (idx == -1) {
+
+                    if (newmem instanceof ImportedMemory) {
+                        let len = memory.length;
+                        let first = -1;
+                        for (let i = 0; i < len; i++) {
+                            let mem = memory[i];
+                            if (!(mem instanceof ImportedMemory)) {
+                                first = i;
+                                break;
+                            }
+                        }
+
+                        if (first === 0) {
+                            memory.unshift(newmem);
+                        } else {
+                            memory.splice(first, 0, newmem);
+                        }
+
+                    } else {
+                        memory.push(newmem);
+                    }
+                } else if (memory.indexOf(newmem, idx + 1) !== -1) {
+                    throw new ReferenceError("mutiple references of memory"); // multiple references to same memory in same module, not allowed.
+                }
+
+                let target;
+                if (this.memory.contains(oldmem)) {
+                    target = this;
+                } else if (wasmModule.memory.contains(oldmem)) {
+                    target = wasmModule;
+                } else {
+                    throw new ReferenceError("original not defined");
+                }
+
+
+
+                if ()
+
+                if (same) {
+                    let idx = memory.indexOf(oldmem);
+                    memory.splice(idx, 1);
+                }
+
+
+            }
+        }
+
+        if (tblmap.size > 0) {
+            
+        }
+
+        if (glbmap.size > 0) {
+            
+        }
+
+        if (tagmap.size > 0) {
+            
+        }
+    }
+
+    // types
+
+    /**
+     * Return type by the signature of what pull and push from/to the stack.
+     * @param  {Array|Integer} pullv [description]
+     * @param  {Array|Integer} pushv [description]
+     * @return {WasmType}      The function type with the signature or null if no matching type was found.
+     */
+    typeByPullPush(pullv, pushv) {
+        let types = this.types;
+        let len = types.length;
+        let argc = 0;
+        let retc = 0;
+
+        if (Array.isArray(pullv)) {
+
+            if (pullv.length == 1) {
+                pullv = pullv[0];
+                argc = 1;
+            } else if (pullv.length > 1) {
+                argc = pullv.length;
+            }
+
+        } else if (Number.isInteger(pullv) && pullv != WA_TYPE_VOID) {
+            argc = 1;
+        }
+
+        if (Array.isArray(pushv)) {
+
+            if (pushv.length == 1) {
+                pushv = pushv[0];
+                retc = 1;
+            } else if (pushv.length > 1) {
+                retc = pushv.length;
+            }
+
+        } else if (Number.isInteger(pushv) && pushv != WA_TYPE_VOID) {
+            retc = 1;
+        }
+
+        for (let i = 0; i < len; i++) {
+            let type = types[i];
+            if (argc != type.argc || retc != type.retc) {
+                continue;
+            }
+
+            if (argc === 1) {
+
+                if (pullv !== type.argv[0])
+                    continue;
+
+            } else if (argc != 0) {
+                let match = true;
+                for (let x = 0; x < argc; x++) {
+                    if (pullv[x] != type.argv[x]) {
+                        match = false;
+                        break;
+                    }
+                }
+
+                if (!match)
+                    continue;
+            }
+
+            if (retc === 1) {
+
+                if (pushv !== type.retv[0])
+                    continue;
+
+            } else if (retc != 0) {
+                let match = true;
+                for (let x = 0; x < retc; x++) {
+                    if (pushv[x] != type.retv[x]) {
+                        match = false;
+                        break;
+                    }
+                }
+
+                if (!match)
+                    continue;
+            }
+
+            // if we reached here it matching.
+            return type;
+        }
+
+        return null;
+    }
+
+    getOrCreateType(pullv, pushv) {
+        
+        let type = this.typeByPullPush(pullv, pushv);
+        if (type)
+            return type;
+
+        let argc = 0;
+        let argv = null;
+        let retc = 0;
+        let retv = null;
+
+        if (Array.isArray(pullv) && pullv.length > 0) {
+
+            argc = pullv.length;
+            argv = pullv.slice(); // copy
+
+        } else if (Number.isInteger(pullv) && pullv != WA_TYPE_VOID) {
+            argc = 1;
+            argv = [pullv];
+        }
+
+        if (Array.isArray(pushv) && pushv.length > 1) {
+
+            retc = pushv.length;
+            retv = pushv.slice(); // copy
+
+        } else if (Number.isInteger(pushv) && pushv != WA_TYPE_VOID) {
+            retc = 1;
+            retv = [pushv];
+        }
+
+        type = new WasmType();
+        type.argc = argc;
+        type.argv = argv;
+        type.retc = retc;
+        type.retv = retv;
+        type.typeidx = this.types.length; // TODO: remove me!
+        type.count = 0;
+        this.types.push(type);
+
+        return type;
+    }
+
+    // imports
+    
+    appendImport(imp) {
+
+        if (typeof imp.module != "string" || typeof imp.name != "string" || imp.module.length == 0 || imp.module.length == 0)
+            throw new TypeError("invalid name");
+
+        // check name or reference conflict
+        let imports = this.imports;
+        let len = imports.length;
+        for (let i = 0; i < len; i++) {
+            let other = imports[i];
+            if (other == imp || (other.module == imp.module && other.name == imp.name)) {
+                throw new ReferenceError("import already exist");
+            }
+        }
+
+        if (imp instanceof ImportedFunction) {
+
+            let functions = this.functions;
+            let last, len = 0;
+            for (let i = 0; i < len; i++) {
+                let func = functions[i];
+                if (func instanceof ImportedFunction)
+                    continue;
+                
+                last = i;
+                break;
+            }
+
+            if (last == 0) {
+                functions.unshift(imp);
+            } else {
+                functions.splice(last + 1, 0, imp);
+            }
+
+        } else if(imp instanceof ImportedGlobal) {
+
+            let globals = this.globals;
+            let last, len = 0;
+            for (let i = 0; i < len; i++) {
+                let glob = globals[i];
+                if (glob instanceof ImportedGlobal)
+                    continue;
+
+                last = i;
+                break;
+            }
+
+            if (last == 0) {
+                globals.unshift(imp);
+            } else {
+                globals.splice(last + 1, 0, imp);
+            }
+
+        } else if(imp instanceof ImportedMemory) {
+
+            let memory = this.memory;
+            let last, len = 0;
+            for (let i = 0; i < len; i++) {
+                let mem = memory[i];
+                if (mem instanceof ImportedTag)
+                    continue;
+
+                last = i;
+                break;
+            }
+
+            if (last == 0) {
+                memory.unshift(imp);
+            } else {
+                memory.splice(last + 1, 0, imp);
+            }
+
+        } else if(imp instanceof ImportedTag) {
+
+            let tags = this.tags;
+            let last, len = 0;
+            for (let i = 0; i < len; i++) {
+                let tag = tags[i];
+                if (tag instanceof ImportedTag)
+                    continue;
+
+                last = i;
+                break;
+            }
+
+            if (last == 0) {
+                tags.unshift(imp);
+            } else {
+                tags.splice(last + 1, 0, imp);
+            }
+
+        } else if(imp instanceof ImportedTable) {
+
+            let tables = this.tables;
+            let last, len = 0;
+            for (let i = 0; i < len; i++) {
+                let tbl = tables[i];
+                if (tbl instanceof ImportedTable)
+                    continue;
+
+                last = i;
+                break;
+            }
+
+            if (last == 0) {
+                tables.unshift(imp);
+            } else {
+                tables.splice(last + 1, 0, imp);
+            }
+
+        } else {
+            throw new TypeError("invalid type");
+        }
+
+        imports.push(imp);
     }
 
     // globals
@@ -7477,6 +8896,14 @@ function parseWebAssemblyBinary(buf) {
             case 0x0C:  // data-count
             {
                 let sec = WebAssemblyDataCountSection.decode(mod, data, size);
+                //mod.dataSegments = decodeDataSection(data, size, mod);
+                chunks[chunk.index] = sec;
+                sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                break;
+            }
+            case 0x0d:  // data-count
+            {
+                let sec = WebAssemblyTagSection.decode(mod, data, size);
                 //mod.dataSegments = decodeDataSection(data, size, mod);
                 chunks[chunk.index] = sec;
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
