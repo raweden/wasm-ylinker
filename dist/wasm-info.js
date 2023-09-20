@@ -44,7 +44,7 @@ const SECTION_TYPE_CUSTOM = 0x00;
 
 function type_name(type) {
     switch(type) {
-        case 0x7F: 
+        case 0x7F:
             return 'i32';
         case 0x7E:
             return 'i64';
@@ -68,7 +68,7 @@ function type_name(type) {
 
 function export_type_name(type) {
     switch(type) {
-        case 0x00: 
+        case 0x00:
             return 'function';
         case 0x01:
             return 'table';
@@ -1206,8 +1206,8 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
                 if (tableidx === -1)
                     throw new ReferenceError("tableidx not found");
                 sz += lengthULEB128(tableidx);
-                break;           
-            }     
+                break;
+            }
             case 0x28: // i32.load
             case 0x29: // i64.load
             case 0x2a: // f32.load
@@ -1238,7 +1238,7 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
                 break;
             }
             case 0x3f: // memory.size 0x00
-            {   
+            {
                 if (inst.memidx != 0x00)
                     throw TypeError("invalid memidx");
                 sz += 2;
@@ -1521,7 +1521,7 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
                     }
                 }
                 break;
-            } 
+            }
 
             case 0xFD: // multi-byte sequence
             {
@@ -1916,7 +1916,7 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
                 console.error("opcode %s not supported", "0x" + b1.toString(16));
                 brk = true;
                 break;
-        }   
+        }
     }
 
     return sz
@@ -2518,7 +2518,7 @@ function decodeByteCode(data, mod, locals) {
                     }
                 }
                 break;
-            } 
+            }
 
             case 0xFD: // multi-byte sequence
             {
@@ -2721,7 +2721,7 @@ function decodeByteCode(data, mod, locals) {
                     case 156:   // i16x8.extmul_low_i8x16_s         [v128 v128] -> [v128]
                     case 157:   // i16x8.extmul_high_i8x16_s        [v128 v128] -> [v128]
                     case 158:   // i16x8.extmul_low_i8x16_u         [v128 v128] -> [v128]
-                    case 159:   // i16x8.extmul_high_i8x16_u        [v128 v128] -> [v128] 
+                    case 159:   // i16x8.extmul_high_i8x16_u        [v128 v128] -> [v128]
 
                     case 126:   // i32x4.extadd_pairwise_i16x8_s    [v128] -> [v128]
                     case 127:   // i32x4.extadd_pairwise_i16x8_u    [v128] -> [v128]
@@ -2927,7 +2927,7 @@ function decodeByteCode(data, mod, locals) {
                 console.error("opcode %s not supported", "0x" + op_code.toString(16));
                 brk = true;
                 break;
-        }   
+        }
     }
 
     return {start: start, end: data.offset, opcodes: topInsts};
@@ -3207,7 +3207,7 @@ function encodeByteCode(mod, opcodes, locals, data) {
                 break;
             }
             case 0x3f: // memory.size 0x00
-            {   
+            {
                 if (inst.memidx != 0x00)
                     throw TypeError("invalid memidx");
                 data.writeUint8(b1);
@@ -3496,7 +3496,7 @@ function encodeByteCode(mod, opcodes, locals, data) {
                     }
                 }
                 break;
-            } 
+            }
 
             case 0xFD: // multi-byte sequence
             {
@@ -3889,7 +3889,7 @@ function encodeByteCode(mod, opcodes, locals, data) {
             }
             default:
                 throw new TypeError("opcode " + ("0x" + b1.toString(16)) + " not supported");
-        }   
+        }
     }
 
     return true;
@@ -3922,10 +3922,10 @@ class ByteArray {
         this._data = null;
         this._u8 = null;
 
-        // TODO: should support DataView subrange trough .byteOffset 
+        // TODO: should support DataView subrange trough .byteOffset
         if (buffer instanceof DataView) {
             this._data = buffer;
-            this._u8 = new Uint8Array(buffer.buffer); 
+            this._u8 = new Uint8Array(buffer.buffer);
         } else if (buffer instanceof Uint8Array) {
             this._data = new DataView(buffer.buffer);
             this._u8 = buffer;
@@ -3937,7 +3937,7 @@ class ByteArray {
             this._u8 = new Uint8Array(buffer);
         } else if (!(buffer instanceof ByteArray)) {
             throw TypeError("buffer is of unsupported type");
-        } 
+        }
         this._offset = 0;
         this._littleEndian = true;
         if (buffer instanceof ByteArray) {
@@ -4423,7 +4423,7 @@ class ByteArray {
                 u8[off++] = 0xC0 | (u >> 6);
                 u8[off++] = 0x80 | (u & 63);
             } else if (u <= 0xFFFF) {
-                    
+                
                 if (off + 2 >= end)
                     break;
                 u8[off++] = 0xE0 | (u >> 12);
@@ -4707,9 +4707,6 @@ class WasmType {
                     return false;
                 }
             }
-
-            if (!match)
-                continue;
         }
 
         if (retc != 0) {
@@ -4949,7 +4946,7 @@ class WebAssemblyImportSection extends WebAssemblySection {
                 total += lengthULEB128(imp.min, memPadTo);
                 if (imp.max !== null) {
                     total += lengthULEB128(imp.max, memPadTo);
-                } 
+                }
                 cnt++;
             } else if (imp instanceof ImportedTable) {
                 total += 3; // type, reftype, limits
@@ -5096,7 +5093,7 @@ class WebAssemblyImportSection extends WebAssemblySection {
                     imp = new ImportedMemory();
                     imp.min = data.readULEB128();
                     imp.max = data.readULEB128();
-                    imp.shared = true;              
+                    imp.shared = true;
                 } else {
                     console.error("found memory limit of type %d", type);
                 }
@@ -5536,7 +5533,7 @@ class WebAssemblyMemorySection extends WebAssemblySection {
             } else if (limit == 0x03) {
                 mem.min = data.readULEB128();
                 mem.max = data.readULEB128();
-                mem.shared = true;              
+                mem.shared = true;
             }
             vector.push(mem);
         }
@@ -6463,7 +6460,7 @@ class WebAssemblyCustomSectionDylink0 extends WebAssemblyCustomSection {
             }
 
             data.offset = substart + sz;
-        }  
+        }
 
         return new WebAssemblyCustomSectionDylink0(module);
     }
@@ -6654,11 +6651,11 @@ function canBeCustomNamed(obj) {
     if (obj === undefined || obj === null || typeof obj !== "object")
         return false;
 
-    if (obj instanceof WasmFunction || 
-        obj instanceof WasmLocal || 
+    if (obj instanceof WasmFunction ||
+        obj instanceof WasmLocal ||
         obj instanceof WasmMemory ||
         obj instanceof WasmGlobal ||
-        obj instanceof WasmType || 
+        obj instanceof WasmType ||
         obj instanceof WasmDataSegment ||
         obj instanceof WasmTable ||
         obj instanceof WasmTag ||
@@ -7330,11 +7327,11 @@ class WebAssemblyModule {
                     for (let y = 0; y < ylen; y++) {
                         let inst = opcodes[y];
                         switch (inst.opcode) {
-                            case 0x02:
-                            case 0x03:
-                            case 0x04:
-                            case 0x06:
-                            case 0x11:
+                            case 0x02:  // block bt
+                            case 0x03:  // loop bt
+                            case 0x04:  // if bt
+                            case 0x06:  // try bt
+                            case 0x11:  // call_indirect
                             {
                                 let type = inst.type;
                                 let idx = oldtypes.indexOf(type);
@@ -7556,10 +7553,6 @@ class WebAssemblyModule {
             let xlen = functions.length;
             for (let x = 0; x < xlen; x++) {
                 let func = functions[x];
-                let idx = oldtypes.indexOf(func.type);
-                if (idx !== -1) {
-                    func.type = newtypes[idx];
-                }
                 if (func instanceof ImportedFunction)
                     continue;
 
@@ -7568,8 +7561,8 @@ class WebAssemblyModule {
                 for (let y = 0; y < ylen; y++) {
                     let inst = opcodes[y];
                     switch (inst.opcode) {
-                        case 0x10:
-                        case 0xd2:
+                        case 0x10:  // call
+                        case 0xd2:  // ref.func
                         {
                             let func = inst.func;
                             if (funcmap.has(func)) {
@@ -7578,6 +7571,38 @@ class WebAssemblyModule {
                             break;
                         }
                     }
+                }
+            }
+        }
+
+        // merge wasmModule.functions into this.functions
+        if (wasmModule.functions && wasmModule.functions.length > 0) {
+
+            let imports = this.imports;
+            let src = wasmModule.functions;
+            let len = src.length;
+            let dst = this.functions;
+            let ylen = dst.length;
+            let first = 0;
+            for (let x = 0; x < len; x++) {
+                let func = dst[x];
+                if (!(func instanceof ImportedFunction)) {
+                    first = y;
+                    break;
+                }
+            }
+
+            for (let x = 0; x < len; x++) {
+                let func = src[i];
+                if (dst.indexOf(func) !== -1)
+                    continue;
+                
+                if (func instanceof ImportedFunction) {
+                    dst.splice(first, 0, func);
+                    first++;
+                    imports.push(func);
+                } else {
+                    dst.push(func);
                 }
             }
         }
@@ -7688,38 +7713,326 @@ class WebAssemblyModule {
                 }
 
                 let target;
-                if (this.memory.contains(oldmem)) {
+                idx = memory.indexOf(oldmem);
+                if (idx !== -1) {
                     target = this;
-                } else if (wasmModule.memory.contains(oldmem)) {
-                    target = wasmModule;
-                } else {
+                }
+
+                if (!target) {
+                    idx = wasmModule.memory.indexOf(oldmem);
+                    if (idx !== -1)
+                        target = wasmModule;
+                }
+
+                if (!target) {
                     throw new ReferenceError("original not defined");
                 }
 
+                target.memory.splice(idx, 1);
+            }
+        }
 
+        // merge wasmModule.memory into this.memory
+        if (wasmModule.memory && wasmModule.memory.length > 0) {
 
-                if ()
-
-                if (same) {
-                    let idx = memory.indexOf(oldmem);
-                    memory.splice(idx, 1);
+            let src = wasmModule.memory;
+            let len = src.length;
+            let dst = this.memory;
+            let ylen = dst.length;
+            let first = 0;
+            for (let x = 0; x < len; x++) {
+                let mem = dst[x];
+                if (!(mem instanceof ImportedMemory)) {
+                    first = y;
+                    break;
                 }
+            }
 
-
+            for (let x = 0; x < len; x++) {
+                let mem = src[i];
+                if (dst.indexOf(mem) !== -1)
+                    continue;
+                
+                if (mem instanceof ImportedMemory) {
+                    dst.splice(first, 0, mem);
+                    first++;
+                } else {
+                    dst.push(mem);
+                }
             }
         }
 
         if (tblmap.size > 0) {
+
+            // find in opcode:
+            // - call_indirect  0x11
+            // - table.set      0x26
+            // - table.get      0x25
+            // - table.size     (0xfc << 8) | 16
+            // - table.grow     (0xfc << 8) | 15
+            // - table.init     (0xfc << 8) | 12
+            // - table.copy     (0xfc << 8) | 14
+            // - table.fill     (0xfc << 8) | 17
+            //
+            // replace in:
+            // tables
+            // imports (replace/remove as needed)
             
+            let xlen = functions.length;
+            for (let x = 0; x < xlen; x++) {
+                let func = functions[x];
+                if (func instanceof ImportedFunction)
+                    continue;
+
+                let opcodes = func.opcodes;
+                let ylen = opcodes.length;
+                for (let y = 0; y < ylen; y++) {
+                    let inst = opcodes[y];
+                    switch (inst.opcode) {
+                        case 0x11:      // call_indirect
+                        case 0x25:      // table.get
+                        case 0x26:      // table.set
+                        case 0xfc0c:    // table.init
+                        case 0xfc0f:    // table.grow
+                        case 0xfc10:    // table.size
+                        case 0xfc11:    // table.fill
+                        {
+                            let tbl = inst.table;
+                            if (tblmap.has(tbl)) {
+                                inst.table = tblmap.get(tbl);
+                            }
+                            break;
+                        }
+                        case 0xfc0e:    // table.copy
+                        {
+                            let tbl1 = inst.table1;
+                            if (tblmap.has(tbl1)) {
+                                inst.table1 = tblmap.get(tbl1);
+                            }
+                            // TODO: ensure that we can copy if tbl1 === tbl2
+                            let tbl2 = inst.table2;
+                            if (tblmap.has(tbl2)) {
+                                inst.table2 = tblmap.get(tbl2);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // merge wasmModule.tables into this.tables
+        if (wasmModule.tables && wasmModule.tables.length > 0) {
+
+            let imports = this.imports;
+            let src = wasmModule.tables;
+            let len = src.length;
+            let dst = this.tables;
+            let ylen = dst.length;
+            let first = 0;
+            for (let x = 0; x < len; x++) {
+                let tbl = dst[x];
+                if (!(tbl instanceof ImportedTable)) {
+                    first = y;
+                    break;
+                }
+            }
+
+            for (let x = 0; x < len; x++) {
+                let tbl = src[i];
+                if (dst.indexOf(tbl) !== -1)
+                    continue;
+                
+                if (tbl instanceof ImportedTable) {
+                    dst.splice(first, 0, tbl);
+                    first++;
+                    imports.push(tbl);
+                } else {
+                    dst.push(tbl);
+                }
+            }
         }
 
         if (glbmap.size > 0) {
+
+            // find:
+            // - global.set     0x24
+            // - global.get     0x23
+            // 
+            // (globals are also allowed in expr as in global.init, dataSegment.init)
+            // 
+            // replace in:
+            // globals
+            // imports (replace/remove as needed)
             
+            let xlen = functions.length;
+            for (let x = 0; x < xlen; x++) {
+                let func = functions[x];
+                if (func instanceof ImportedFunction)
+                    continue;
+
+                let opcodes = func.opcodes;
+                let ylen = opcodes.length;
+                for (let y = 0; y < ylen; y++) {
+                    let inst = opcodes[y];
+                    switch (inst.opcode) {
+                        case 0x23:  // global.get
+                        case 0x24:  // global.set
+                        {
+                            let glb = inst.global;
+                            if (glbmap.has(glb)) {
+                                inst.global = glbmap.get(glb);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            let arr = [];
+            xlen = globals.length;
+            for (let x = 0; x < xlen; x++) {
+                let glb = globals[i];
+                if (glb instanceof ImportedGlobal) {
+                    continue;
+                }
+
+                arr.push(glb.init);
+            }
+
+            xlen = dataSegments.length;
+            for (let x = 0; x < xlen; x++) {
+                let seg = dataSegments[i];
+                arr.push(seg.inst.opcodes);
+            }
+
+            xlen = elementSegments.length;
+            for (let x = 0; x < xlen; x++) {
+                let seg = elementSegments[i];
+                arr.push(seg.opcodes);
+            }
+
+            xlen = arr.length;
+            for (let x = 0; x < xlen; x++) {
+                let opcodes = arr[x];
+                let ylen = opcodes.length;
+                for (let y = 0; y < ylen; y++) {
+                    let inst = opcodes[y];
+                    switch (inst.opcode) {
+                        case 0x23:  // global.get
+                        case 0x24:  // global.set
+                        {
+                            let glb = inst.global;
+                            if (glbmap.has(glb)) {
+                                inst.global = glbmap.get(glb);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+        }
+
+        // merge wasmModule.globals into this.globals
+        if (wasmModule.globals && wasmModule.globals.length > 0) {
+
+            let imports = this.imports;
+            let src = wasmModule.globals;
+            let len = src.length;
+            let dst = this.globals;
+            let ylen = dst.length;
+            let first = 0;
+            for (let x = 0; x < len; x++) {
+                let glob = dst[x];
+                if (!(glob instanceof ImportedGlobal)) {
+                    first = y;
+                    break;
+                }
+            }
+
+            for (let x = 0; x < len; x++) {
+                let glob = src[i];
+                if (dst.indexOf(glob) !== -1)
+                    continue;
+                
+                if (glob instanceof ImportedGlobal) {
+                    dst.splice(first, 0, glob);
+                    first++;
+                    imports.push(glob);
+                } else {
+                    dst.push(glob);
+                }
+            }
         }
 
         if (tagmap.size > 0) {
             
+            // find:
+            // - throw      0x08
+            // - catch      0x07
+            // 
+            // replace in:
+            // tags
+            // imports (replace/remove as needed)
+            
+            let xlen = functions.length;
+            for (let x = 0; x < xlen; x++) {
+                let func = functions[x];
+                if (func instanceof ImportedFunction)
+                    continue;
+
+                let opcodes = func.opcodes;
+                let ylen = opcodes.length;
+                for (let y = 0; y < ylen; y++) {
+                    let inst = opcodes[y];
+                    switch (inst.opcode) {
+                        case 0x07:  // catch
+                        case 0x08:  // throw
+                        {
+                            let tag = inst.tag;
+                            if (tagmap.has(tag)) {
+                                inst.tag = tagmap.get(tag);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
         }
+
+        // merge wasmModule.tags into this.tags
+        if (wasmModule.tags && wasmModule.tags.length > 0) {
+
+            let imports = this.imports;
+            let src = wasmModule.tags;
+            let len = src.length;
+            let dst = this.tags;
+            let ylen = dst.length;
+            let first = 0;
+            for (let x = 0; x < len; x++) {
+                let tag = dst[x];
+                if (!(tag instanceof ImportedTag)) {
+                    first = y;
+                    break;
+                }
+            }
+
+            for (let x = 0; x < len; x++) {
+                let tag = src[i];
+                if (dst.indexOf(tag) !== -1)
+                    continue;
+                
+                if (tag instanceof ImportedTag) {
+                    dst.splice(first, 0, tag);
+                    first++;
+                    imports.push(tag);
+                } else {
+                    dst.push(tag);
+                }
+            }
+        }
+
     }
 
     // types

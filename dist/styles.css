@@ -1,4 +1,34 @@
 
+body {
+    height: 100vh;
+}
+
+#workflow-ui-panel {
+    height: 100%;
+}
+
+.workflow-param-file .action-body
+{
+    white-space: pre;
+}
+
+.workflow-action.workflow-param-file .action-body .filename::after
+{
+    content: "\a";
+}
+
+.workflow-action.workflow-param-file .action-header.file-label
+{
+    color: #ffb000
+}
+
+.workflow-action.workflow-param-file .action-header.file-picker-button
+{
+    color: #ffffff
+}
+
+
+
 nav.topnav {
     display: flex;
     justify-content: space-between;
@@ -1156,6 +1186,16 @@ ul.action-list > li.action-divider
     div.action-menu > ul.action-list li.action-item.variant-danger:hover:not([aria-disabled]) {
         background-color: rgba(229, 83, 75, 0.16);
         color: rgb(244, 112, 103);
+    }
+
+    .workflow-action.workflow-param-file .action-header.file-label
+    {
+        color: #ffb000;
+    }
+    
+    .workflow-action.workflow-param-file .action-header.file-picker-button
+    {
+        color: #ffffff;
     }
 
 }

@@ -263,7 +263,7 @@ function parseWAT(source, options) {
 						idx += 2;
 						break;
 					} else if (chr == 0x0a) {					// new-line
-			
+						
 						// making CR char optional (windows users)
 						if (source.charCodeAt(idx) == 0x0d) {
 							idx++;
@@ -452,7 +452,7 @@ function parseWAT(source, options) {
 			tkn = {type: WAT_TOKEN_IDENT, value: source.substring(start, end)};
 			tokens.push(tkn);
 			tkn.line = lncnt;
-			tkn.column = idx - lnoff;			
+			tkn.column = idx - lnoff;
 			continue;
 			
 		} else if (chr > 0x60 && chr < 0x7B) { // a-z (keyword must with a-z)
@@ -466,7 +466,7 @@ function parseWAT(source, options) {
 					end = idx;
 					break;
 				}
-				// equal sign seams to be a valid keyword char, but it should also break the keyword so that follwing 
+				// equal sign seams to be a valid keyword char, but it should also break the keyword so that follwing
 				// number for offset & align is interpeted as such.
 				if (chr == 0x3d) {
 					idx++;
@@ -479,7 +479,7 @@ function parseWAT(source, options) {
 			tkn = {type: WAT_TOKEN_KEYWORD, value: source.substring(start, end)};
 			tokens.push(tkn);
 			tkn.line = lncnt;
-			tkn.column = idx - lnoff;			
+			tkn.column = idx - lnoff;
 			continue;
 
 		} else if (chr == 0x2b || chr == 0x2d || (chr > 0x2F && chr < 0x3A)) { // plus minus 0-9
@@ -599,7 +599,7 @@ function parseWAT(source, options) {
 	function text2bintype(text) {
 
 	    switch(text) {
-	        case 'i32': 
+	        case 'i32':
 	            return 0x7F;
 	        case 'i64':
 	            return 0x7E;
@@ -881,7 +881,7 @@ function parseWAT(source, options) {
 		if (tkn.type == WAT_TOKEN_IDENT) {
 			ident = tkn.value;
 			tkn = tokens.next(true);
-		} 
+		}
 
 		if (!ident) {
 
@@ -1476,7 +1476,7 @@ function parseWAT(source, options) {
 				opcode = {opcode: opval, elem: elem};
 				break;
 			}
-			// natural alignment = 0
+			// 8-bit natural alignment = 0
 			case 'i32.load8_s':
 			case 'i32.load8_u':
 			case 'i64.load8_s':
@@ -1488,7 +1488,7 @@ function parseWAT(source, options) {
 				let ret = maybeMemarg(tokens, opcode, 0);
 				break;
 			}
-			// natural alignment = 1
+			// 16-bit natural alignment = 1
 			case 'i32.load16_s':
 			case 'i32.load16_u':
 			case 'i32.store16':
@@ -1500,7 +1500,7 @@ function parseWAT(source, options) {
 				let ret = maybeMemarg(tokens, opcode, 1);
 				break;
 			}
-			// natural alignment = 2
+			// 32-bit natural alignment = 2
 			case 'i32.load':
 			case 'i32.store':
 			case 'f32.load':
@@ -1514,7 +1514,7 @@ function parseWAT(source, options) {
 
 				break;
 			}
-			// natural alignment = 3
+			// 64-bit natural alignment = 3
 			case 'f64.load':
 			case 'f64.store':
 			case 'i64.load':
@@ -1666,7 +1666,7 @@ function parseWAT(source, options) {
 				break;
 			}
 			case 'ref.null':
-			{	
+			{
 				let reftype;
 				let tmp = tokens._index;
 				tkn = tokens.next(true);
@@ -1793,27 +1793,35 @@ function parseWAT(source, options) {
 			}
 			case 'i8x16.extract_lane_s':
 			case 'i8x16.extract_lane_u':
-			case 'i8x16.replace_lane':
 			case 'i16x8.extract_lane_s':
 			case 'i16x8.extract_lane_u':
 			{
 				opcode = {opcode: opval};
 				break;
 			}
-			case 'i16x8.replace_lane':
 			case 'i32x4.extract_lane':
-			case 'i32x4.replace_lane':
 			case 'i64x2.extract_lane':
-			case 'i64x2.replace_lane':
 			case 'f32x4.extract_lane':
-			case 'f32x4.replace_lane':
 			case 'f64x2.extract_lane':
+			{
+				opcode = {opcode: opval};
+				break;
+			}
+			case 'i8x16.replace_lane':
+			case 'i16x8.replace_lane':
+			case 'i32x4.replace_lane':
+			case 'i64x2.replace_lane':
+			case 'f32x4.replace_lane':
 			case 'f64x2.replace_lane':
 			{
 				opcode = {opcode: opval};
 				break;
 			}
 			case 'i8x16.swizzle':
+			{
+				opcode = {opcode: opval};
+				break;
+			}
 			case 'i8x16.splat':
 			case 'i16x8.splat':
 			case 'i32x4.splat':
@@ -2031,75 +2039,94 @@ function parseWAT(source, options) {
 				opcode = {opcode: opval};
 				break;
 			}
-			case 'i32.atomic.load':
-			case 'i64.atomic.load':
+			// 8-bit natural alignment = 0
 			case 'i32.atomic.load8_u':
-			case 'i32.atomic.load16_u':
 			case 'i64.atomic.load8_u':
-			case 'i64.atomic.load16_u':
-			case 'i64.atomic.load32_u':
-			case 'i32.atomic.store':
-			case 'i64.atomic.store':
 			case 'i32.atomic.store8':
-			case 'i32.atomic.store16':
 			case 'i64.atomic.store8':
-			case 'i64.atomic.store16':
-			case 'i64.atomic.store32':
-			case 'i32.atomic.rmw.add':
-			case 'i64.atomic.rmw.add':
 			case 'i32.atomic.rmw8.add_u':
-			case 'i32.atomic.rmw16.add_u':
 			case 'i64.atomic.rmw8.add_u':
-			case 'i64.atomic.rmw16.add_u':
-			case 'i64.atomic.rmw32.add_u':
-			case 'i32.atomic.rmw.sub':
-			case 'i64.atomic.rmw.sub':
 			case 'i32.atomic.rmw8.sub_u':
-			case 'i32.atomic.rmw16.sub_u':
 			case 'i64.atomic.rmw8.sub_u':
-			case 'i64.atomic.rmw16.sub_u':
-			case 'i64.atomic.rmw32.sub_u':
-			case 'i32.atomic.rmw.and':
-			case 'i64.atomic.rmw.and':
 			case 'i32.atomic.rmw8.and_u':
-			case 'i32.atomic.rmw16.and_u':
 			case 'i64.atomic.rmw8.and_u':
-			case 'i64.atomic.rmw16.and_u':
-			case 'i64.atomic.rmw32.and_u':
-			case 'i32.atomic.rmw.or':
-			case 'i64.atomic.rmw.or':
 			case 'i32.atomic.rmw8.or_u':
-			case 'i32.atomic.rmw16.or_u':
 			case 'i64.atomic.rmw8.or_u':
-			case 'i64.atomic.rmw16.or_u':
-			case 'i64.atomic.rmw32.or_u':
-			case 'i32.atomic.rmw.xor':
-			case 'i64.atomic.rmw.xor':
 			case 'i32.atomic.rmw8.xor_u':
-			case 'i32.atomic.rmw16.xor_u':
 			case 'i64.atomic.rmw8.xor_u':
-			case 'i64.atomic.rmw16.xor_u':
-			case 'i64.atomic.rmw32.xor_u':
-			case 'i32.atomic.rmw.xchg':
-			case 'i64.atomic.rmw.xchg':
 			case 'i32.atomic.rmw8.xchg_u':
-			case 'i32.atomic.rmw16.xchg_u':
 			case 'i64.atomic.rmw8.xchg_u':
-			case 'i64.atomic.rmw16.xchg_u':
-			case 'i64.atomic.rmw32.xchg_u':
-			case 'i32.atomic.rmw.cmpxchg':
-			case 'i64.atomic.rmw.cmpxchg':
+			case 'i32.atomic.rmw8.cmpxchg_u':
+			case 'i64.atomic.rmw8.cmpxchg_u':
 			{
 				opcode = {opcode: opval};
+				let ret = maybeMemarg(tokens, opcode, 0);
 				break;
 			}
-			case 'i32.atomic.rmw8.cmpxchg_u':
+
+			// 16-bit natural alignment = 1
+			case 'i32.atomic.load16_u':
+			case 'i64.atomic.load16_u':
+			case 'i32.atomic.store16':
+			case 'i64.atomic.store16':
+			case 'i32.atomic.rmw16.add_u':
+			case 'i64.atomic.rmw16.add_u':
+			case 'i32.atomic.rmw16.sub_u':
+			case 'i64.atomic.rmw16.sub_u':
+			case 'i32.atomic.rmw16.and_u':
+			case 'i64.atomic.rmw16.and_u':
+			case 'i32.atomic.rmw16.or_u':
+			case 'i64.atomic.rmw16.or_u':
+			case 'i32.atomic.rmw16.xor_u':
+			case 'i64.atomic.rmw16.xor_u':
+			case 'i32.atomic.rmw16.xchg_u':
+			case 'i64.atomic.rmw16.xchg_u':
 			case 'i32.atomic.rmw16.cmpxchg_u':
-			case 'i64.atomic.rmw8.cmpxchg_u':
 			case 'i64.atomic.rmw16.cmpxchg_u':
+			{
+				opcode = {opcode: opval};
+				let ret = maybeMemarg(tokens, opcode, 1);
+				break;
+			}
+
+			// 32-bit natural alignment = 2
+			case 'i32.atomic.load':
+			case 'i64.atomic.load32_u':
+			case 'i32.atomic.store':
+			case 'i64.atomic.store32':
+			case 'i32.atomic.rmw.add':
+			case 'i64.atomic.rmw32.add_u':
+			case 'i32.atomic.rmw.sub':
+			case 'i64.atomic.rmw32.sub_u':
+			case 'i32.atomic.rmw.and':
+			case 'i64.atomic.rmw32.and_u':
+			case 'i32.atomic.rmw.or':
+			case 'i64.atomic.rmw32.or_u':
+			case 'i32.atomic.rmw.xor':
+			case 'i64.atomic.rmw32.xor_u':
+			case 'i32.atomic.rmw.xchg':
+			case 'i64.atomic.rmw32.xchg_u':
+			case 'i32.atomic.rmw.cmpxchg':
 			case 'i64.atomic.rmw32.cmpxchg_u':
 			{
 				opcode = {opcode: opval};
+				let ret = maybeMemarg(tokens, opcode, 2);
+				break;
+			}
+
+			// 64-bit natural alignment = 3
+			case 'i64.atomic.load':
+			case 'i64.atomic.store':
+			case 'i64.atomic.rmw.add':
+			case 'i64.atomic.rmw.sub':
+			case 'i64.atomic.rmw.and':
+			case 'i64.atomic.rmw.or':
+			case 'i64.atomic.rmw.xor':
+			case 'i64.atomic.rmw.xchg':
+			case 'i64.atomic.rmw.cmpxchg':
+			{
+				opcode = {opcode: opval};
+				let ret = maybeMemarg(tokens, opcode, 3);
 				break;
 			}
 
@@ -2300,7 +2327,7 @@ function parseWAT(source, options) {
 				if (tkn.type != ')') {
 					throw new WatSyntaxError(WAT_ERR_EXPECTED_GRP_END, tkn.line, tkn.column);
 				}
-					
+				
 				last = tokens._index;
 				tkn = tokens.next(true);
 
@@ -2350,7 +2377,7 @@ function parseWAT(source, options) {
 
 		if (ident) {
 			let key = ident.value;
-			if (identmap_types.hasOwnProperty(key)) 
+			if (identmap_types.hasOwnProperty(key))
 				throw new WatSyntaxError(WAT_ALREADY_DECLARED, ident.line, ident.column);
 			identmap_types[key] = type;
 		}
@@ -2397,7 +2424,7 @@ function parseWAT(source, options) {
 		imp = maybeInlineImport(tokens);
 		if (!imp) {
 			exp = maybeInlineExport(tokens);
-		} 
+		}
 
 		if (exp || imp) {
 			tkn = tokens.next(true);
@@ -2460,7 +2487,7 @@ function parseWAT(source, options) {
 
 		if (ident) {
 			let key = ident.value;
-			if (identmap_memory.hasOwnProperty(key)) 
+			if (identmap_memory.hasOwnProperty(key))
 				throw new WatSyntaxError(WAT_ALREADY_DECLARED, ident.line, ident.column);
 			identmap_memory[key] = mem;
 		}
@@ -2840,7 +2867,7 @@ function parseWAT(source, options) {
 		imp = maybeInlineImport(tokens);
 		if (!imp) {
 			exp = maybeInlineExport(tokens);
-		} 
+		}
 
 		if (exp || imp) {
 			tkn = tokens.next(true);
@@ -3157,7 +3184,7 @@ function parseWAT(source, options) {
 		reftype = text2bintype(tkn.value);
 		if (reftype === undefined) {
 			throw new WatSyntaxError("unexpected reftype '" + tkn.value + "'");
-		}	
+		}
 
 		if (imp) {
 			tbl = new ImportedTable();
@@ -3190,7 +3217,7 @@ function parseWAT(source, options) {
 
 		if (ident) {
 			let key = ident.value;
-			if (identmap_tables.hasOwnProperty(key)) 
+			if (identmap_tables.hasOwnProperty(key))
 				throw new WatSyntaxError(WAT_ALREADY_DECLARED, ident.line, ident.column);
 			identmap_tables[key] = tbl;
 		}
@@ -3280,7 +3307,7 @@ function parseWAT(source, options) {
 		while (tkn.type == WAT_TOKEN_BINARY) {
 			let buf = tkn.value;
 			buffers.push(buf);
-			bufsz += buf.byteLength;			
+			bufsz += buf.byteLength;
 			if (tokens.atEnd())
 				break;
 			tkn = tokens.next(true);
@@ -3413,7 +3440,7 @@ function parseWAT(source, options) {
 		tkn = tokens.next(true);
 
 		while (tkn.type == WAT_TOKEN_IDENT || tkn.type == WAT_TOKEN_NUMBER) {
-			vector.push(tkn);			
+			vector.push(tkn);
 			if (tokens.atEnd())
 				break;
 			tkn = tokens.next(true);

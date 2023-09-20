@@ -9,6 +9,10 @@
 // - objc-abi inspector.
 // - headless workflows 
 // - more expressive filterig of table based content, could use filter per column. This only requires some data-type notation per column.
+// - Rebuild Inspect into reflect more of the section generic structure of a module..
+// - Memory to be split into data-segments & memory (as this can be decoupled trough data.init instructions..)
+// - merge with WAT module action
+// - separate this script into; needs one for UI and one for shell and what would be common for both.
 // 
 // https://hacks.mozilla.org/2017/07/webassembly-table-imports-what-are-they/
 
@@ -356,10 +360,13 @@ function isZeroFill(dataSeg) {
 	return true;
 }
 
+let _fileViews = new Map();
 let _db, _appData, _openFiles;
 let _workflowParameters;
 let _workflowParamViews;
 let _workflowParamValues;
+let _workflowActive;
+let _workflowSelectElement;
 let importIsModified = false;
 let moduleBuffer;
 let targetModule;
@@ -684,6 +691,9 @@ let _workflowActions = {
 	postOptimizeTinybsdUserBinary: {
 		handler: postOptimizeTinybsdUserBinaryAction
 	},
+	postOptimizeNetbsdUserBinary: {
+		handler: postOptimizeNetbsdUserBinaryAction
+	},
 	convertMemory: {
 		handler: convertMemoryAction
 	},
@@ -897,8 +907,8 @@ let _freebsdKernMainWorkflow = {
 };
 
 let _netbsdKernMainWorkflow = {
-	name: "netbsd 10.0 Main Kernel Binary (workflow)",
-	id: "netbsd_10_0.kern-main-binary",
+	name: "netbsd 10.99.4 Main Kernel Binary (workflow)",
+	id: "netbsd_10.kern-main-binary",
 	actions: [
 		{
 			action: "convertMemory",
@@ -951,10 +961,10 @@ let _netbsdKernMainWorkflow = {
 		}, {
 			action: "postOptimizeAtomicInst",
 			options: undefined,
-		}, {
+		}, /*{
 			action: "postOptimizeMemInst",
 			options: undefined,
-		}, {
+		},*/ {
 			action: "extractDataSegments",
 			options: {
 				format: "wasm",
@@ -1053,6 +1063,48 @@ let _netbsdKernMainWorkflow = {
 			options: {
 				exclude: [{type: 0x0B}, 
 						  {type: 0x00, name: ".debug_info"},
+						  {type: 0x00, name: ".debug_loc"},
+						  {type: 0x00, name: ".debug_ranges"}, 
+						  {type: 0x00, name: ".debug_abbrev"},
+						  {type: 0x00, name: ".debug_line"},
+						  {type: 0x00, name: ".debug_str"}]
+			}
+		}
+	]
+};
+
+let _netbsdKernModuleWorkflow = {
+	name: "netbsd 10.99.4 Kernel Module Binary (workflow)",
+	id: "netbsd_10.kern-module-binary",
+	actions: []
+};
+
+let _netbsdUserBinaryForkWorkflow = {
+	name: "netbsd 10.99.4 User Binary with emulated fork (workflow)",
+	id: "netbsd_10.user-binary+emul-fork",
+	actions: [
+		{
+			action: "convertMemory",
+			options: {
+				type: "import", 	// no value leaves the type as is.
+				memidx: 0,
+				// min: 			// no value leaves the min as is.
+				max: 1954,
+				shared: true,
+			}
+		}, {
+			action: "postOptimizeNetbsdUserBinary",
+			options: undefined,
+		}, {
+			action: "analyzeForkEntryPoint",
+			options: undefined,
+		},/*{
+			action: "addToExports",
+			options: {exports: ["__stack_pointer"]},
+		},*/ {
+			action: "output",
+			options: {
+				exclude: [{type: 0x00, name: ".debug_info"},
 						  {type: 0x00, name: ".debug_loc"},
 						  {type: 0x00, name: ".debug_ranges"}, 
 						  {type: 0x00, name: ".debug_abbrev"},
@@ -1167,7 +1219,7 @@ let _freebsdUserBinaryForkWorkflow = {
 	]
 };
 
-const _workflows = [_freebsdKernMainWorkflow, _netbsdKernMainWorkflow, _freebsdUserBinaryWorkflow, _freebsdUserBinaryForkWorkflow, _freebsdKernModuleWorkflow];
+const _workflows = [_freebsdKernMainWorkflow, _netbsdKernMainWorkflow, _freebsdUserBinaryWorkflow, _freebsdUserBinaryForkWorkflow, _freebsdKernModuleWorkflow, _netbsdUserBinaryForkWorkflow];
 
 
 function getWorkflowParameterValues() {
@@ -1631,6 +1683,8 @@ function extractDataSegmentsAction(ctx, mod, options) {
 					}, rejectFn);
 				}, rejectFn);
 
+				updateFileSizeInUI(file, blob.size);
+
 			}, rejectFn);
 
 		} else {
@@ -1814,7 +1868,12 @@ function outputAction(ctx, mod, options) {
 				writable.close().then(resolveFn, rejectFn);
 			}, rejectFn);
 
+			updateFileSizeInUI(file, blob.size);
+
 		}, rejectFn);
+
+		
+
 	} else {
 		file = new File(buffers, targetFilename, { type: "application/wasm" });
 		ctx["wasm-binary"] = file;
@@ -1993,6 +2052,12 @@ function postOptimizeWasmAction(ctx, mod, options) {
 
 function postOptimizeTinybsdUserBinaryAction(ctx, mod, options) {
 	return postOptimizeTinybsdUserBinary(ctx, mod);
+}
+
+function postOptimizeNetbsdUserBinaryAction(ctx, mod, options) {
+	
+	replaceCallInstructions(ctx, mod, null, atomic_op_replace_map);
+	replaceCallInstructions(ctx, mod, null, memory_op_replace_map);
 }
 
 
@@ -4590,36 +4655,21 @@ function setupUI() {
 
 	let runWorkflowUIBtn = document.querySelector("#run-workflow-2");
 	runWorkflowUIBtn.addEventListener("click", function(evt) {
+		if (!_workflowActive) {
+			console.warn("no active workflow");
+			return;
+		}
+
 		let ctxmap = null;
 		let options = getWorkflowParameterValues();
-		
-		if (targetFilename == "kern.wasm") {
-			//storeRecentWorkflowInDB(_freebsdKernMainWorkflow.id, options);
-			runWorkflowActions(targetModule, _freebsdKernMainWorkflow.actions, ctxmap, options.params).then(function(res) {
-				populateWebAssemblyInfo(targetModule);
-				console.log("workflow did complete");
-			}, function (err) {
-				console.error(err);
-			});
-		} else if (targetFilename == "netbsd-kern.wasm") {
-			//storeRecentWorkflowInDB(_freebsdKernMainWorkflow.id, options);
-			runWorkflowActions(targetModule, _netbsdKernMainWorkflow.actions, ctxmap, options.params).then(function(res) {
-				populateWebAssemblyInfo(targetModule);
-				console.log("workflow did complete");
-			}, function (err) {
-				console.error(err);
-			});
-		} else if (isUserBinary(targetFilename)) {
-			//storeRecentWorkflowInDB(_freebsdUserBinaryForkWorkflow.id, options);
-			runWorkflowActions(targetModule, _freebsdUserBinaryForkWorkflow.actions, ctxmap, options.params).then(function(res) {
-				populateWebAssemblyInfo(targetModule);
-				console.log("workflow did complete");
-			}, function (err) {
-				console.error(err);
-			});
-		} else {
-			console.error("not kern.wasm");
-		}
+
+		//storeRecentWorkflowInDB(_workflowActive.id, options);
+		runWorkflowActions(targetModule, _workflowActive.actions, ctxmap, options.params).then(function(res) {
+			populateWebAssemblyInfo(targetModule);
+			console.log("workflow did complete");
+		}, function (err) {
+			console.error(err);
+		});
 	});
 }
 
@@ -7013,6 +7063,7 @@ class WorkflowUIFilePicker {
 
 	constructor() {
 
+		let _self = this;
 		let element = document.createElement("li");
 		element.classList.add("workflow-action", "workflow-param-file");
 		let header = document.createElement("div");
@@ -7022,7 +7073,12 @@ class WorkflowUIFilePicker {
 		let body = document.createElement("div");
 		body.classList.add("action-body");
 		body.style.width = "100%";
-		body.textContent = "body";
+		let nameText = document.createElement("span");
+		nameText.classList.add("filename");
+		body.appendChild(nameText);
+		let sizeText = document.createElement("span");
+		sizeText.classList.add("filesize");
+		body.appendChild(sizeText);
 		element.appendChild(body);
 		let grant = document.createElement("div");
 		grant.classList.add("action-header");
@@ -7060,8 +7116,10 @@ class WorkflowUIFilePicker {
 					console.warn("should apply logics for sorting out multiple files");
 				}
 
+				_fileViews.set(file, _self);
+
 				this._file = file;
-				body.textContent = file.name;
+				nameText.textContent = file.name;
 
 				file.queryPermission({mode: 'readwrite'}).then((status) =>{
 					console.log(status);
@@ -7088,13 +7146,13 @@ class WorkflowUIFilePicker {
 				event.preventDefault();
 				return;
 			}
-
+ 
 			findInputFiles(files);
 
-			let label = element.querySelector(".action-body");
-			label.textContent = files[0].name;
-			label.textContent += '\x20' + humanFileSize(files[0].size, true);
+			nameText.textContent = files[0].name;
+			sizeText.textContent = humanFileSize(files[0].size, true);
 			appendFiles(files);
+			_fileViews.set(file, _self);
 			this._file = files[0];
 
 			event.preventDefault();
@@ -7160,25 +7218,61 @@ function isUserBinary(name) {
 	return _userBinaries.indexOf(name) !== -1;
 }
 
-function setupWorkflowUIForTarget() {
+function autoSelectWorkflow(files) {
+
+}
+
+
+function tryMigrateWorkflowParams(oldWorkflow, newWorkflow) {
+
+}
+
+function setupWorkflowUIForTarget(newWorkflow, wasmBinary, wasmSymbolDump) {
 
 	let container = document.querySelector("ul.workflow-ui");
 	let workflow;
 
-	if (targetFilename == "kern.wasm") {
-		workflow = _freebsdKernMainWorkflow
-	} else if (targetFilename == "netbsd-kern.wasm") {
-		workflow = _netbsdKernMainWorkflow
-	} else if (isUserBinary(targetFilename)) {
-		workflow = _freebsdUserBinaryForkWorkflow
+	if (!newWorkflow) {
+
+		if (targetFilename == "kern.wasm") {
+			workflow = _freebsdKernMainWorkflow;
+		} else if (targetFilename == "netbsd-kern.wasm") {
+			workflow = _netbsdKernMainWorkflow;
+		} else if (isUserBinary(targetFilename)) {
+			workflow = _netbsdUserBinaryForkWorkflow;
+		}
+
+	} else {
+
+		if (_workflowActive) {
+			tryMigrateWorkflowParams(_workflowActive, newWorkflow);
+		}
+
+		_workflowActive = newWorkflow;
 	}
 
-	if (!workflow)
-		return;
+	while (container.lastChild) {
+		container.removeChild(container.lastChild);
+	}
 
+	if (!workflow) {
+		_workflowActive = null;
+		return;
+	}
+
+	_workflowActive = workflow;
 	_workflowParameters = [];
 	_workflowParamValues = {};
 	_workflowParamViews = {};
+
+	let srcfileView = new WorkflowUIFilePicker();
+	srcfileView.role = "Source";
+	let label = srcfileView.element.querySelector(".action-body .filename");
+	label.textContent = wasmBinary.name;
+	label = srcfileView.element.querySelector(".action-body .filesize");
+	label.textContent = humanFileSize(wasmBinary.size, true);
+	container.appendChild(srcfileView.element);
+	_fileViews.set(wasmBinary, srcfileView);
 
 	let actions = workflow.actions;
 	let ylen = actions.length;
@@ -7221,11 +7315,48 @@ function setupWorkflowUIForTarget() {
 		li.textContent = actionName;
 		container.appendChild(li);
 	}
+
+	actions = workflow.actions;
+	ylen = actions.length;
+	for (let y = 0; y < ylen; y++) {
+		let actionData = actions[y];
+		let actionName = actionData.action;
+		if (!_workflowActions.hasOwnProperty(actionName)) {
+			console.warn("missing %s in _workflowActions", actionName);
+			continue;
+		}
+		let actionTemplate = _workflowActions[actionName];
+		let li = document.createElement("li");
+		li.textContent = actionName;
+		container.appendChild(li);
+	}
+
+	let found = false;
+	let options = _workflowSelectElement.options;
+	ylen = options.length;
+	for (let y = 0; y < ylen; y++) {
+		let opt = options.item(y);
+		if (opt.value == _workflowActive.id) {
+			_workflowSelectElement.selectedIndex = y;
+			found = true;
+			break;
+		}
+	}	 
+}
+
+function updateFileSizeInUI(file, filesize) {
+	let view = _fileViews.get(file);
+	if (!view)
+		return;
+	let label = view.element.querySelector(".action-body .filesize");
+	label.textContent = humanFileSize(filesize, true);
 }
 
 function setupTargetPanel(container) {
 
+
 	let workflowUl = document.createElement("ul");
+	let workflowUIPanel = container.parentElement;
 	workflowUl.classList.add("workflow-ui");
 	container.appendChild(workflowUl);
 
@@ -7255,42 +7386,31 @@ function setupTargetPanel(container) {
 				break;
 			}
 		}
+		setupWorkflowUIForTarget(workflow);
 	});
 
 	workflowUIToolbar.appendChild(selectElement);
+	_workflowSelectElement = selectElement;
 
 	// input binary
 
-	let inputPicker = document.createElement("li");
-	inputPicker.classList.add("workflow-action", "workflow-input-file");
-	let header = document.createElement("div");
-	header.classList.add("action-header", "file-label");
-	header.textContent = "Input";
-	inputPicker.appendChild(header);
-	let body = document.createElement("div");
-	body.classList.add("action-body");
-	body.style.width = "100%";
-	body.textContent = "body";
-	inputPicker.appendChild(body);
-	let options = document.createElement("div");
-	options.classList.add("action-header", "file-picker-button");
-	options.textContent = "chose";
-	inputPicker.appendChild(options);
-	workflowUl.appendChild(inputPicker);
+	let loadFileBtn = document.createElement("button");
+	loadFileBtn.textContent = "chose";
+	workflowUIToolbar.appendChild(loadFileBtn);
 
-	options.addEventListener("click", function(evt) {
+	loadFileBtn.addEventListener("click", function(evt) {
 		console.log("should pick file for input-file");
 	});
 
-	inputPicker.addEventListener("dragenter", function(evt) {
+	workflowUIPanel.addEventListener("dragenter", function(evt) {
 		event.preventDefault();
 	});
 
-	inputPicker.addEventListener("dragover", function(evt) {
+	workflowUIPanel.addEventListener("dragover", function(evt) {
 		event.preventDefault();
 	});
 
-	inputPicker.addEventListener("drop", function(evt) {
+	workflowUIPanel.addEventListener("drop", function(evt) {
 
 		let files = filesFromDataTransfer(evt.dataTransfer);
 		if (files.length == 0) {
@@ -7299,10 +7419,6 @@ function setupTargetPanel(container) {
 		}
 
 		findInputFiles(files);
-
-		let label = inputPicker.querySelector(".action-body");
-		label.textContent = files[0].name;
-		label.textContent += '\x20' + humanFileSize(files[0].size, true);
 		appendFiles(files);
 
 		event.preventDefault();
@@ -7518,7 +7634,7 @@ function findInputFiles(files) {
 				//postOptimizeKernMainAction(null, targetModule, {});
 				inspectNetBSDBinary(moduleBuffer, targetModule);
 			}
-			setupWorkflowUIForTarget();
+			setupWorkflowUIForTarget(null, wasmFiles[0].binary, wasmFiles[0].symbolMapFile);
 		});
 		_openFiles = [{role: "input", kind: "wasm-binary", file: wasmFiles[0].binary}];
 		if (wasmFiles[0].symbolMapFile) {
@@ -7526,10 +7642,7 @@ function findInputFiles(files) {
 		}
 		/*file.arrayBuffer().then(function(buf) {
 			loadWebAssemblyBinary(buf);
-		}, console.error);*/
-		let label = document.querySelector("li.workflow-input-file .action-body");
-		label.textContent = file.name;
-		
+		}, console.error);*/		
 	}
 
 }
