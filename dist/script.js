@@ -13,6 +13,10 @@
 // - Memory to be split into data-segments & memory (as this can be decoupled trough data.init instructions..)
 // - merge with WAT module action
 // - separate this script into; needs one for UI and one for shell and what would be common for both.
+// - make the inspector like for freebsd a accept based invokation, like allowing each inspector letting the UI know whether it has
+//   anything to display for the current binary, globalApp.registerInspector()
+// - consider to support multiple drop of source wasms, 
+// - add drop-down per file parameter (to chose from active files)
 // 
 // https://hacks.mozilla.org/2017/07/webassembly-table-imports-what-are-they/
 
@@ -2058,6 +2062,22 @@ function postOptimizeNetbsdUserBinaryAction(ctx, mod, options) {
 	
 	replaceCallInstructions(ctx, mod, null, atomic_op_replace_map);
 	replaceCallInstructions(ctx, mod, null, memory_op_replace_map);
+
+	const builtin_to_inst = [{
+		name: 'alloca',
+		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]);
+		replace: function(inst, index, arr) {
+			return false;
+		}
+	}, {
+		name: 'floor',
+		type: WasmType.create([WA_TYPE_F64], [WA_TYPE_F64]);
+		replace: function(inst, index, arr) {
+			return false;
+		}
+	}];
+
+	replaceCallInstructions(ctx, mod, null, builtin_to_inst);
 }
 
 

@@ -1,3 +1,6 @@
 .DS_Store
 DWARF4.pdf
 DWARF5.pdf
+wasm-info.code-workspace
+dist/examples
+dist/wat-example.wat
