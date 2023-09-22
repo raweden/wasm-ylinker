@@ -21,21 +21,6 @@
 // https://hacks.mozilla.org/2017/07/webassembly-table-imports-what-are-they/
 
 const WASM_PAGE_SIZE = (1 << 16);
-const SECTION_TYPE = {
-    TYPE: 1,
-    IMPORT: 2,
-    FUNC: 3,
-    TABLE: 4,
-    MEMORY: 5,
-    GLOBAL: 6,
-    EXPORT: 7,
-    START: 8,
-    ELEMENT: 9,
-    CODE: 0x0A,
-    DATA: 0x0B,
-    DATA_COUNT: 0x0C,
-    CUSTOM: 0x00
-};
 
 const moreIcon = `<svg aria-hidden="true" focusable="false" role="img" class="octicon octicon-kebab-horizontal" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="display: inline-block; user-select: none; vertical-align: text-bottom; overflow: visible;"><path d="M8 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM1.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm13 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path></svg>`;
 
@@ -186,7 +171,7 @@ function showWasmInfoStats(mod, sections) {
 			sectionSize = section.size;
 		}
 
-		if (section.type == SECTION_TYPE.CUSTOM) {
+		if (section.type == SECTION_TYPE_CUSTOM) {
 
 			nameStr = section.name;
 
@@ -337,17 +322,48 @@ function showWasmInfoStats(mod, sections) {
 	}
 }
 
-function findModuleByType(mod, type) {
-	let sections = mod.sections;
-	let len = sections.length;
-	for (let i = 0; i < len; i++) {
-		let sec = sections[i];
-		if (sec.type == type) {
-			return sec;
-		}
-	}
+function generateClikeSignature(functype) {
+    let arg, ret;
+    let argc = functype.argc;
+    if (argc == 0) {
+        arg = "void";
+    } else if (argc == 1){
+        arg = type_name(functype.argv[0]);
+    } else {
+        let argv = functype.argv;
+        arg = [];
+        for (let x = 0; x < argc; x++) {
+            arg.push(type_name(argv[x]));
+        }
+    }
 
-	return null;
+    let retc = functype.retc;
+    if (retc == 0) {
+        ret = "void";
+    } else if (retc == 1){
+        ret = type_name(functype.retv[0]);
+    } else {
+        let retv = functype.retv;
+        ret = [];
+        for (let x = 0; x < retc; x++) {
+            ret.push(type_name(retv[x]));
+        }
+    }
+
+    let str = "";
+    if (typeof ret == "string") {
+        str += ret;
+    } else {
+        str += '{ ' + ret.join(', ') + ' }';
+    }
+    str += '\x20(';
+    if (typeof arg == "string") {
+        str += arg;
+    } else {
+        str += arg.join(', ');
+    }
+    str += ")";
+    return str;
 }
 
 function isZeroFill(dataSeg) {
@@ -374,295 +390,7 @@ let _workflowSelectElement;
 let importIsModified = false;
 let moduleBuffer;
 let targetModule;
-let moduleWorkflows = [
-	{
-		name: "Export Selected (Save as)",
-		onselect: function(container, action) {
 
-			const mandatory = [];
-			let checkboxes = [];
-			let exported = [];
-
-
-			function onCheckboxChange(evt) {
-				let target = evt.currentTarget;
-				let idx = checkboxes.indexOf(target);
-				exported[idx] = target.checked;
-				console.log(exported);
-			}
-
-			let ul = document.createElement("ul");
-			ul.classList.add("accordion-list");
-			container.appendChild(ul);
-			let sections = targetModule.sections;
-			let len = sections.length;
-			for (let i = 0;i < len;i++) {
-				let section = sections[i];
-				let typename = sectionnames[section.type];
-				let li = document.createElement("li");
-				li.classList.add("accordion-header");
-				let checkbox = document.createElement("input");
-				checkbox.addEventListener("change", onCheckboxChange);
-				checkbox.type = "checkbox";
-				checkbox.checked = true;
-				li.appendChild(checkbox)
-				ul.appendChild(li);
-				if (section.type == 0) {
-					let span = document.createElement("code");
-					span.textContent = typename + '\t';
-					li.appendChild(span);
-					span = document.createElement("code");
-					span.textContent = section.name;
-					li.appendChild(span);
-				} else {
-					let span = document.createTextNode(typename);
-					li.appendChild(span);
-				}
-
-				exported.push(true);
-				checkboxes.push(checkbox);
-
-				let tn = document.createTextNode("\x20" + humanFileSize(section.size, true));
-				li.appendChild(tn);
-			}
-
-			action.exported = exported;
-		},
-		onrun: function(container, action) {
-
-			let exported = action.exported;
-			let sections = targetModule.sections;
-			let len = sections.length;
-			let buffers = [];
-			targetModule._buffer = moduleBuffer;
-
-			let magic = moduleBuffer.slice(0, 8);
-			buffers.push(magic);
-
-			prepareModuleEncode(targetModule);
-
-			for (let i = 0;i < len;i++) {
-				let section = sections[i];
-				let isExported = exported[i];
-				let type = section.type;
-				if (!isExported) {
-					//
-					if (type == SECTION_TYPE.DATA) {
-						let buf = new Uint8Array(3);
-						buf[0] = SECTION_TYPE.DATA;
-						buf[1] = 1;
-						buf[2] = 0;
-						buffers.push(buf.buffer);
-					} else {
-						continue;
-					}
-				} else if (type == SECTION_TYPE.IMPORT && section._isDirty === true) {
-					let sub = encodeImportSection(targetModule.imports);
-					buffers.push(sub);
-				} else if (type == SECTION_TYPE.GLOBAL && section._isDirty === true) {
-					let sub = encodeGlobalSection(targetModule);
-					buffers.push(sub);
-				} else if (type == SECTION_TYPE.EXPORT && section._isDirty === true) {
-					let sub = encodeExportSection(targetModule);
-					buffers.push(sub);
-				} else if (type == SECTION_TYPE.CODE) {
-					let sub = encodeCodeSection(targetModule, section, targetModule.functions);
-					if (Array.isArray(sub)) {
-						let xlen = sub.length;
-						for (let x = 0; x < xlen; x++) {
-							buffers.push(sub[x]);
-						}
-					} else {
-						buffers.push(sub);
-					}
-				} else {
-					let end = section.dataOffset + section.size;
-					let sub = moduleBuffer.slice(section.offset, end);
-					buffers.push(sub);
-				}
-			}
-
-			let filename = url.split('/').pop();
-			saveAsFile(new Blob(buffers, { type: "application/octet-stream"}), filename);
-		},
-	}, {
-		name: "Extract Data Section (Save as)",
-		onselect: function(container, action) {
-			const mandatory = [];
-			let checkboxes = [];
-			let exported = [];
-
-
-			function onCheckboxChange(evt) {
-				let target = evt.currentTarget;
-				let idx = checkboxes.indexOf(target);
-				exported[idx] = target.checked;
-				console.log(exported);
-			}
-
-			let tbl = document.createElement("table");
-			tbl.classList.add("data-table");
-			let thead = document.createElement("thead");
-			let tr = document.createElement("tr");
-			let th = document.createElement("th");
-			th.textContent = "seg. no.";
-			tr.appendChild(th);
-			th = document.createElement("th");
-			th.textContent = "name";
-			tr.appendChild(th);
-			th = document.createElement("th");
-			th.textContent = "size";
-			tr.appendChild(th);
-			th = document.createElement("th");
-			th.textContent = "rle";
-			tr.appendChild(th);
-			th = document.createElement("th");
-			th.textContent = "uninitialized data";
-			tr.appendChild(th);
-			thead.appendChild(tr);
-			tbl.appendChild(thead);
-			container.appendChild(tbl);
-
-			let tbody = document.createElement("tbody");
-			tbl.appendChild(tbody);
-			
-			let nsym = WebAssemblyModule.Name;
-			let dataSegments = targetModule.dataSegments;
-			let names = targetModule.names && targetModule.names.data ? targetModule.names.data : null;
-			let len = dataSegments.length;
-			for (let i = 0;i < len;i++) {
-				let dataSeg = dataSegments[i];
-				let name, allzeros = false;
-				
-				let tr = document.createElement("tr");
-				let td = document.createElement("td");
-				td.textContent = i.toString();
-				tr.appendChild(td);
-				td = document.createElement("td");
-				tr.appendChild(td);
-
-				let customName = dataSeg[nsym];
-				if (customName) {
-
-					let node = document.createElement("code");
-					node.textContent = customName;
-					td.appendChild(node);
-				} else {
-					let node = document.createTextNode("segment\x20");
-					td.appendChild(node);
-
-					node = document.createElement("code");
-					node.textContent = "N/A";
-					td.appendChild(node);
-				}
-
-				if (customName === ".bss") {
-					allzeros = isZeroFill(dataSeg);
-				}
-
-				td = document.createElement("td");
-				td.textContent = humanFileSize(dataSeg.size, true);
-				tr.appendChild(td);
-
-				td = document.createElement("td");
-				tr.appendChild(td);
-
-				let checkbox = document.createElement("input");
-				checkbox.addEventListener("change", onCheckboxChange);
-				checkbox.type = "checkbox";
-				checkbox.checked = false;
-				td.appendChild(checkbox);
-
-				td = document.createElement("td");
-				td.textContent = allzeros ? "YES" : "NO";
-				tr.appendChild(td);
-
-				exported.push(true);
-				checkboxes.push(checkbox);
-				tbody.appendChild(tr);
-
-				//let tn = document.createTextNode("\x20" + humanFileSize(section.size, true));
-				//li.appendChild(tn);
-			}
-
-			action.exported = exported;
-		},
-		onrun: function(container, action) {
-			let mod = targetModule;
-			let segments = mod.dataSegments;
-			if (!segments || segments.length == 0)
-				return;
-			// TODO: get names.
-			let tot = 0;
-			let len = segments.length;
-			for (let i = 0; i < len; i++) {
-				let seg = segments[i];
-				tot += seg.size;
-			}
-
-			let src = new Uint8Array(moduleBuffer);
-			let buffer = new Uint8Array(tot + (len * 8)); // {dst-offset, size}
-			let data = new DataView(buffer.buffer);
-			let off = 0;
-			for (let i = 0; i < len; i++) {
-				let seg = segments[i];
-				let memdst;
-				if (seg.inst.opcodes.length == 2 && seg.inst.opcodes[0].opcode == 65)
-					memdst = seg.inst.opcodes[0].value;
-				if (!memdst)
-					throw TypeError("memdst must be set");
-				data.setUint32(off, memdst, true);
-				off += 4;
-				data.setUint32(off, seg.size, true);
-				off += 4;
-				u8_memcpy(src, seg.offset, seg.size, buffer, off);
-				off += seg.size;
-			}
-
-			saveAsFile(buffer, "data.seg", "application/octet-stream");
-
-		},
-	}, {
-		name: "Run optimization (freebsd binary)",
-	}, {
-		name: "Run objc_msgSend optimization",
-		// go trough every objc_msgSend and generate conditional call block for every objc defined method.
-	}, {
-		name: "Run objc optimization",
-		// 1. find function with name "__wasm_call_ctors"
-		// 2. remove repeated calls to ".objcv2_load_function" which only needs to be called once.
-	}, {
-		name: "Post optimize for objc dylib/NSBundle",
-	}, {
-		name: "Post optimize for dylib",
-	}, {
-		name: "Dump import functions",
-		onselect: function(container, action) {
-
-		},
-		onrun: function(container, action) {
-			let mod = targetModule;
-			let types = mod.types;
-			let imports = mod.imports;
-			let len = imports.length;
-			let lines = [];
-			for (let i = 0; i < len; i++) {
-				let imp = imports[i];
-				if (!(imp instanceof ImportedFunction)) {
-					continue;
-				}
-				let functype = types[imp.typeidx];
-				let sign = functype_toString(functype);
-				let idx = sign.indexOf('(');
-				let str = sign.substring(0, idx) + imp.module + '.' + imp.name + sign.substring(idx);
-				lines.push(str);
-
-			}
-
-			console.log(lines.join('\n'));
-		},
-	}
-];
 
 let _workflowActions = {
 	postOptimizeWasm: {
@@ -1411,10 +1139,10 @@ function convertMemoryAction(ctx, mod, options) {
 					}
 
 					if (inexp)
-						findModuleByType(mod, SECTION_TYPE.EXPORT)._isDirty = true;
+						mod.findSection(SECTION_TYPE_EXPORT)._isDirty = true;
 
-					findModuleByType(mod, SECTION_TYPE.MEMORY)._isDirty = true;
-					findModuleByType(mod, SECTION_TYPE.IMPORT)._isDirty = true;
+					mod.findSection(SECTION_TYPE_MEMORY)._isDirty = true;
+					mod.findSection(SECTION_TYPE_IMPORT)._isDirty = true;
 
 
 				}
@@ -1438,18 +1166,18 @@ function convertMemoryAction(ctx, mod, options) {
 
 	if (typeof options.shared == "boolean" && options.shared !== mem.shared) {
 		mem.shared = options.shared;
-		findModuleByType(mod, SECTION_TYPE.IMPORT)._isDirty = true;
+		mod.findSection(SECTION_TYPE_IMPORT)._isDirty = true;
 	}
 
 	if ((typeof options.max == "number" && Number.isInteger(options.max)) && options.max !== mem.max) {
 		mem.max = options.max;
-		findModuleByType(mod, SECTION_TYPE.IMPORT)._isDirty = true;
+		mod.findSection(SECTION_TYPE_IMPORT)._isDirty = true;
 	}
 
 	if ((typeof options.min == "number" && Number.isInteger(options.min)) && options.min !== mem.min) {
 		if (options.min > mem.min) {
 			mem.min = options.min;
-			findModuleByType(mod, SECTION_TYPE.IMPORT)._isDirty = true;
+			mod.findSection(SECTION_TYPE_IMPORT)._isDirty = true;
 		} else {
 			console.warn("options.min < mem.min");
 		}
@@ -1493,11 +1221,11 @@ function convertToImportedGlobalAction(ctx, mod, options) {
 	mod.imports.push(newglob);
 	mod.removeExportFor(oldglob);
 
-	let sec = mod.findSection(SECTION_TYPE.IMPORT);
+	let sec = mod.findSection(SECTION_TYPE_IMPORT);
 	sec.markDirty();
-	sec = mod.findSection(SECTION_TYPE.EXPORT);
+	sec = mod.findSection(SECTION_TYPE_EXPORT);
 	sec.markDirty();
-	sec = mod.findSection(SECTION_TYPE.GLOBAL);
+	sec = mod.findSection(SECTION_TYPE_GLOBAL);
 	sec.markDirty();
 
 	return true;
@@ -1740,10 +1468,10 @@ function extractDataSegmentsAction(ctx, mod, options) {
 function outputAction(ctx, mod, options) {
 
 	let exported = [];
-	let sections = targetModule.sections;
+	let sections = mod.sections;
 	let len = sections.length;
 	let buffers = [];
-	targetModule._buffer = moduleBuffer;
+	mod._buffer = moduleBuffer;
 
 	if (Array.isArray(options.exclude)) {
 		let exclude = options.exclude;
@@ -1779,7 +1507,7 @@ function outputAction(ctx, mod, options) {
 	let magic = moduleBuffer.slice(0, 8);
 	buffers.push(magic);
 
-	prepareModuleEncode(targetModule);
+	prepareModuleEncode(mod);
 
 	for (let i = 0;i < len;i++) {
 		let section = sections[i];
@@ -1787,9 +1515,9 @@ function outputAction(ctx, mod, options) {
 		let type = section.type;
 		if (!isExported) {
 			//
-			if (type == SECTION_TYPE.DATA) {
+			if (type == SECTION_TYPE_DATA) {
 				let buf = new Uint8Array(3);
-				buf[0] = SECTION_TYPE.DATA;
+				buf[0] = SECTION_TYPE_DATA;
 				buf[1] = 1;
 				buf[2] = 0;
 				buffers.push(buf.buffer);
@@ -1798,47 +1526,6 @@ function outputAction(ctx, mod, options) {
 			}
 		} else if (section instanceof WebAssemblySection) {
 			let sub = section.encode({});
-			if (Array.isArray(sub)) {
-				let xlen = sub.length;
-				for (let x = 0; x < xlen; x++) {
-					buffers.push(sub[x]);
-				}
-			} else {
-				buffers.push(sub);
-			}
-		} else if (type == SECTION_TYPE.IMPORT && section._isDirty === true) {
-			let sub = encodeImportSection(targetModule.imports);
-			buffers.push(sub);
-		} else if (type == SECTION_TYPE.GLOBAL && section._isDirty === true) {
-			let sub = encodeGlobalSection(targetModule);
-			buffers.push(sub);
-		} else if (type == SECTION_TYPE.EXPORT && section._isDirty === true) {
-			let sub = encodeExportSection(targetModule);
-			buffers.push(sub);
-		} else if (type == SECTION_TYPE.TABLE && section._isDirty === true) {
-			let sub = encodeTableSection(targetModule.tables);
-			buffers.push(sub);
-		} else if (type == SECTION_TYPE.ELEMENT && section._isDirty === true) {
-			let sub = encodeElementSection(targetModule);
-			buffers.push(sub);
-		} else if (type == SECTION_TYPE.MEMORY && section._isDirty === true) {
-			let sub = encodeMemorySection(targetModule);
-			if (sub !== null)
-				buffers.push(sub);
-		} else if (type == SECTION_TYPE.DATA && section._isDirty === true) {
-			let sub = encodeDataSection(targetModule, section);
-			buffers.push(sub);
-		} else if (type == SECTION_TYPE.CUSTOM && (section._isDirty === true || (section.data && section.data._isDirty === true)) && section.data && typeof section.data.encode == "function") {
-			let sub = section.data.encode(targetModule);
-			buffers.push(sub);
-		} else if (type == SECTION_TYPE.CUSTOM && section.name == "name" && section._isDirty === true) {
-			let sub = encodeCustomNameSection(targetModule.names);
-			buffers.push(sub);
-		} else if (type == SECTION_TYPE.CUSTOM && section.name == "producers" && section._isDirty === true) {
-			let sub = encodeCustomProducers(targetModule.producers);
-			buffers.push(sub);
-		} else if (type == SECTION_TYPE.CODE) {
-			let sub = encodeCodeSection(targetModule, section, targetModule.functions);
 			if (Array.isArray(sub)) {
 				let xlen = sub.length;
 				for (let x = 0; x < xlen; x++) {
@@ -2063,21 +1750,21 @@ function postOptimizeNetbsdUserBinaryAction(ctx, mod, options) {
 	replaceCallInstructions(ctx, mod, null, atomic_op_replace_map);
 	replaceCallInstructions(ctx, mod, null, memory_op_replace_map);
 
-	const builtin_to_inst = [{
+	const c99_builtin_to_inst = [{
 		name: 'alloca',
-		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]);
+		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			return false;
 		}
 	}, {
 		name: 'floor',
-		type: WasmType.create([WA_TYPE_F64], [WA_TYPE_F64]);
+		type: WasmType.create([WA_TYPE_F64], [WA_TYPE_F64]),
 		replace: function(inst, index, arr) {
 			return false;
 		}
 	}];
 
-	replaceCallInstructions(ctx, mod, null, builtin_to_inst);
+	replaceCallInstructions(ctx, mod, null, c99_builtin_to_inst);
 }
 
 
@@ -2361,7 +2048,7 @@ function postOptimizeKernMainAction(ctx, mod, options) {
 		let dtype = mod.types[typeidx];
 		let typestr = emccStyleTypeString(type);
 
-		console.log("ftype: %d dtype: %d %s", type.typeidx, typeidx, wasmStyleTypeString(type));
+		console.log("ftype: %d dtype: %d %s", type.typeidx, typeidx, type.toString());
 		console.log("kthread_dispatch_sync_%s", typestr);
 
 		let newfn = new ImportedFunction();
@@ -2501,18 +2188,21 @@ function removeExportFor(mod, obj) {
 const atomic_op_replace_map = [
 	{ 	// atomic operations.
 		name: "atomic_notify",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE00, 2, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_wait32",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE01, 2, 0);
 			return true;
 		}
 	}, {
 		name: ["wasm_atomic_fence", "wasm32_atomic_fence"],
+		type: WasmType.create(null, null),
 		replace: function(inst, index, arr) {
 			arr[index] = {opcode: 0xFE03, memidx: 0};
 			return true;
@@ -2898,10 +2588,10 @@ function postOptimizeWasm(ctx, mod) {
 
 	{	
 		let glob = mod.getGlobalByName("__stack_pointer");
-		console.log("%s = %d", name, glob.init[0].value);
+		console.log("%s = %d", glob.name, glob.init[0].value);
 		ctx.__stack_pointer = glob.init[0].value; // store it for later use.
 		glob = mod.getGlobalByName("thread0_st");
-		console.log("%s = %d", name, glob.init[0].value);
+		console.log("%s = %d", glob.name, glob.init[0].value);
 		ctx.thread0_st = glob.init[0].value; // store it for later use.
 	}
 
@@ -2926,12 +2616,17 @@ function postOptimizeWasm(ctx, mod) {
 	mod.imports.push(g2);
 	removeExportFor(mod, g1);
 
-	let sec = targetModule.findSection(SECTION_TYPE.IMPORT);
-	sec.markDirty();
-	sec = targetModule.findSection(SECTION_TYPE.EXPORT);
-	sec.markDirty();
-	sec = targetModule.findSection(SECTION_TYPE.GLOBAL);
-	sec.markDirty();
+	let sec = mod.findSection(SECTION_TYPE_IMPORT);
+	if (sec)
+		sec.markDirty();
+
+	sec = mod.findSection(SECTION_TYPE_EXPORT);
+	if (sec)
+		sec.markDirty();
+
+	sec = mod.findSection(SECTION_TYPE_GLOBAL);
+	if (sec)
+		sec.markDirty();
 
 	console.log(funcmap);
 }
@@ -3592,12 +3287,17 @@ function generateNetbsdWebAssembly(ctx, mod) {
 	let func = mod.getFunctionByName("x86_curlwp");
 	console.log(func);
 
-	let sec = targetModule.findSection(SECTION_TYPE.IMPORT);
-	sec.markDirty();
-	sec = targetModule.findSection(SECTION_TYPE.EXPORT);
-	sec.markDirty();
-	sec = targetModule.findSection(SECTION_TYPE.GLOBAL);
-	sec.markDirty();
+	let sec = mod.findSection(SECTION_TYPE_IMPORT);
+	if (sec)
+		sec.markDirty();
+
+	sec = mod.findSection(SECTION_TYPE_EXPORT);
+	if (sec)
+		sec.markDirty();
+
+	sec = mod.findSection(SECTION_TYPE_GLOBAL);
+	if (sec)
+		sec.markDirty();
 }
 
 class TinyBSDBinaryInfoSection {
@@ -3628,7 +3328,7 @@ class TinyBSDBinaryInfoSection {
 	        // actual encdong
 	    let buf = new ArrayBuffer(totsz + 1);
 	    let data = new ByteArray(buf);
-	    data.writeUint8(SECTION_TYPE.CUSTOM);
+	    data.writeUint8(SECTION_TYPE_CUSTOM);
 	    data.writeULEB128(secsz);
 	    data.writeULEB128(strlen);
 	    data.writeUTF8Bytes(CUSTOM_SEC_SIGN);
@@ -4035,12 +3735,17 @@ function postOptimizeTinybsdUserBinary(ctx, mod) {
 	mod.imports.unshift(g2);
 	mod.removeExportFor(g1);
 
-	let section = targetModule.findSection(SECTION_TYPE.IMPORT);
-	section.markDirty();
-	section = targetModule.findSection(SECTION_TYPE.EXPORT);
-	section.markDirty();
-	section = targetModule.findSection(SECTION_TYPE.GLOBAL);
-	section.markDirty();
+	let section = mod.findSection(SECTION_TYPE_IMPORT);
+	if (section)
+		section.markDirty();
+
+	section = mod.findSection(SECTION_TYPE_EXPORT);
+	if (section)
+		section.markDirty();
+
+	section = mod.findSection(SECTION_TYPE_GLOBAL);
+	if (section)
+		section.markDirty();
 
 	console.log(funcmap);
 }
@@ -4614,23 +4319,6 @@ function setupUI() {
 		maxOutput.textContent = humanFileSize(value * 65536, true);
 	});
 
-	let workflowSelect = document.querySelector("#workflow-select");
-	let len = moduleWorkflows.length;
-	for (let i = 0; i < len; i++) {
-		let opt = document.createElement("option");
-		opt.textContent = moduleWorkflows[i].name;
-		workflowSelect.appendChild(opt);
-	}
-
-	let selectedAction = moduleWorkflows[0];
-	let actionInfo = document.querySelector("#action-info");
-	while (actionInfo.lastChild) {
-		actionInfo.removeChild(actionInfo.lastChild);
-	}
-	if (typeof selectedAction.onselect == "function") {
-		selectedAction.onselect(actionInfo, selectedAction);
-	}
-
 	// support for multi-memory
 	let memContainers = document.createElement("div");
 	container.parentElement.insertBefore(memContainers, container);
@@ -4661,18 +4349,6 @@ function setupUI() {
 		}
 	});
 
-	workflowSelect.addEventListener("change", function(evt) {
-		let idx = workflowSelect.selectedIndex;
-		let action = moduleWorkflows[idx];
-		while (actionInfo.lastChild) {
-			actionInfo.removeChild(actionInfo.lastChild);
-		}
-		if (typeof action.onselect == "function") {
-			action.onselect(actionInfo, action);
-		}
-		selectedAction = action;
-	});
-
 	let runWorkflowUIBtn = document.querySelector("#run-workflow-2");
 	runWorkflowUIBtn.addEventListener("click", function(evt) {
 		if (!_workflowActive) {
@@ -4684,8 +4360,8 @@ function setupUI() {
 		let options = getWorkflowParameterValues();
 
 		//storeRecentWorkflowInDB(_workflowActive.id, options);
-		runWorkflowActions(targetModule, _workflowActive.actions, ctxmap, options.params).then(function(res) {
-			populateWebAssemblyInfo(targetModule);
+		runWorkflowActions(flow.module, _workflowActive.actions, ctxmap, options.params).then(function(res) {
+			populateWebAssemblyInfo(flow.module);
 			console.log("workflow did complete");
 		}, function (err) {
 			console.error(err);
@@ -4712,7 +4388,7 @@ function showMemoryParamEditor(container, memory) {
 
 	minInput.addEventListener("change", function(evt) {
 		memory.min = parseInt(minInput.value);
-		let sec = (memory instanceof ImportedMemory) ? findModuleByType(targetModule, SECTION_TYPE.IMPORT) : findModuleByType(targetModule, SECTION_TYPE.MEMORY);
+		let sec = (memory instanceof ImportedMemory) ? findModuleByType(targetModule, SECTION_TYPE_IMPORT) : findModuleByType(targetModule, SECTION_TYPE_MEMORY);
 		sec._isDirty = true;
 	});
 
@@ -4731,7 +4407,7 @@ function showMemoryParamEditor(container, memory) {
 			memory.max = parseInt(maxInput.value);
 		}
 		
-		let sec = (memory instanceof ImportedMemory) ? findModuleByType(targetModule, SECTION_TYPE.IMPORT) : findModuleByType(targetModule, SECTION_TYPE.MEMORY);
+		let sec = (memory instanceof ImportedMemory) ? findModuleByType(targetModule, SECTION_TYPE_IMPORT) : findModuleByType(targetModule, SECTION_TYPE_MEMORY);
 		sec._isDirty = true;
 	});
 
@@ -4739,7 +4415,7 @@ function showMemoryParamEditor(container, memory) {
 	input.checked = memory.shared;
 	input.addEventListener("change", function(evt) {
 		memory.shared = input.checked;
-		let sec = (memory instanceof ImportedMemory) ? findModuleByType(targetModule, SECTION_TYPE.IMPORT) : findModuleByType(targetModule, SECTION_TYPE.MEMORY);
+		let sec = (memory instanceof ImportedMemory) ? findModuleByType(targetModule, SECTION_TYPE_IMPORT) : findModuleByType(targetModule, SECTION_TYPE_MEMORY);
 		sec._isDirty = true;
 	});
 
@@ -4856,41 +4532,6 @@ function showInitialMemory(container, mem) {
 	}
 }
 
-function wasmStyleTypeString(functype) {
-    let arg, ret;
-    let argc = functype.argc;
-    if (argc == 0) {
-        arg = "[]";
-    } else if (argc == 1){
-    	arg = type_name(functype.argv[0]);
-        arg = '[' + arg + ']';
-    } else {
-        let argv = functype.argv;
-        arg = [];
-        for (let x = 0; x < argc; x++) {
-            arg.push(type_name(argv[x]));
-        }
-        arg = '[' + arg.join(" ") + ']';
-    }
-
-    let retc = functype.retc;
-    if (retc == 0) {
-        ret = "[]";
-    } else if (retc == 1){
-    	ret = type_name(functype.retv[0]);
-        ret = '[' + ret + ']';
-    } else {
-        let retv = functype.retv;
-        ret = [];
-        for (let x = 0; x < retc; x++) {
-            ret.push(type_name(retv[x]));
-        }
-        ret = '[' + ret.join(" ") + ']';
-    }
-
-    return arg + " -> " + ret;
-}
-
 function emcc_type_name(type) {
     switch(type) {
         case 0x7F: 
@@ -4945,6 +4586,8 @@ function emccStyleTypeString(functype) {
 
     return ret + '_' + arg;
 }
+
+// UI
 
 const CAVET_ICON_SVG = `<svg aria-hidden="true" focusable="false" role="img" class="octicon octicon-triangle-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="display: inline-block; user-select: none; vertical-align: text-bottom; overflow: visible;"><path d="m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z"></path></svg>`;
 const SEARCH_ICON_SVG = `<svg aria-hidden="true" focusable="false" role="img" class="octicon octicon-search" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="display: inline-block; user-select: none; vertical-align: text-bottom; overflow: visible;"><path fill-rule="evenodd" d="M11.5 7a4.499 4.499 0 11-8.998 0A4.499 4.499 0 0111.5 7zm-.82 4.74a6 6 0 111.06-1.06l3.04 3.04a.75.75 0 11-1.06 1.06l-3.04-3.04z"></path></svg>`;
@@ -5717,7 +5360,7 @@ class WasmFunctionsInspectorView {
 			tr.appendChild(td);
 			td = document.createElement("td");
 			td.classList.add("wasm-stack-signature");
-			let sign = wasmStyleTypeString(func.type);
+			let sign = func.type.toString();
 			sign = sign.replace("->", "→");
 			td.textContent = sign;
 			tr.appendChild(td);
@@ -6049,7 +5692,7 @@ class WasmTablesInspectorView {
 			tr.appendChild(td);
 			td = document.createElement("td");
 			td.classList.add("wasm-stack-signature");
-			let sign = wasmStyleTypeString(func.type);
+			let sign = func.type.toString();
 			sign = sign.replace("->", "→");
 			td.textContent = sign;
 			tr.appendChild(td);
@@ -6421,7 +6064,7 @@ const inspectorUI = {
 				tr.appendChild(td);
 				td = document.createElement("td");
 				td.classList.add("wasm-stack-signature");
-				td.textContent = wasmStyleTypeString(func.type);
+				td.textContent = func.type.toString();
 				tr.appendChild(td);
 				td = document.createElement("td");
 				td.classList.add("wasm-typeidx");
@@ -6685,7 +6328,7 @@ const inspectorUI = {
 				tr.appendChild(td);
 				td = document.createElement("td");
 				td.classList.add("wasm-stack-signature");
-				td.textContent = wasmStyleTypeString(func.type);
+				td.textContent = func.type.toString();
 				tr.appendChild(td);
 				td = document.createElement("td");
 				td.classList.add("wasm-typeidx");
@@ -7727,44 +7370,7 @@ function setupMainUI() {
 
 	fileUl = document.createElement("ul");
 
-	/*document.addEventListener("drop", function(evt) {
-
-		console.log(evt.dataTransfer);
-
-		let dataTransfer = evt.dataTransfer;
-		let files = [];
-		if (dataTransfer.items) {
-			let len = dataTransfer.items.length;
-			for (let i = 0; i < len; i++) {
-				let item = dataTransfer.items[i];
-				if (item.kind == "file") {
-					let file = item.getAsFile();
-					files.push(file);
-					// item.webkitGetAsEntry() // non-standard API
-					// item.getAsFileSystemHandle() // returns Promise
-					// 
-					// https://developer.mozilla.org/en-US/docs/Web/API/DataTransferItem/getAsFileSystemHandle
-				}
-			}
-		}
-
-		if (files.length == 0) {
-			let len = dataTransfer.files.length;
-			for (let i = 0; i < len; i++) {
-				let file = dataTransfer.files[i];
-				files.push(file);
-			}
-		}
-
-		console.log(files);
-		dropZoneDiv.style.display = "none";
-		appendFiles(files);
-
-		findInputFiles(files);
-
-		event.preventDefault();
-	});*/
-
+	/*
 	let fileTab = document.querySelector("nav.topnav #tab-files.tab-item");
 	fileTab.addEventListener("click", function (evt) {
 
@@ -7774,6 +7380,7 @@ function setupMainUI() {
 		fileUl.style.top = "10px";
 		fileUl.style.background = "#fff";
 	});
+	*/
 
 	let targetPanel = document.createElement("div");
 	targetPanel.classList.add("target-panel");
@@ -7827,55 +7434,11 @@ function processSymbolsMap(mod, txt) {
 	mod.names.functions = map;
 }
 
-/**
- * Computes a new ArrayBuffer which represents the modules initial memory, placed as it would be at runtime.
- * 
- * @param {*} mod
- * @param {ArrayBuffer} the ArrayBuffer which the module was decoded from.
- * @param {Boolean} If set to true then changes to buffer is encoded.
- * @returns A copy of the memory content of the module such as it would be initialized by the Wasm Runtime.
- */
-function computeInitialMemory(mod, buf, mutable) {
-	mutable = (mutable === true);
 
-	if (mutable && mod._mutableDataSegments) {
-		return mod._mutableDataSegments;
-	}
-
-	let segments = mod.dataSegments
-	let len = segments.length;
-	let min = segments[0].inst.opcodes[0].value;
-	let max = 0;
-	for (let i = 0; i < len; i++) {
-		let seg = segments[i];
-		let val = seg.inst.opcodes[0].value;
-		let end = val + seg.size;
-		if (end > max) {
-			max = end;
-		}
-	}
-
-	let mem = new Uint8Array(max);
-	let src = new Uint8Array(buf);
-
-	for (let i = 0; i < len; i++) {
-		let seg = segments[i];
-		let off = seg.inst.opcodes[0].value;
-		u8_memcpy(src, seg.offset, seg.size, mem, off);
-	}
-
-	if (mutable) {
-		mod._mutableDataSegments = mem;
-	}
-
-	return mem;
-}
-
-function setupKernelBootParams(wabp_addr) {
-
-}
-
-// ModInfo (kernel module defintion used by elf in freebsd)
+//
+// FreeBSD
+//
+//  ModInfo (kernel module defintion used by elf in freebsd)
 // - https://man.freebsd.org/cgi/man.cgi?query=kld&sektion=4#MODULE_TYPES
 // related to source code in: /tinybsd/sys/kern/kern_linker.c
 // 
@@ -8130,10 +7693,13 @@ function inspectFreeBSDBinary(buf, mod) {
 	inspectFreeBSDModMetadataSet(buf, mod, mem, data);
 }
 
+// NetBSD
+
 function inspectNetBSDBinary(buf, mod) {
 
 }
 
+// FreeBSD
 
 function inspectFreeBSDModMetadataSet(buf, mod, mem, data) {
 
@@ -9288,6 +8854,8 @@ function isEqualWorkflowData(data1, data2) {
 	return true;
 }
 
+// Web UI - Save settings to storage.
+
 function generateAppData(appData, workflowData, workflowId) {
 
 	let files;
@@ -9447,9 +9015,6 @@ function loadWebAssemblyBinary(buf, symbolsTxt) {
 	mapGlobalsUsage(mod);
 	generateCallCount(mod);
 	generateStackUsage(mod);
-	/*if (targetFilename == "kern.wasm") {
-		runWorkflowActions(mod, _freebsdKernMainWorkflow);
-	}*/
 	populateWebAssemblyInfo(mod);
 	try {
 		inspectObjectiveC(mod, buf);
@@ -9458,23 +9023,5 @@ function loadWebAssemblyBinary(buf, symbolsTxt) {
 	}
 }
 
-/*
-fetch(url).then(function(res) {
-
-	res.arrayBuffer().then(function(buf) {
-		loadWebAssemblyBinary(buf);
-	}, console.error);
-}, console.error);*/
-
-/*
-function test () {
-	let functions = targetModule.functions;
-	for (let i = 0; i < functions.length; i++) {
-		if (functions[i].opcodes && functions[i].opcodes.length == 240)
-			console.log(i);
-	}
-}
-test();
-*/
 
 

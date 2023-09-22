@@ -66,103 +66,6 @@ function type_name(type) {
     }
 }
 
-function export_type_name(type) {
-    switch(type) {
-        case 0x00:
-            return 'function';
-        case 0x01:
-            return 'table';
-        case 0x02:
-            return 'memory';
-        case 0x03:
-            return 'global';
-        default:
-            return undefined;
-    }
-}
-
-function dump_func_type(type, argc, argv, retc, retv) {
-    let argstr = "";
-    if (type == 0x60) {
-        argstr += "(";
-        if (typeof argv == "string") {
-            argstr += argv;
-        } else if (Array.isArray(argv)) {
-            argstr += argv.join(', ');
-        }
-        argstr += ")";
-    }
-    let retstr = "";
-    if (type == 0x60) {
-
-        if (retc > 1) {
-            retstr += "{";
-        }
-        if (typeof retv == "string") {
-            retstr += retv;
-        } else if (Array.isArray(argv)) {
-            retstr += retv.join(', ');
-        }
-        if (retc > 1) {
-            retstr += "}";
-        }
-    }
-    console.log("type: %s %s %s", type.toString(16), argstr, retstr);
-}
-
-function functype_toString(functype) {
-    let arg, ret;
-    let argc = functype.argc;
-    if (argc == 0) {
-        arg = "void";
-    } else if (argc == 1){
-        arg = type_name(functype.argv[0]);
-    } else {
-        let argv = functype.argv;
-        arg = [];
-        for (let x = 0; x < argc; x++) {
-            arg.push(type_name(argv[x]));
-        }
-    }
-
-    let retc = functype.retc;
-    if (retc == 0) {
-        ret = "void";
-    } else if (retc == 1){
-        ret = type_name(functype.retv[0]);
-    } else {
-        let retv = functype.retv;
-        ret = [];
-        for (let x = 0; x < retc; x++) {
-            ret.push(type_name(retv[x]));
-        }
-    }
-
-    let str = "";
-    if (typeof ret == "string") {
-        str += ret;
-    } else {
-        str += '{ ' + ret.join(', ') + ' }';
-    }
-    str += '\x20(';
-    if (typeof arg == "string") {
-        str += arg;
-    } else {
-        str += arg.join(', ');
-    }
-    str += ")";
-    return str;
-}
-
-function dump_functypes(functypes) {
-
-    let ylen = functypes.length;
-    for (let y = 0; y < ylen; y++) {
-        let fstr = functype_toString(functypes[y]);
-        console.log("[%d]: %s", y, fstr);
-
-    }
-}
 
 // from emscripten.
 var UTF8Decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf8') : undefined;
@@ -3897,22 +3800,6 @@ function encodeByteCode(mod, opcodes, locals, data) {
 
 // TODO: implement a Reader/Writter class which itself increments the read/write position.`
 
-const CHUNK_TYPE = {
-    TYPE: 1,
-    IMPORT: 2,
-    FUNC: 3,
-    TABLE: 4,
-    MEMORY: 5,
-    GLOBAL: 6,
-    EXPORT: 7,
-    START: 8,
-    ELEMENT: 9,
-    BYTECODE: 0x0A,
-    DATA: 0x0B,
-    DATA_COUNT: 0x0C,
-    CUSTOM: 0x00
-};
-
 // LEB128 is based on psudeo code from the wikipedia page as well as other sources
 // https://en.wikipedia.org/wiki/LEB128
 // https://gitlab.com/mjbecze/leb128/-/blob/master/unsigned.js
@@ -4728,6 +4615,51 @@ class WasmType {
     }
 
 
+    static create(argv, retv) {
+        let res = new WasmType();
+        res.argv = argv;
+        res.argc = Array.isArray(argv) ? argv.length : 0
+        res.retv = retv;
+        res.retc = Array.isArray(retv) ? retv.length : 0;
+        Object.freeze(res);
+        return res;
+    }
+
+    toString() {
+
+        let arg, ret;
+        let argv = this.argv;
+        let argc = this.argc;
+        if (argc == 0) {
+            arg = "[]";
+        } else if (argc == 1){
+            arg = type_name(argv[0]);
+            arg = '[' + arg + ']';
+        } else {
+            arg = [];
+            for (let x = 0; x < argc; x++) {
+                arg.push(type_name(argv[x]));
+            }
+            arg = '[' + arg.join(" ") + ']';
+        }
+
+        let retv = this.retv;
+        let retc = this.retc;
+        if (retc == 0) {
+            ret = "[]";
+        } else if (retc == 1){
+            ret = type_name(retv[0]);
+            ret = '[' + ret + ']';
+        } else {
+            ret = [];
+            for (let x = 0; x < retc; x++) {
+                ret.push(type_name(retv[x]));
+            }
+            ret = '[' + ret.join(" ") + ']';
+        }
+
+        return arg + " -> " + ret;
+    }
 };
 
 class WebAssemblyFuncTypeSection extends WebAssemblySection {
@@ -4830,10 +4762,6 @@ class WebAssemblyFuncTypeSection extends WebAssemblySection {
             functype.count = 0;
             types.push(functype);
         }
-
-        //console.log("functype vector count: %d", cnt);
-        //console.log(functypes);
-        //dump_functypes(functypes);
 
         return new WebAssemblyFuncTypeSection(module);
     }
@@ -5125,7 +5053,6 @@ class WebAssemblyImportSection extends WebAssemblySection {
             }
 
             if (imp) {
-                //imp.type = export_type_name(type);
                 imp.module = mod;
                 imp.name = name;
                 results.push(imp);
@@ -8288,6 +8215,12 @@ class WebAssemblyModule {
 
     // globals
 
+    /**
+     * 
+     * @param {String} name
+     * @param {String} module Optional. If specified the search is explicity done for a ImportedGlobal
+     * @returns {WasmGlobal|ImportedGlobal}
+     */
     getGlobalByName(name, module) {
         /*if (!this.names || !this.names.globals)
             throw TypeError("module must export the custom name section");
@@ -8462,7 +8395,7 @@ class WebAssemblyModule {
 
         // as replacing globals basically might shift the index in which its arrange simply mark the whole
         // code section as dirty..
-        this.findSection(CHUNK_TYPE.BYTECODE).markDirty();
+        this.findSection(SECTION_TYPE_CODE).markDirty();
 
         return true;
 
