@@ -7619,24 +7619,6 @@ function sysinit_sub_id(val) {
 	}
 }
 
-function findExportNameByRef(mod, obj) {
-	let exps = mod.exports;
-	let len = exps.length;
-	for (let i = 0; i < len; i++) {
-		let exp = exps[i];
-		if (exp instanceof ExportedFunction && exp.function === obj) {
-			return exp.name;
-		} else if (exp instanceof ExportedGlobal && exp.global === obj) {
-			return exp.name;
-		} else if (exp instanceof ExportedMemory && exp.memory === obj) {
-			return exp.name;
-		} else if (exp instanceof ExportedTable && exp.table === obj) {
-			return exp.name;
-		}
-	}
-
-	return null;
-}
 
 function inspectFreeBSDBinary(buf, mod) {
 
