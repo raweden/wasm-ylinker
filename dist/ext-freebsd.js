@@ -704,7 +704,7 @@ function addFreeBSDInspectorViews(mod, sysinit_arr) {
 }
 
 
-function postOptimizeFreeBSDKernMainAction(ctx, mod, options) {
+function postOptimizeFreeBSDKernMain(ctx, mod, options) {
 
 	let opcodes = [
 	    {"opcode": 0x02, "type": 64},						// block
@@ -1721,100 +1721,6 @@ function postOptimizeTinybsdUserBinary(ctx, mod) {
 	console.log(funcmap);
 }
 
-function mapGlobalsUsage(mod) {
-
-	if (!mod.globals)
-		return;
-
-	let gvalues = [];
-	let globals = mod.globals;
-	let locations = [];
-	let len = globals.length;
-	let min = 0;
-	let max = len - 1;
-	for (let i = 0; i < len; i++) {
-		let glob = globals[i];
-		glob.usage = 0;
-		if (glob instanceof WasmGlobal && glob.init.length == 2 && glob.init[0].opcode == 0x41 && glob.init[1].opcode == 0x0B) {
-			gvalues.push(glob.init[0].value);
-		} else {
-			gvalues.push(undefined);
-		}
-		locations.push(0);
-	}
-
-	let start = 0;
-	let imports = mod.imports;
-	len = imports.length;
-	for (let i = 0; i < len; i++) {
-		let imp = imports[i];
-		if (imp instanceof ImportedFunction) {
-			start++;
-		}
-	}
-
-
-
-	let functions = mod.functions;
-	let ylen = functions.length;
-	for (let y = start; y < ylen; y++) {
-		let func = functions[y];
-		let opcodes = func.opcodes;
-		let xlen = opcodes.length;
-		for (let x = 0; x < xlen; x++) { // do get opcodes.length to local as handlers might alter opcode around them.
-			let op = opcodes[x];
-			if (op.opcode == 0x23 || op.opcode == 0x24) {
-				let glob = op.global;
-				if (globals.indexOf(glob) === -1) {
-					console.error("invalid globalidx at funcidx: %d inst-index: %d", y, x);
-				} else {
-					glob.usage++;
-				}
-			}
-		}
-	}
-
-	functions = mod.functions;
-	ylen = functions.length;
-	for (let y = start; y < ylen; y++) {
-		let func = functions[y];
-		let opcodes = func.opcodes;
-		let xlen = opcodes.length;
-		let last = null;
-		for (let x = 0; x < xlen; x++) { // do get opcodes.length to local as handlers might alter opcode around them.
-			let op = opcodes[x];
-			if (op.opcode == 0x41) {
-				let val = op.value;
-				let idx = gvalues.indexOf(val);
-				if (idx !== -1) {
-					let inc = locations[idx];
-					inc++;
-					locations[idx] = inc;
-				}
-			} else if (op.opcode == 0x28 && last && last.opcode == 0x41 && last.value == 0) {
-				let idx = gvalues.indexOf(op.offset);
-				if (idx !== -1) {
-					let inc = locations[idx];
-					inc++;
-					locations[idx] = inc;
-				}
-			} else if (op.opcode == 0x36 && last && last.opcode == 0x41 && last.value == 0) {
-				let idx = gvalues.indexOf(op.offset);
-				if (idx !== -1) {
-					let inc = locations[idx];
-					inc++;
-					locations[idx] = inc;
-				}
-			}
-			last = op;
-		}
-	}
-
-	console.log(globals);
-	console.log(gvalues);
-	console.log(locations);
-}
-
 function postOptimizeTinybsdUserBinaryAction(ctx, mod, options) {
 	return postOptimizeTinybsdUserBinary(ctx, mod);
 }
@@ -1888,7 +1794,8 @@ const freebsd_ext = {
     ],
     flowTemplates: [_freebsdUserBinaryForkWorkflow, _freebsdUserBinaryWorkflow, _freebsdKernModuleWorkflow, _freebsdKernMainWorkflow],
     uiInspect: [{
-        handle: function(wasmModule) {
+        type: "binary",
+        test: function(wasmModule) {
             return false;
         }
     }]

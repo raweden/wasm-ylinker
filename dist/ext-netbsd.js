@@ -629,7 +629,13 @@ const netbsd_ext = {
 
     ],
     uiInspect: [{
-        handle: function(wasmModule) {
+        type: "binary",
+        test: function(wasmModule) {
+            return false;
+        }
+    }, {
+        type: "section",
+        test: function(wasmModule, section, buffer) {
             return false;
         }
     }]

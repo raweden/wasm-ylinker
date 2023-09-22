@@ -523,8 +523,15 @@ const objc_ext = {
 
     ],
     uiInspect: [{
-        handle: function(wasmModule) {
+        type: "binary",
+        test: function(wasmModule) {
             return false;
+        },
+        render: function(wasmModule) {
+            let container = document.createElement("div");
+            container.textContent = "Objective-C inspector here";
+            inspectObjectiveC();
+            return container;
         }
     }]
 };

@@ -2550,7 +2550,7 @@ function setupUI() {
 	});
 }
 
-function showMemoryParamEditor(container, memory) {
+function showMemoryParamEditor(container, module, memory) {
 
 	let maxInput = container.querySelector("#memory-max");
 	let minInput = container.querySelector("#memory-min");
@@ -2569,7 +2569,7 @@ function showMemoryParamEditor(container, memory) {
 
 	minInput.addEventListener("change", function(evt) {
 		memory.min = parseInt(minInput.value);
-		let sec = (memory instanceof ImportedMemory) ? findModuleByType(targetModule, SECTION_TYPE_IMPORT) : findModuleByType(targetModule, SECTION_TYPE_MEMORY);
+		let sec = (memory instanceof ImportedMemory) ? module.findSection(SECTION_TYPE_IMPORT) : module.findSection(SECTION_TYPE_MEMORY);
 		sec._isDirty = true;
 	});
 
@@ -2588,7 +2588,7 @@ function showMemoryParamEditor(container, memory) {
 			memory.max = parseInt(maxInput.value);
 		}
 		
-		let sec = (memory instanceof ImportedMemory) ? findModuleByType(targetModule, SECTION_TYPE_IMPORT) : findModuleByType(targetModule, SECTION_TYPE_MEMORY);
+		let sec = (memory instanceof ImportedMemory) ? module.findSection(SECTION_TYPE_IMPORT) : module.findSection(SECTION_TYPE_MEMORY);
 		sec._isDirty = true;
 	});
 
@@ -2596,7 +2596,7 @@ function showMemoryParamEditor(container, memory) {
 	input.checked = memory.shared;
 	input.addEventListener("change", function(evt) {
 		memory.shared = input.checked;
-		let sec = (memory instanceof ImportedMemory) ? findModuleByType(targetModule, SECTION_TYPE_IMPORT) : findModuleByType(targetModule, SECTION_TYPE_MEMORY);
+		let sec = (memory instanceof ImportedMemory) ? module.findSection(SECTION_TYPE_IMPORT) : module.findSection(SECTION_TYPE_MEMORY);
 		sec._isDirty = true;
 	});
 
@@ -2608,10 +2608,10 @@ function showMemoryParamEditor(container, memory) {
 		dataContainer.classList.add("initial-memory-info")
 		heading.parentElement.appendChild(dataContainer);
 	}
-	showInitialMemory(dataContainer, memory)
+	showInitialMemory(dataContainer, module, memory)
 }
 
-function showInitialMemory(container, mem) {
+function showInitialMemory(container, module, mem) {
 
 	let tbl, tbody;
 
@@ -2653,7 +2653,7 @@ function showInitialMemory(container, mem) {
 
 	let nsym = WebAssemblyModule.Name;
 	
-	let dataSegments = targetModule.dataSegments;
+	let dataSegments = module.dataSegments;
 	let len = dataSegments.length;
 	for (let i = 0;i < len;i++) {
 		let dataSeg = dataSegments[i];
@@ -3253,6 +3253,7 @@ class WasmGlobalsInspectorView {
 	}
 
 	render() {
+		let mod = this._module;
 		let tbody = this._tbody;
 		while (tbody.lastChild) {
 			tbody.removeChild(tbody.lastChild);
@@ -3261,7 +3262,7 @@ class WasmGlobalsInspectorView {
 		let start = paginator.pageIndex * this._pageRowCount;
 		let items = this._collection;
 
-		let globals = targetModule.globals;
+		let globals = mod.globals;
 		let len = Math.min(items.length, start + this._pageRowCount);
 		for (let i = start; i < len; i++) {
 			let item = items[i];
@@ -3290,6 +3291,16 @@ class WasmGlobalsInspectorView {
 			tr.appendChild(td);
 			tbody.appendChild(tr);
 		}
+	}
+
+	set module(value) {
+		this._module = value;
+		if (this._defaultCollection)
+			this.render();
+	}
+
+	get module() {
+		return this._module;
 	}
 
 	set model(value) {
@@ -3956,672 +3967,6 @@ class WasmTablesInspectorView {
 }
 
 const inspectorUI = {
-	'globals': function(header, body) {
-		let findInput = document.createElement("input");
-		findInput.type = "text";
-		findInput.placeholder = "find";
-		body.appendChild(findInput);
-
-		let findOptions = document.createElement("select");
-		findOptions.innerHTML = "<option value=\"starts-with\">Starts with</option><option value=\"ends-with\">Ends with</option><option value=\"contains\">Contains</option><option value=\"regexp\">Regexp</option>";
-		findOptions.selectedIndex = 2;
-		body.appendChild(findOptions);
-
-		let findCS = document.createElement("input");
-		findCS.type = "checkbox";
-		findCS.id = "case-sensetive";
-		body.appendChild(findCS);
-		let labelCS = document.createElement("label");
-		labelCS.for = "case-sensetive";
-		labelCS.textContent = "Case Sensetive";
-		body.appendChild(labelCS);
-
-		let table = document.createElement("table");
-		let thead = document.createElement("thead");
-		thead.innerHTML = "<tr><th>index</th><th>name</th><th>type</th><th>initial value</th><th>use count</th><th>import/export</th></tr>";
-		table.appendChild(thead);
-		let tbody = document.createElement("tbody");
-		table.appendChild(tbody);
-		body.appendChild(table);
-		let footer = document.createElement("span");
-		body.appendChild(footer);
-
-		let gmap;
-		let defaultCollection;
-		let collection;
-		let pageIndex = 0;
-		let pageRowCount = 25;
-
-		function listResults(value) {
-			while (tbody.lastChild) {
-				tbody.removeChild(tbody.lastChild);
-			}
-
-			let start = pageIndex * pageRowCount;
-
-			let globals = targetModule.globals;
-			let len = Math.min(collection.length, start + pageRowCount);
-			for (let i = start; i < len; i++) {
-				let item = collection[i];
-				let glob = item.global;
-
-				let tr = document.createElement("tr");
-				let td = document.createElement("td");
-				td.textContent = globals.indexOf(glob);
-				tr.appendChild(td);
-				td = document.createElement("td");
-				td.textContent = item.name;
-				tr.appendChild(td);
-				td = document.createElement("td");
-				td.textContent = type_name(glob.type);
-				tr.appendChild(td);
-				td = document.createElement("td");
-				if (glob instanceof WasmGlobal) {
-					let init = glob.init[0].value
-					td.textContent = init;
-				}
-				tr.appendChild(td);
-				td = document.createElement("td");
-				td.textContent = typeof glob.usage == "number" ? glob.usage : "";
-				tr.appendChild(td);
-				td = document.createElement("td"); // import/export
-				tr.appendChild(td);
-				tbody.appendChild(tr);
-			}
-
-			footer.textContent = "found " + collection.length + " matches";
-		}
-
-		{
-			let paginator = document.createElement("div");
-			paginator.classList.add("pagination");
-			let first = document.createElement("span");
-			first.textContent = "First";
-			first.addEventListener("click", function (evt) {
-				pageIndex = 0;
-				curr.textContent = "1";
-				listResults();
-			});
-			paginator.appendChild(first);
-			let prev = document.createElement("span");
-			prev.innerHTML = "<svg fill=\"currentColor\"><path d=\"M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z\"/></svg>";
-			prev.addEventListener("click", function (evt) {
-				if (pageIndex == 0)
-					return;
-				pageIndex--;
-				curr.textContent = (pageIndex + 1)
-				listResults();
-			});
-			paginator.appendChild(prev);
-			let curr = document.createElement("span");
-			curr.classList.add("page-active");
-			curr.textContent = "1";
-			paginator.appendChild(curr);
-			let next = document.createElement("span");
-			next.innerHTML = "<svg fill=\"currentColor\"><path d=\"M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z\"/></svg>";
-			next.addEventListener("click", function (evt) {
-				let last = collection.length == 0 ? 0 : Math.floor(collection.length / pageRowCount);
-				if (pageIndex == last)
-					return;
-				pageIndex++;
-				curr.textContent = (pageIndex + 1);
-				listResults();
-			});
-			paginator.appendChild(next);
-			let lastBtn = document.createElement("span");
-			lastBtn.textContent = "Last";
-			lastBtn.addEventListener("click", function (evt) {
-				pageIndex = collection.length == 0 ? 0 : Math.floor(collection.length / pageRowCount);
-				curr.textContent = (pageIndex + 1);
-				listResults();
-			});
-			paginator.appendChild(lastBtn);
-			body.appendChild(paginator);
-		}
-
-		findOptions.addEventListener("change", function(evt) {
-			let value = findInput.value;
-			let results = doFreeTextSearch(value);
-			collection = results;
-			pageIndex = 0;
-			listResults();
-		});
-
-		findInput.addEventListener("keyup", function(evt) {
-			if (evt.key == "Enter") {
-				let value = findInput.value;
-				let results = doFreeTextSearch(value);
-				collection = results;
-				pageIndex = 0;
-				listResults();
-			}
-		});
-
-		gmap = namedGlobalsMap(targetModule);
-
-		defaultCollection = [];
-		collection = defaultCollection;
-		for (let p in gmap) {
-			defaultCollection.push({name: p, global: gmap[p]});
-		}
-
-		listResults();
-		
-	},
-	'functions': function(header, body) {
-		let findInput = document.createElement("input");
-		findInput.type = "text";
-		findInput.placeholder = "find";
-		body.appendChild(findInput);
-
-		let findOptions = document.createElement("select");
-		findOptions.innerHTML = "<option value=\"starts-with\">Starts with</option><option value=\"ends-with\">Ends with</option><option value=\"contains\">Contains</option><option value=\"regexp\">Regexp</option>";
-		findOptions.selectedIndex = 2;
-		body.appendChild(findOptions);
-
-		let findCS = document.createElement("input");
-		findCS.type = "checkbox";
-		findCS.id = "case-sensetive";
-		body.appendChild(findCS);
-		let labelCS = document.createElement("label");
-		labelCS.for = "case-sensetive";
-		labelCS.textContent = "Case Sensetive";
-		body.appendChild(labelCS);
-
-		let findResults = document.createElement("ul");
-		body.appendChild(findResults);
-
-		let table = document.createElement("table");
-		table.classList.add("data-table","wasm-functions");
-		let thead = document.createElement("thead");
-		thead.innerHTML = "<tr><th>funcidx</th><th>name</th><th><code>in -> out</code></th><th>typeidx</th><th>use count</th><th>stack usage</th><th>inst cnt</th><th>bytecode size</th></tr>";
-		table.appendChild(thead);
-		let tbody = document.createElement("tbody");
-		table.appendChild(tbody);
-		body.appendChild(table);
-		let footer = document.createElement("span");
-		body.appendChild(footer);
-
-		let defaultCollection;
-		let collection;
-		let pageIndex = 0;
-		let pageRowCount = 25;
-
-		function doFreeTextSearch(value) {
-
-			let names = targetModule.names.functions;
-			let cis = findCS.value !== "off";
-			let match = [];
-			let searchType = findOptions.selectedOptions.item(0).value;
-			switch (searchType) {
-				case "starts-with":
-					if (cis) {
-						let lc = value.toLowerCase();
-						for (const [idx, name] of names) {
-							if (name.toLowerCase().startsWith(lc)) {
-								match.push({funcidx: idx, name: name});
-							}
-						}
-					} else {
-						for (const [idx, name] of names) {
-							if (name.startsWith(value)) {
-								match.push({funcidx: idx, name: name});
-							}
-						}
-					}
-					break;
-				case "ends-with":
-					if (cis) {
-						let lc = value.toLowerCase();
-						for (const [idx, name] of names) {
-							if (name.toLowerCase().endsWith(lc)) {
-								match.push({funcidx: idx, name: name});
-							}
-						}
-					} else {
-						for (const [idx, name] of names) {
-							if (name.endsWith(value)) {
-								match.push({funcidx: idx, name: name});
-							}
-						}
-					}
-					break;
-				case "contains":
-					if (cis) {
-						let lc = value.toLowerCase();
-						for (const [idx, name] of names) {
-							if (name.toLowerCase().includes(lc)) {
-								match.push({funcidx: idx, name: name});
-							}
-						}
-					} else {
-						for (const [idx, name] of names) {
-							if (name.includes(value)) {
-								match.push({funcidx: idx, name: name});
-							}
-						}
-					}
-					break;
-				case "regexp": {
-					let regexp = new Regexp(value);
-					for (const [idx, name] of names) {
-						if (name.search(regexp)) {
-							match.push({funcidx: idx, name: name});
-						}
-					}
-					break;
-				}
-				default:
-					break;
-			}
-
-			return match;
-		}
-
-		function listResults() {
-			while (tbody.lastChild) {
-				tbody.removeChild(tbody.lastChild);
-			}
-
-			let start = pageIndex * pageRowCount;
-
-			let len = Math.min(collection.length, start + pageRowCount);
-			for (let i = start; i < len; i++) {
-				let item = collection[i];
-				let funcidx = item.funcidx;
-				let func = targetModule.functions[funcidx];
-
-				let tr = document.createElement("tr");
-				let td = document.createElement("td");
-				td.classList.add("wasm-funcidx");
-				//let span = document.createElement("span");
-				//span.classList.add("index-badge")
-				//span.textContent = item.funcidx;
-				//td.appendChild(span);
-				td.textContent = item.funcidx;
-				tr.appendChild(td);
-				td = document.createElement("td");
-				td.textContent = item.name;
-				tr.appendChild(td);
-				td = document.createElement("td");
-				td.classList.add("wasm-stack-signature");
-				td.textContent = func.type.toString();
-				tr.appendChild(td);
-				td = document.createElement("td");
-				td.classList.add("wasm-typeidx");
-				let typeidx = targetModule.types.indexOf(func.type);
-				//span = document.createElement("span");
-				//span.classList.add("index-badge")
-				//span.textContent = typeidx;
-				//td.appendChild(span);
-				td.textContent = typeidx;
-				tr.appendChild(td);
-				td = document.createElement("td");
-				td.textContent = typeof func.usage == "number" ? func.usage : "";
-				tr.appendChild(td);
-				td = document.createElement("td"); // stack usage
-				if (typeof func.stackUsage == "number")
-					td.textContent = func.stackUsage;
-				tr.appendChild(td);
-				td = document.createElement("td"); // instruction count
-				td.textContent = (func instanceof WasmFunction) ? func.opcodes.length : "";
-				tr.appendChild(td);
-				td = document.createElement("td"); // bytecode size
-				td.textContent = (func instanceof WasmFunction) ? (func.opcode_end - func.codeStart) : "";
-				tr.appendChild(td);
-				tbody.appendChild(tr);
-			}
-
-			footer.textContent = "found " + collection.length + " matches";
-		}
-
-		{
-			let paginator = document.createElement("div");
-			paginator.classList.add("pagination");
-			let first = document.createElement("span");
-			first.textContent = "First";
-			first.addEventListener("click", function (evt) {
-				pageIndex = 0;
-				curr.textContent = "1"
-				listResults();
-			});
-			paginator.appendChild(first);
-			let prev = document.createElement("span");
-			prev.innerHTML = "<svg fill=\"currentColor\"><path d=\"M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z\"/></svg>";
-			prev.addEventListener("click", function (evt) {
-				if (pageIndex == 0)
-					return;
-				pageIndex--;
-				curr.textContent = (pageIndex + 1)
-				listResults();
-			});
-			paginator.appendChild(prev);
-			let curr = document.createElement("span");
-			curr.classList.add("page-active");
-			curr.textContent = "1";
-			paginator.appendChild(curr);
-			let next = document.createElement("span");
-			next.innerHTML = "<svg fill=\"currentColor\"><path d=\"M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z\"/></svg>";
-			next.addEventListener("click", function (evt) {
-				let last = collection.length == 0 ? 0 : Math.floor(collection.length / pageRowCount);
-				if (pageIndex == last)
-					return;
-				pageIndex++;
-				curr.textContent = (pageIndex + 1);
-				listResults();
-			});
-			paginator.appendChild(next);
-			let lastBtn = document.createElement("span");
-			lastBtn.textContent = "Last";
-			lastBtn.addEventListener("click", function (evt) {
-				pageIndex = collection.length == 0 ? 0 : Math.floor(collection.length / pageRowCount);
-				curr.textContent = (pageIndex + 1);
-				listResults();
-			});
-			paginator.appendChild(lastBtn);
-			body.appendChild(paginator);
-		}
-
-		findOptions.addEventListener("change", function(evt) {
-			let value = findInput.value;
-			let results = doFreeTextSearch(value);
-			collection = results;
-			pageIndex = 0;
-			listResults();
-		});
-
-		findInput.addEventListener("keyup", function(evt) {
-			if (evt.key == "Enter") {
-				let value = findInput.value;
-				let results = doFreeTextSearch(value);
-				collection = results;
-				pageIndex = 0;
-				listResults();
-			}
-		});
-
-		defaultCollection = [];
-		collection = defaultCollection;
-		if (targetModule.names && targetModule.names.functions) {
-			let names = targetModule.names.functions;
-			for (const [idx, name] of names) {
-				defaultCollection.push({funcidx: idx, name: name});
-			}
-		}
-
-		listResults();
-
-		//let tbltest = document.createElement("table");
-		//tbltest.innerHTML = "<thead></tr><th>funcidx</th><th>name</th><th>typeidx</th><th>use count</th><th>stack usage</th><th>inst cnt</th><th>bytecode size</th></tr></thead><tbody><tbody>"
-		//body.appendChild(tbltest);
-	},
-	'tables': function(header, body) {
-		let findInput = document.createElement("input");
-		findInput.type = "text";
-		findInput.placeholder = "find";
-		body.appendChild(findInput);
-
-		let findOptions = document.createElement("select");
-		findOptions.innerHTML = "<option value=\"starts-with\">Starts with</option><option value=\"ends-with\">Ends with</option><option value=\"contains\">Contains</option><option value=\"regexp\">Regexp</option>";
-		findOptions.selectedIndex = 2;
-		body.appendChild(findOptions);
-
-		let findCS = document.createElement("input");
-		findCS.type = "checkbox";
-		findCS.id = "case-sensetive";
-		body.appendChild(findCS);
-		let labelCS = document.createElement("label");
-		labelCS.for = "case-sensetive";
-		labelCS.textContent = "Case Sensetive";
-		body.appendChild(labelCS);
-
-		let findResults = document.createElement("ul");
-		body.appendChild(findResults);
-
-		let table = document.createElement("table");
-		table.classList.add("data-table","wasm-functions");
-		let thead = document.createElement("thead");
-		thead.innerHTML = "<tr><th>index</th><th>funcidx</th><th>name</th><th><code>in -> out</code></th><th>typeidx</th><th>use count</th><th>stack usage</th><th>inst cnt</th><th>bytecode size</th></tr>";
-		table.appendChild(thead);
-		let tbody = document.createElement("tbody");
-		table.appendChild(tbody);
-		body.appendChild(table);
-		let footer = document.createElement("span");
-		body.appendChild(footer);
-
-		let defaultCollection;
-		let collection;
-		let pageIndex = 0;
-		let pageRowCount = 25;
-
-		function doFreeTextSearch(value) {
-
-			let len = defaultCollection.length;
-			let cis = findCS.value !== "off";
-			let matches = [];
-			let searchType = findOptions.selectedOptions.item(0).value;
-			switch (searchType) {
-				case "starts-with":
-					if (cis) {
-						let lc = value.toLowerCase();
-						for (let i = 0; i < len; i++) {
-							let item = defaultCollection[i];
-							let name = item.name;
-							if (name.toLowerCase().startsWith(lc)) {
-								matches.push(item);
-							}
-						}
-					} else {
-						for (let i = 0; i < len; i++) {
-							let item = defaultCollection[i];
-							let name = item.name;
-							if (name.startsWith(value)) {
-								matches.push(item);
-							}
-						}
-					}
-					break;
-				case "ends-with":
-					if (cis) {
-						let lc = value.toLowerCase();
-						for (let i = 0; i < len; i++) {
-							let item = defaultCollection[i];
-							let name = item.name;
-							if (name.toLowerCase().endsWith(lc)) {
-								matches.push(item);
-							}
-						}
-					} else {
-						for (let i = 0; i < len; i++) {
-							let item = defaultCollection[i];
-							let name = item.name;
-							if (name.endsWith(value)) {
-								matches.push(item);
-							}
-						}
-					}
-					break;
-				case "contains":
-					if (cis) {
-						let lc = value.toLowerCase();
-						for (let i = 0; i < len; i++) {
-							let item = defaultCollection[i];
-							let name = item.name;
-							if (name.toLowerCase().includes(lc)) {
-								matches.push(item);
-							}
-						}
-					} else {
-						for (let i = 0; i < len; i++) {
-							let item = defaultCollection[i];
-							let name = item.name;
-							if (name.includes(value)) {
-								matches.push(item);
-							}
-						}
-					}
-					break;
-				case "regexp": {
-					let regexp = new Regexp(value);
-					for (let i = 0; i < len; i++) {
-						let item = defaultCollection[i];
-						let name = item.name;
-						if (name.search(regexp)) {
-							matches.push(item);
-						}
-					}
-					break;
-				}
-				default:
-					break;
-			}
-
-			return matches;
-		}
-
-		function listResults() {
-			while (tbody.lastChild) {
-				tbody.removeChild(tbody.lastChild);
-			}
-
-			let start = pageIndex * pageRowCount;
-
-			let len = Math.min(collection.length, start + pageRowCount);
-			for (let i = start; i < len; i++) {
-				let item = collection[i];
-				let funcidx = item.funcidx;
-				let func = targetModule.functions[funcidx];
-
-				let tr = document.createElement("tr");
-				let td = document.createElement("td");
-				td.textContent = item.index;
-				tr.appendChild(td);
-				td = document.createElement("td");
-				td.classList.add("wasm-funcidx");
-				//let span = document.createElement("span");
-				//span.classList.add("index-badge")
-				//span.textContent = item.funcidx;
-				//td.appendChild(span);
-				td.textContent = item.funcidx;
-				tr.appendChild(td);
-				td = document.createElement("td");
-				td.textContent = item.name;
-				tr.appendChild(td);
-				td = document.createElement("td");
-				td.classList.add("wasm-stack-signature");
-				td.textContent = func.type.toString();
-				tr.appendChild(td);
-				td = document.createElement("td");
-				td.classList.add("wasm-typeidx");
-				let typeidx = targetModule.types.indexOf(func.type);
-				//span = document.createElement("span");
-				//span.classList.add("index-badge")
-				//span.textContent = typeidx;
-				//td.appendChild(span);
-				td.textContent = typeidx;
-				tr.appendChild(td);
-				td = document.createElement("td");
-				td.textContent = typeof func.usage == "number" ? func.usage : "";
-				tr.appendChild(td);
-				td = document.createElement("td"); // stack usage
-				if (typeof func.stackUsage == "number")
-					td.textContent = func.stackUsage;
-				tr.appendChild(td);
-				td = document.createElement("td"); // instruction count
-				td.textContent = (func instanceof WasmFunction) ? func.opcodes.length : "";
-				tr.appendChild(td);
-				td = document.createElement("td"); // bytecode size
-				td.textContent = (func instanceof WasmFunction) ? (func.opcode_end - func.codeStart) : "";
-				tr.appendChild(td);
-				tbody.appendChild(tr);
-			}
-
-			footer.textContent = "found " + collection.length + " matches";
-		}
-
-		{
-			let paginator = document.createElement("div");
-			paginator.classList.add("pagination");
-			let first = document.createElement("span");
-			first.textContent = "First";
-			first.addEventListener("click", function (evt) {
-				pageIndex = 0;
-				curr.textContent = "1"
-				listResults();
-			});
-			paginator.appendChild(first);
-			let prev = document.createElement("span");
-			prev.innerHTML = "<svg fill=\"currentColor\"><path d=\"M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z\"/></svg>";
-			prev.addEventListener("click", function (evt) {
-				if (pageIndex == 0)
-					return;
-				pageIndex--;
-				curr.textContent = (pageIndex + 1)
-				listResults();
-			});
-			paginator.appendChild(prev);
-			let curr = document.createElement("span");
-			curr.classList.add("page-active");
-			curr.textContent = "1";
-			paginator.appendChild(curr);
-			let next = document.createElement("span");
-			next.innerHTML = "<svg fill=\"currentColor\"><path d=\"M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z\"/></svg>";
-			next.addEventListener("click", function (evt) {
-				let last = collection.length == 0 ? 0 : Math.floor(collection.length / pageRowCount);
-				if (pageIndex == last)
-					return;
-				pageIndex++;
-				curr.textContent = (pageIndex + 1);
-				listResults();
-			});
-			paginator.appendChild(next);
-			let lastBtn = document.createElement("span");
-			lastBtn.textContent = "Last";
-			lastBtn.addEventListener("click", function (evt) {
-				pageIndex = collection.length == 0 ? 0 : Math.floor(collection.length / pageRowCount);
-				curr.textContent = (pageIndex + 1);
-				listResults();
-			});
-			paginator.appendChild(lastBtn);
-			body.appendChild(paginator);
-		}
-
-		findOptions.addEventListener("change", function(evt) {
-			let value = findInput.value;
-			let results = doFreeTextSearch(value);
-			collection = results;
-			pageIndex = 0;
-			listResults();
-		});
-
-		findInput.addEventListener("keyup", function(evt) {
-			if (evt.key == "Enter") {
-				let value = findInput.value;
-				let results = doFreeTextSearch(value);
-				collection = results;
-				pageIndex = 0;
-				listResults();
-			}
-		});
-
-		defaultCollection = [];
-		collection = defaultCollection;
-		if (targetModule.names && targetModule.names.functions) {
-			let names = targetModule.names.functions;
-			let contents = targetModule.tables[0].contents;
-			let len = contents.length;
-			for (let i = 1; i < len; i++) {
-				let funcidx = contents[i];
-				let name = names.get(funcidx);
-				defaultCollection.push({index: i, funcidx: funcidx, name: name});
-			}
-		}
-		listResults();
-
-		//let tbltest = document.createElement("table");
-		//tbltest.innerHTML = "<thead></tr><th>funcidx</th><th>name</th><th>typeidx</th><th>use count</th><th>stack usage</th><th>inst cnt</th><th>bytecode size</th></tr></thead><tbody><tbody>"
-		//body.appendChild(tbltest);
-	},
 	'data_segments': function(header, body) {
 
 	},
@@ -4641,8 +3986,8 @@ function namedGlobalsMap(mod) {
 	let arr2 = [];
 	let unamedGlobals = [];
 	let map = {};
-	let globals = targetModule.globals;
-	let exported = targetModule.exports;
+	let globals = mod.globals;
+	let exported = mod.exports;
 	let len = exported.length;
 	for (let i = 0; i < len; i++) {
 		let exp = exported[i];
@@ -4687,7 +4032,7 @@ function populateWebAssemblyInfo(mod) {
 	let len = memory.length;
 	for (let i = 0; i < len; i++) {
 		let mem = memory[i];
-		showMemoryParamEditor(container, mem);
+		showMemoryParamEditor(container, mod, mem);
 	}
 
 	let con2 = document.querySelector("#test");
@@ -4710,7 +4055,9 @@ function populateWebAssemblyInfo(mod) {
 			}
 			if (!_namedGlobals)
 				_namedGlobals = namedGlobalsMap(mod);
+			view.module = mod;
 			view.model = _namedGlobals;
+			
 
 		} else if (txt == "functions") {
 			//inspectorUI.functions(h3, body);
@@ -5079,11 +4426,11 @@ function setupWorkflowUIForTarget(newWorkflow, wasmBinary, wasmSymbolDump) {
 	if (!newWorkflow) {
 
 		if (targetFilename == "kern.wasm") {
-			workflow = _freebsdKernMainWorkflow;
+			workflow = globalApp.workflowById("tinybsd_14_0.kern-main-binary");
 		} else if (targetFilename == "netbsd-kern.wasm") {
-			workflow = _netbsdKernMainWorkflow;
+			workflow = globalApp.workflowById("netbsd_10.kern-main-binary");
 		} else if (isUserBinary(targetFilename)) {
-			workflow = _netbsdUserBinaryForkWorkflow;
+			workflow = globalApp.workflowById("netbsd_10.user-binary+emul-fork");
 		}
 
 	} else {
@@ -5500,7 +4847,21 @@ async function loadFilePairs(binary, symbolMapFile) {
 	return loadWebAssemblyBinary(buf1, buf2) 
 }
 
-const globalApp = {_extentions: []};
+const flow = {};
+const globalApp = {
+	_extentions: [],
+	_uiInspect: [],
+	workflowById: function(id) {
+		let len = _workflows.length;
+		for (let i = 0; i < len; i++) {
+			let workflow = _workflows[i];
+			if (workflow.id == id)
+				return workflow;
+		}
+
+		return null;
+	}
+};
 
 async function setupMainUI() {
 
@@ -5518,9 +4879,33 @@ async function setupMainUI() {
 
 	let _exts = ["./ext-objc.js", "./ext-netbsd.js", "./ext-freebsd.js"];
 	for (let path of _exts) {
-		let def = await import(path);
-		console.log(def);
+		let module = await import(path);
+		let def = module.default;
 		globalApp._extentions.push(def);
+		let actions = def.flowActions;
+		let len = actions.length;
+		for (let i = 0; i < len; i++) {
+			let action = actions[i];
+			if (_workflowActions.hasOwnProperty(action.name)) {
+				console.warn("action %s already exist", action.name);
+				continue;
+			}
+			_workflowActions[action.name] = action;
+		}
+
+		let flows = def.flowTemplates;
+		len = flows.length;
+		for (let i = 0; i < len; i++) {
+			let flow = flows[i];
+			_workflows.push(flow);
+		}
+
+		let uiInspect = def.uiInspect;
+		len = uiInspect.length;
+		for (let i = 0; i < len; i++) {
+			let inspector = uiInspect[i];
+			globalApp._uiInspect.push(inspector);
+		}
 	}
 
 
@@ -5953,6 +5338,100 @@ openDatabase();
 
 // TODO: custom-section: name from emscripten symbol-map
 
+function mapGlobalsUsage(mod) {
+
+	if (!mod.globals)
+		return;
+
+	let gvalues = [];
+	let globals = mod.globals;
+	let locations = [];
+	let len = globals.length;
+	let min = 0;
+	let max = len - 1;
+	for (let i = 0; i < len; i++) {
+		let glob = globals[i];
+		glob.usage = 0;
+		if (glob instanceof WasmGlobal && glob.init.length == 2 && glob.init[0].opcode == 0x41 && glob.init[1].opcode == 0x0B) {
+			gvalues.push(glob.init[0].value);
+		} else {
+			gvalues.push(undefined);
+		}
+		locations.push(0);
+	}
+
+	let start = 0;
+	let imports = mod.imports;
+	len = imports.length;
+	for (let i = 0; i < len; i++) {
+		let imp = imports[i];
+		if (imp instanceof ImportedFunction) {
+			start++;
+		}
+	}
+
+
+
+	let functions = mod.functions;
+	let ylen = functions.length;
+	for (let y = start; y < ylen; y++) {
+		let func = functions[y];
+		let opcodes = func.opcodes;
+		let xlen = opcodes.length;
+		for (let x = 0; x < xlen; x++) { // do get opcodes.length to local as handlers might alter opcode around them.
+			let op = opcodes[x];
+			if (op.opcode == 0x23 || op.opcode == 0x24) {
+				let glob = op.global;
+				if (globals.indexOf(glob) === -1) {
+					console.error("invalid globalidx at funcidx: %d inst-index: %d", y, x);
+				} else {
+					glob.usage++;
+				}
+			}
+		}
+	}
+
+	functions = mod.functions;
+	ylen = functions.length;
+	for (let y = start; y < ylen; y++) {
+		let func = functions[y];
+		let opcodes = func.opcodes;
+		let xlen = opcodes.length;
+		let last = null;
+		for (let x = 0; x < xlen; x++) { // do get opcodes.length to local as handlers might alter opcode around them.
+			let op = opcodes[x];
+			if (op.opcode == 0x41) {
+				let val = op.value;
+				let idx = gvalues.indexOf(val);
+				if (idx !== -1) {
+					let inc = locations[idx];
+					inc++;
+					locations[idx] = inc;
+				}
+			} else if (op.opcode == 0x28 && last && last.opcode == 0x41 && last.value == 0) {
+				let idx = gvalues.indexOf(op.offset);
+				if (idx !== -1) {
+					let inc = locations[idx];
+					inc++;
+					locations[idx] = inc;
+				}
+			} else if (op.opcode == 0x36 && last && last.opcode == 0x41 && last.value == 0) {
+				let idx = gvalues.indexOf(op.offset);
+				if (idx !== -1) {
+					let inc = locations[idx];
+					inc++;
+					locations[idx] = inc;
+				}
+			}
+			last = op;
+		}
+	}
+
+	console.log(globals);
+	console.log(gvalues);
+	console.log(locations);
+}
+
 function loadWebAssemblyBinary(buf, symbolsTxt) {
 	moduleBuffer = buf;
 	let mod = parseWebAssemblyBinary(buf);
@@ -5960,7 +5439,7 @@ function loadWebAssemblyBinary(buf, symbolsTxt) {
 
 	console.log(mod);
 
-	targetModule = mod;
+	flow.module = mod;
 
 	if (symbolsTxt) {
 		processSymbolsMap(mod, symbolsTxt);
@@ -5970,10 +5449,23 @@ function loadWebAssemblyBinary(buf, symbolsTxt) {
 	generateCallCount(mod);
 	generateStackUsage(mod);
 	populateWebAssemblyInfo(mod);
-	try {
-		inspectObjectiveC(mod, buf);
-	} catch (err) {
-		console.error(err);
+
+	let inspectors = globalApp._uiInspect;
+	let len = inspectors.length;
+	for (let i = 0; i < len; i++) {
+		let inspector = inspectors[i];
+		if (inspector.type != "binary")
+			continue;
+
+		try {
+			let result = inspector.test(mod);
+			if (result === true) {
+				let view = inspector.render(wasmModule);
+				console.log(view);
+			}
+		} catch (err) {
+			console.error(err);
+		}	
 	}
 }
 
