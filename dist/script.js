@@ -437,18 +437,6 @@ let _workflowActions = {
 		params: [{name: "wasm-binary", type: "file", role: "output", types: [{description: "WebAssembly Files", accept: {"application/wasm": [".wasm"]}}]}],
 		handler: outputAction
 	},
-	objc_optimize_objc_msgSend: {
-		handler: objcOptimizeObjcMsgSendAction
-	},
-	objc_optimize_wasm_call_ctors: {
-		handler: objcOptimizeCtorsAction
-	},
-	objc_optimize_dylib: {
-		handler: objcOptimizeDylibAction
-	},
-	gnustepEmbedPlist: {
-		handler: gnustepEmbedInfoPlistAction
-	},
 	postOptimizeWasmDylib: {
 		handler: postOptimizeWasmDylibAction
 	},
@@ -1560,28 +1548,12 @@ function postOptimizeKernSideAction(ctx, module, options) {
 
 }
 
-function objcOptimizeObjcMsgSendAction(ctx, module, options) {
-
-}
-
-function objcOptimizeCtorsAction(ctx, module, options) {
-	
-}
-
-function objcOptimizeDylibAction(ctx, module, options) {
-	
-}
-
 function postOptimizeWasmDylibAction(ctx, module, options) {
 	
 }
 
 function dumpImportedFnAction(ctx, module, options) {
 	
-}
-
-function gnustepEmbedInfoPlistAction(ctx, module, options) {
-
 }
 
 function removeExportFor(mod, obj) {

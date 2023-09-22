@@ -486,3 +486,47 @@ function inspectObjectiveC(mod, buf) {
 }
 
 // end of Objective-C inspect
+
+function objc_optimize_objc_msgSend(ctx, module, options) {
+
+}
+
+function objc_optimize_wasm_call_ctors(ctx, module, options) {
+	
+}
+
+function objc_optimize_dylib(ctx, module, options) {
+	
+}
+
+function gnustepEmbedInfoPlistAction(ctx, module, options) {
+
+}
+
+
+const objc_ext = {
+    name: "Objective-C Extension",
+    flowActions: [{
+            name: "gnustep2.0-objc_optimize_objc_msgSend",
+	    	handler: objc_optimize_objc_msgSend
+	    }, {
+            name: "gnustep2.0-objc_optimize_wasm_call_ctors",
+            handler: objc_optimize_wasm_call_ctors
+	    }, {
+            name: "gnustep2.0-objc_optimize_dylib",
+            handler: objc_optimize_dylib
+	    }, {
+            name: "gnustep2.0-embed-plist",
+            handler: gnustepEmbedInfoPlistAction
+        }],
+    flowTemplates: [
+
+    ],
+    uiInspect: [{
+        handle: function(wasmModule) {
+            return false;
+        }
+    }]
+};
+
+export default objc_ext;
