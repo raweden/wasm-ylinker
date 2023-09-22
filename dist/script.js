@@ -7319,7 +7319,9 @@ async function loadFilePairs(binary, symbolMapFile) {
 	return loadWebAssemblyBinary(buf1, buf2) 
 }
 
-function setupMainUI() {
+const globalApp = {_extentions: []};
+
+async function setupMainUI() {
 
 	let readmeContainer = document.querySelector("article#readme");
 	if (readmeContainer)
@@ -7333,6 +7335,12 @@ function setupMainUI() {
 		event.preventDefault();
 	});*/
 
+	let _exts = ["./ext-objc.js", "./ext-netbsd.js", "./ext-freebsd.js"];
+	for (let path of _exts) {
+		let def = await import(path);
+		console.log(def);
+		globalApp._extentions.push(def);
+	}
 
 
 	let tabMap = [];
