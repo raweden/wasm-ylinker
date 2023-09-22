@@ -1819,6 +1819,60 @@ function postOptimizeTinybsdUserBinaryAction(ctx, mod, options) {
 	return postOptimizeTinybsdUserBinary(ctx, mod);
 }
 
+function postOptimizeWasmAction(ctx, mod, options) {
+	return postOptimizeWasm(ctx, mod);
+}
+
+function postOptimizeWasm(ctx, mod) {
+
+	replaceCallInstructions(ctx, mod, null, atomic_op_replace_map);
+	replaceCallInstructions(ctx, mod, null, memory_op_replace_map);	
+
+	{	
+		let glob = mod.getGlobalByName("__stack_pointer");
+		console.log("%s = %d", glob.name, glob.init[0].value);
+		ctx.__stack_pointer = glob.init[0].value; // store it for later use.
+		glob = mod.getGlobalByName("thread0_st");
+		console.log("%s = %d", glob.name, glob.init[0].value);
+		ctx.thread0_st = glob.init[0].value; // store it for later use.
+	}
+
+
+	let g1 = mod.getGlobalByName("__stack_pointer");
+	let g2 = new ImportedGlobal();
+	g2.module = "kern";
+	g2.name = "__stack_pointer";
+	g2.type = g1.type;
+	g2.mutable = g1.mutable;
+	mod.replaceGlobal(g1, g2, true);
+	mod.imports.unshift(g2);
+	removeExportFor(mod, g1);
+
+	g1 = mod.getGlobalByName("__curthread");
+	g2 = new ImportedGlobal();
+	g2.module = "kern";
+	g2.name = "__curthread";
+	g2.type = g1.type;
+	g2.mutable = g1.mutable;
+	mod.replaceGlobal(g1, g2, true);
+	mod.imports.push(g2);
+	removeExportFor(mod, g1);
+
+	let sec = mod.findSection(SECTION_TYPE_IMPORT);
+	if (sec)
+		sec.markDirty();
+
+	sec = mod.findSection(SECTION_TYPE_EXPORT);
+	if (sec)
+		sec.markDirty();
+
+	sec = mod.findSection(SECTION_TYPE_GLOBAL);
+	if (sec)
+		sec.markDirty();
+
+	console.log(funcmap);
+}
+
 const freebsd_ext = {
     name: "FreeBSD Extension",
     flowActions: [{
@@ -1827,7 +1881,10 @@ const freebsd_ext = {
     }, {
         name: "postOptimizeTinybsdUserBinary",
         handler: postOptimizeTinybsdUserBinaryAction
-    }
+    }, {
+        name: "postOptimizeWasm",
+		handler: postOptimizeWasmAction
+	},
     ],
     flowTemplates: [_freebsdUserBinaryForkWorkflow, _freebsdUserBinaryWorkflow, _freebsdKernModuleWorkflow, _freebsdKernMainWorkflow],
     uiInspect: [{
