@@ -1089,7 +1089,7 @@ function convertMemoryAction(ctx, mod, options) {
 	if (mem instanceof ImportedMemory) {
 		type = "import";
 	} else if (mem !== undefined) {
-		exp = findExportDefByObject(mod, mem);
+		exp = mod.findExportDefByObject(mem);
 		if (exp) {
 			type = "export";
 		} else {
@@ -7636,25 +7636,6 @@ function findExportNameByRef(mod, obj) {
 	}
 
 	return null;
-}
-
-function findExportDefByObject(mod, obj) {
-	let exps = mod.exports;
-	let len = exps.length;
-	for (let i = 0; i < len; i++) {
-		let exp = exps[i];
-		if (exp instanceof ExportedFunction && exp.function === obj) {
-			return exp;
-		} else if (exp instanceof ExportedGlobal && exp.global === obj) {
-			return exp;
-		} else if (exp instanceof ExportedMemory && exp.memory === obj) {
-			return exp;
-		} else if (exp instanceof ExportedTable && exp.table === obj) {
-			return exp;
-		}
-	}
-
-	return undefined;
 }
 
 function inspectFreeBSDBinary(buf, mod) {

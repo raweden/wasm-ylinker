@@ -8622,6 +8622,47 @@ class WebAssemblyModule {
         return 0;
     }
 
+    findExportDefByObject(obj) {
+        let exps = this.exports;
+        let len = exps.length;
+        for (let i = 0; i < len; i++) {
+            let exp = exps[i];
+            if (exp instanceof ExportedFunction && exp.function === obj) {
+                return exp;
+            } else if (exp instanceof ExportedGlobal && exp.global === obj) {
+                return exp;
+            } else if (exp instanceof ExportedMemory && exp.memory === obj) {
+                return exp;
+            } else if (exp instanceof ExportedTable && exp.table === obj) {
+                return exp;
+            }
+        }
+    
+        return undefined;
+    }
+
+    findAllExportDefByObject(obj) {
+        let results = [];
+        let exps = this.exports;
+        let len = exps.length;
+        for (let i = 0; i < len; i++) {
+            let exp = exps[i];
+            if (exp instanceof ExportedFunction && exp.function === obj) {
+                results.push(exp);
+            } else if (exp instanceof ExportedGlobal && exp.global === obj) {
+                results.push(exp);
+            } else if (exp instanceof ExportedMemory && exp.memory === obj) {
+                results.push(exp);
+            } else if (exp instanceof ExportedTable && exp.table === obj) {
+                results.push(exp);
+            }
+        }
+    
+        return results;
+    }
+
+    // Custom Sections
+
     // getCustomSectionsByName(name)
     customSections(name) {
         let results = [];
