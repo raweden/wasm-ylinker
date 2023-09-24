@@ -66,6 +66,24 @@ function type_name(type) {
     }
 }
 
+function u8_memcpy(src, sidx, slen, dst, didx) {
+    // TODO: remove this assert at later time. (should be a debug)
+    if (!(src instanceof Uint8Array) && (dst instanceof Uint8Array)) {
+        throw TypeError("src and dst Must be Uint8Array");
+    }
+    //console.log(src, dst);
+    let idx = sidx;
+    let end = idx + slen;
+    /*if (slen > 512) {
+        let subarr = src.subarray(idx, end);
+        dst.set(subarr, didx);
+        return;
+    }*/
+
+    while(idx < end) {
+        dst[didx++] = src[idx++];
+    }
+}
 
 // from emscripten.
 var UTF8Decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf8') : undefined;
@@ -5915,20 +5933,6 @@ class WebAssemblyCodeSection extends WebAssemblySection {
             }
         }
 
-        for (let i = start; i < len; i++) {
-            let func = funcvec[i];
-            if (func._opcodeDirty === true) {
-                anyDirty = true;
-                break;
-            }
-        }
-
-        if (!anyDirty) {
-            console.log("nothing changed in code section");
-            let end = section.dataOffset + section.size;
-            return org.slice(section.offset, end);
-        }
-
         let sec_sz = 0;
         let buffers = [];
         let modcnt = 0;
@@ -6144,7 +6148,10 @@ class WasmDataSegment {
         this._section = undefined;
         this.memory = undefined;
         this.inst = undefined;
+        this.size = undefined;
         this._buffer = undefined;
+        this._mutableDataBuffer = undefined;
+        this._mutableDataOffset = undefined;
     }
 
     hasDataSegment(dataSegment) {
@@ -6152,6 +6159,12 @@ class WasmDataSegment {
     }
 
     get buffer() {
+        if (this._mutableDataBuffer) {
+            let start = this._mutableDataOffset;
+            let end = start + this.size;
+            return this._mutableDataBuffer.slice(start, end);
+        }
+
         return this._buffer;
     }
 }
@@ -6190,46 +6203,27 @@ class WebAssemblyDataSection extends WebAssemblySection {
         tot += lengthULEB128(tot); // section-size
         tot += 1;                  // section-signature
 
-        if (mod._mutableDataSegments) {
-
-            let src = mod._mutableDataSegments;
-            let buffer = new Uint8Array(tot); // {dst-offset, size}
-            let data = new ByteArray(buffer);
-            data.writeUint8(SECTION_TYPE_DATA);
-            data.writeULEB128(secsz);
-            data.writeULEB128(len);
-            for (let i = 0; i < len; i++) {
-                let seg = segments[i];
-                data.writeULEB128(0); // seg.kind (not implemented)
-                encodeByteCode(mod, seg.inst.opcodes, null, data);
-                data.writeULEB128(seg.size);
-                let off = seg.inst.opcodes[0].value;
-                u8_memcpy(src, off, seg.size, buffer, data.offset);
+        let buffer = new Uint8Array(tot); // {dst-offset, size}
+        let data = new ByteArray(buffer);
+        data.writeUint8(SECTION_TYPE_DATA);
+        data.writeULEB128(secsz);
+        data.writeULEB128(len);
+        for (let i = 0; i < len; i++) {
+            let seg = segments[i];
+            data.writeULEB128(0); // seg.kind (not implemented)
+            encodeByteCode(mod, seg.inst.opcodes, null, data);
+            data.writeULEB128(seg.size);
+            if (seg._mutableDataBuffer) {
+                let off = seg._mutableDataOffset;
+                u8_memcpy(seg._mutableDataBuffer, off, seg.size, buffer, data.offset);
+                data.offset += seg.size;
+            } else {
+                u8_memcpy(seg._buffer, 0, seg.size, buffer, data.offset);
                 data.offset += seg.size;
             }
-
-            return buffer;
-
-        } else {
-
-            let src = new Uint8Array(moduleBuffer);
-            let buffer = new Uint8Array(tot); // {dst-offset, size}
-            let data = new ByteArray(buffer);
-            data.writeUint8(SECTION_TYPE_DATA);
-            data.writeULEB128(secsz);
-            data.writeULEB128(len);
-            for (let i = 0; i < len; i++) {
-                let seg = segments[i];
-                data.writeULEB128(0); // seg.kind (not implemented)
-                encodeByteCode(mod, seg.inst.opcodes, null, data);
-                data.writeULEB128(seg.size);
-                u8_memcpy(src, seg.offset, seg.size, buffer, data.offset);
-                data.offset += seg.size;
-            }
-            //
-            return buffer;
         }
 
+        return buffer;
     }
 
     static decode(module, data, size) {
@@ -8756,6 +8750,9 @@ class WebAssemblyModule {
     /**
      * Computes and constructs a ArrayBuffer which built up like the initial memory of the module. Which makes
      * access and mutation at addresses possible. If mutable is set to true, the data segments of the module is also
+     * 
+     * @todo add support for complex data-segment setup, where data-segments might have variable location and might be setup to different memory instances.
+     * 
      * @param  {WasmMemory|ImportedMemory} memory The memory for which to compute the initial memory.
      * @param  {Boolean} mutable [description]
      * @return {ArrayBuffer}         [description]
@@ -8792,6 +8789,10 @@ class WebAssemblyModule {
             let off = segment.inst.opcodes[0].value;
             let buf = segment._buffer;
             u8_memcpy(buf, 0, buf.byteLength, mem, off);
+            if (mutable) {
+                segment._mutableDataBuffer = mem;
+                segment._mutableDataOffset = off;
+            }
         }
 
         if (mutable) {
@@ -8903,7 +8904,6 @@ class WebAssemblyModule {
         let sections = this.sections;
         let len = sections.length;
         let buffers = [];
-        this._buffer = moduleBuffer;
 
         if (Array.isArray(options.exclude)) {
             let exclude = options.exclude;
@@ -8939,13 +8939,10 @@ class WebAssemblyModule {
         }
 
         let header = new Uint8Array(8);
-        let data = new DataView(header.buffer);
         buffers.push(header.buffer);
-        data.setUint8(0, 0x00); // \0asm
-        data.setUint8(1, 0x61);
-        data.setUint8(2, 0x73);
-        data.setUint8(3, 0x6D);
-        data.setUint32(4, 0x1, true);
+        header = new DataView(header.buffer);
+        header.setUint32(0, 0x6D736100, true);
+        header.setUint32(4, this._version, true);
 
         prepareModuleEncode(this);
 
@@ -8956,9 +8953,9 @@ class WebAssemblyModule {
             let type = section.type;
             if (excluded) {
                 //
-                if (type == SECTION_TYPE.DATA) {
+                if (type == SECTION_TYPE_DATA) {
                     let buf = new Uint8Array(3);
-                    buf[0] = SECTION_TYPE.DATA;
+                    buf[0] = SECTION_TYPE_DATA;
                     buf[1] = 1;
                     buf[2] = 0;
                     buffers.push(buf.buffer);
@@ -8976,9 +8973,10 @@ class WebAssemblyModule {
                     buffers.push(sub);
                 }
             } else {
-                let end = section.dataOffset + section.size;
+                console.log("section %o not handled!", section);
+                /*let end = section.dataOffset + section.size;
                 let sub = moduleBuffer.slice(section.offset, end);
-                buffers.push(sub);
+                buffers.push(sub);*/
             }
         }
 
@@ -9242,8 +9240,6 @@ function parseWebAssemblyBinary(buf) {
     }
 
     mod.sections = chunks;
-
-    console.log(mod);
 
     return mod;
 }
