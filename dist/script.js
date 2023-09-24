@@ -1311,222 +1311,259 @@ const atomic_op_replace_map = [
 		}
 	}, {
 		name: "atomic_load8",
+		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE12, 0, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_store8",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], null),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE19, 0, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_add8",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE20, 0, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_sub8",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE27, 0, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_and8",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE2E, 0, 0);
 			return true;
 		}
 	},{
 		name: "atomic_or8",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE35, 0, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_xor8",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE3C, 0, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_xchg8",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE43, 0, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_cmpxchg8",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE4A, 0, 0);
 			return true;
 		}
 	},  {
 		name: "atomic_load16",
+		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE13, 1, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_store16",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], null),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE1A, 1, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_add16",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE21, 1, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_sub16",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE28, 1, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_and16",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE2F, 1, 0);
 			return true;
 		}
 	},{
 		name: "atomic_or16",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE36, 1, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_xor16",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE3D, 1, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_xchg16",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE44, 1, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_cmpxchg16",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE4B, 0, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_load32",
+		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE10, 1, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_store32",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], null),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE17, 2, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_add32",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE1E, 2, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_sub32",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE25, 2, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_and32",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE2C, 2, 0);
 			return true;
 		}
 	},{
 		name: "atomic_or32",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE33, 2, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_xor32",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE3A, 2, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_xchg32",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE41, 2, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_cmpxchg32",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE48, 2, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_wait64",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64, WA_TYPE_I64], [WA_TYPE_I32]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE02, 3, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_load64",
+		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I64]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE11, 3, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_store64",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], null),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE18, 3, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_add64",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE1F, 3, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_sub64",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE26, 3, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_and64",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE2D, 3, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_or64",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE34, 3, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_xor64",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE3B, 3, 0);
 			return true;
 		}
 	}, {
 		name: "atomic_xchg64",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE42, 3, 0);
 			return true;
 		}
 	},{
 		name: "atomic_cmpxchg64",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64, WA_TYPE_I64], [WA_TYPE_I64]),
 		replace: function(inst, index, arr) {
 			arr[index] = new AtomicInst(0xFE49, 3, 0);
 			return true;
@@ -1540,15 +1577,19 @@ const atomic_op_replace_map = [
 // mapping of memcpy/memset into dedicated wasm instructions.
 const memory_op_replace_map = [{ 							// memory operations.
 		name: "memcpy",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: memcpyReplaceHandler
 	}, {
 		name: "__memcpy",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: memcpyReplaceHandler
 	}, {
 		name: "memcpy_early",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: memcpyReplaceHandler
 	}, {
 		name: "memset",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		// replacing memset vs. memory.fill is where it gets complicated, memset returns which the 
 		// memory.fill instruction does not. check for drop instruction but if not found we must fake
 		// the return of memset 
