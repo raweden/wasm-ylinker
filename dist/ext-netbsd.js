@@ -1,4 +1,6 @@
 
+const WASM_PAGE_SIZE = (1 << 16);
+
 /**
  * Generic Key-Value-Object container format for storing essential 
  *
@@ -125,10 +127,10 @@ function generateNetbsdWebAssembly(ctx, mod) {
 
 	{	
 		let glob = mod.getGlobalByName("__stack_pointer");
-		console.log("__stack_pointer = %d", name, glob.init[0].value);
+		console.log("__stack_pointer = %d", glob.init[0].value);
 		ctx.__stack_pointer = glob.init[0].value; // store it for later use.
 		glob = mod.getGlobalByName("lwp0");
-		console.log("lwp0 = %d", name, glob.init[0].value);
+		console.log("lwp0 = %d", glob.init[0].value);
 		ctx.lwp0 = glob.init[0].value; // store it for later use.
 	}
 
@@ -413,41 +415,6 @@ let _netbsdKernMainWorkflow = {
 				max: 1954,
 				shared: true,
 			}
-		}/*, {
-			action: "getGlobalInitialValue",
-			options: {
-				name: "__stack_pointer",
-				variable: "__stack_pointer"
-			}
-		}, {
-			action: "getGlobalInitialValue",
-			options: {
-				name: "thread0_st",
-				variable: "thread0_st"
-			}
-		}, {
-			action: "convertToImportedGlobal",
-			options: {
-				srcname: "__stack_pointer",
-				dstname: {
-					module: "kern",
-					name: undefined,
-				},
-				mutable: undefined,
-			}
-		}, {
-			action: "convertToImportedGlobal",
-			options: {
-				srcname: "__curthread",
-				dstname: {
-					module: "kern",
-					name: undefined,
-				},
-				mutable: undefined,
-			}
-		}*/, {
-			action: "generateModinfo",
-			options: undefined,
 		}, {
 			action: "generateNetbsdWebAssembly",
 			options: undefined,
@@ -469,89 +436,7 @@ let _netbsdKernMainWorkflow = {
 			options: {
 				names: ["__wasm_call_ctors", "__indirect_function_table", "global_start", "syscall", "syscall_trap"]
 			}
-		},/*{
-			action: "configureBindingTemplate",
-			options: {
-				format: "javascript",
-				handler: function (ctx, mod, text) {
-					const threadExp = /__curlwp:\s*new\s*WebAssembly\.Global\(\{[^}]*}\s*,\s*(\d{1,10})\)/gm;
-					const stackExp = /__stack_pointer:\s*new\s*WebAssembly\.Global\(\{[^}]*}\s*,\s*(\d{1,10})\)/gm;
-					const kenvExp = /const\s*kenv_addr\s*=\s*(\d{1,10});/gm;
-					const wabpExp = /const\s*wabp_addr\s*=\s*(\d{1,10});/gm;
-					const opfs_ext4_exp = /const\s*OPFS_EXT4_HEAD_ADDR\s*=\s*(\d{1,10});/gm;
-
-					let stack_pointer = ctx.__stack_pointer;
-					let lwp0 = ctx.lwp0;
-					let glob, kenv_addr, wabp_addr, opfs_ext4_head;
-					
-					glob = mod.getGlobalByName("static_kenv");
-					if (glob)
-						kenv_addr = glob.init[0].value;
-					
-					glob = mod.getGlobalByName("__static_wabp");
-					if (glob)
-						wabp_addr = glob.init[0].value;
-
-					glob = mod.getGlobalByName("opfs_ext4_head");
-					if (glob)
-						opfs_ext4_head = glob.init[0].value;
-
-					text = text.replace(threadExp, function(match, num, index) {
-						console.log(arguments);
-						let idx = match.lastIndexOf(num);
-						let before = match.substring(0, idx);
-						let after = match.substring(idx + num.length);
-						console.log("'%s' '%s'", before, after);
-						return before + lwp0.toString() + after;
-					});
-
-					text = text.replace(stackExp, function(match, num, index) {
-						console.log(arguments);
-						let idx = match.lastIndexOf(num);
-						let before = match.substring(0, idx);
-						let after = match.substring(idx + num.length);
-						console.log("'%s' '%s'", before, after);
-						return before + stack_pointer.toString() + after;
-					});
-
-					text = text.replace(kenvExp, function(match, num, index) {
-						if (kenv_addr === undefined)
-							return match;
-						console.log(arguments);
-						let idx = match.lastIndexOf(num);
-						let before = match.substring(0, idx);
-						let after = match.substring(idx + num.length);
-						console.log("'%s' '%s'", before, after);
-						return before + kenv_addr.toString() + after;
-					});
-
-					text = text.replace(wabpExp, function(match, num, index) {
-						if (wabp_addr === undefined)
-							return match;
-						console.log(arguments);
-						let idx = match.lastIndexOf(num);
-						let before = match.substring(0, idx);
-						let after = match.substring(idx + num.length);
-						console.log("'%s' '%s'", before, after);
-						return before + wabp_addr.toString() + after;
-					});
-
-					text = text.replace(opfs_ext4_exp, function(match, num, index) {
-						if (opfs_ext4_head === undefined) {
-							opfs_ext4_head = 0; // unset if driver head is not in our defined memory..
-						}
-						console.log(arguments);
-						let idx = match.lastIndexOf(num);
-						let before = match.substring(0, idx);
-						let after = match.substring(idx + num.length);
-						console.log("'%s' '%s'", before, after);
-						return before + opfs_ext4_head.toString() + after;
-					});
-
-					return text;
-				}
-			}
-		},*/ {
+		}, {
 			action: "output",
 			options: {
 				exclude: [{type: 0x0B}, 
@@ -614,7 +499,7 @@ function inspectNetBSDBinary(buf, mod) {
 
 }
 
-
+console.log("test print from ext-netbsd.js");
 
 const netbsd_ext = {
     name: "NetBSD Extension",
