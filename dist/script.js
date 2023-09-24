@@ -24,25 +24,6 @@ const WASM_PAGE_SIZE = (1 << 16);
 
 const moreIcon = `<svg aria-hidden="true" focusable="false" role="img" class="octicon octicon-kebab-horizontal" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="display: inline-block; user-select: none; vertical-align: text-bottom; overflow: visible;"><path d="M8 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM1.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm13 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path></svg>`;
 
-function u8_memcpy(src, sidx, slen, dst, didx) {
-    // TODO: remove this assert at later time. (should be a debug)
-    if (!(src instanceof Uint8Array) && (dst instanceof Uint8Array)) {
-        throw TypeError("src and dst Must be Uint8Array");
-    }
-    //console.log(src, dst);
-    let idx = sidx;
-    let end = idx + slen;
-    /*if (slen > 512) {
-        let subarr = src.subarray(idx, end);
-        dst.set(subarr, didx);
-        return;
-    }*/
-
-    while(idx < end) {
-        dst[didx++] = src[idx++];
-    }
-}
-
 function saveAsFile(buffer, filename, filetype) {
 	let resolveFn, rejectFn;
     let promise = new Promise(function(resolve, reject){
@@ -390,6 +371,9 @@ let _workflowSelectElement;
 let importIsModified = false;
 let moduleBuffer;
 let targetModule;
+let _activeFlowContext;
+let _flowContexts = [];
+
 
 
 let _workflowActions = {
@@ -476,7 +460,7 @@ function getWorkflowParameterValues() {
 	return obj;
 }
 
-function runWorkflowActions(mod, actions, ctxmap, params) {
+function runWorkflowActions(mod, actions, workflowCtx, params) {
 
 	/*
 	let len = actions.length;
@@ -515,19 +499,14 @@ function runWorkflowActions(mod, actions, ctxmap, params) {
 		for (let i = index; i < actions.length; i++) {
 			let ret;
 			actionData = actions[i];
-			if (ctxmap && ctxmap.has(actionData)) {
-				ctx = ctxmap.get(actionData);
-			} else {
-				ctx = null;
-			}
 			let name = actionData.action;
 			let action = _workflowActions[name];
 			let fn = action.handler;
 			let options = typeof actionData.options == "object" && actionData.options !== null ? actionData.options : undefined;
 			if (options) {
-				ret = fn(defaultContext, mod, options);
+				ret = fn(workflowCtx, mod, options);
 			} else {
-				ret = fn(defaultContext, mod);
+				ret = fn(workflowCtx, mod);
 			}
 			if (ret instanceof Promise) {
 				returnPromise = ret;
@@ -804,41 +783,10 @@ function extractDataSegmentsAction(ctx, mod, options) {
 
 	if (options.format == "wasm") {
 		// there might be more modules that are required at minimum.
-		let buffers = [];
-		let off = 0;
-		let buf = new Uint8Array(8);
-		let data = new DataView(buf.buffer);
-		buffers.push(buf.buffer);
-		data.setUint8(0, 0x00); // \0asm
-		data.setUint8(1, 0x61);
-		data.setUint8(2, 0x73);
-		data.setUint8(3, 0x6D);
-		data.setUint32(4, 0x1, true);
-		buf = new Uint8Array(15);
-		data = new DataView(buf.buffer);
-		buffers.push(buf.buffer);
-		// types 0x01 		(write empty)
-		data.setUint8(off++, 0x01);
-		data.setUint8(off++, 0x01);
-		data.setUint8(off++, 0x00);
-		// funcs 0x03 		(write empty)
-		data.setUint8(off++, 0x03);
-		data.setUint8(off++, 0x01);
-		data.setUint8(off++, 0x00);
-		// tables 0x04 		(write empty)
-		data.setUint8(off++, 0x04);
-		data.setUint8(off++, 0x01);
-		data.setUint8(off++, 0x00);
-		// mems 0x05 		(write empty)
-		data.setUint8(off++, 0x05);
-		data.setUint8(off++, 0x01);
-		data.setUint8(off++, 0x00);
-		// globals 0x06 	(write empty)
-		data.setUint8(off++, 0x06);
-		data.setUint8(off++, 0x01);
-		data.setUint8(off++, 0x00);
+		let buffers;
 
 		let tmod = new WebAssemblyModule();
+		tmod._version = tmod._version;
 		tmod.types = [];
 		tmod.functions = [];
 		tmod.tables = [];
@@ -899,7 +847,7 @@ function extractDataSegmentsAction(ctx, mod, options) {
 			}, rejectFn);
 		}, rejectFn);*/
 
-		let file = ctx["initial-data"];
+		let file = ctx.getVariable("initial-data");
 
 		if (file && file instanceof FileSystemFileHandle) {
 
@@ -923,7 +871,7 @@ function extractDataSegmentsAction(ctx, mod, options) {
 			name = name.join(".");
 			name += ".data.wasm";
 			file = new File(buffers, name, { type: "application/wasm" });
-			ctx["initial-data"] = file;
+			ctx.getVariable("initial-data", file);
 			resolveFn(file);
 		}
 		
@@ -1002,8 +950,11 @@ function outputAction(ctx, mod, options) {
 		}
 	}
 
-	let magic = moduleBuffer.slice(0, 8);
-	buffers.push(magic);
+	let header = new Uint8Array(8);
+    buffers.push(header.buffer);
+    header = new DataView(header.buffer);
+    header.setUint32(0, 0x6D736100, true);
+    header.setUint32(4, mod._version, true);
 
 	prepareModuleEncode(mod);
 
@@ -1046,7 +997,7 @@ function outputAction(ctx, mod, options) {
 		rejectFn = reject;
 	});
 
-	let file = ctx["wasm-binary"];
+	let file = ctx.output;
 
 	if (file && file instanceof FileSystemFileHandle) {
 
@@ -1065,7 +1016,7 @@ function outputAction(ctx, mod, options) {
 
 	} else {
 		file = new File(buffers, targetFilename, { type: "application/wasm" });
-		ctx["wasm-binary"] = file;
+		ctx.setVariable("wasm-binary", file);
 		resolveFn(file);
 	}
 
@@ -1111,7 +1062,7 @@ function configureBindingTemplateAction(ctx, mod, options) {
 
 	let bindingsFile = null;
 
-	let handle = ctx["script"];
+	let handle = ctx.getVariable("script");
 
 	if (handle === undefined || !(handle instanceof FileSystemFileHandle)) {
 		rejectFn(new TypeError("bindings file must be provided for configureBindingTemplateAction()"));
@@ -2538,11 +2489,48 @@ function setupUI() {
 		}
 
 		let ctxmap = null;
+		console.log(_activeFlowContext);
 		let options = getWorkflowParameterValues();
 
+		let _input = _activeFlowContext.input;
+		let _output = _activeFlowContext.output;
+		let _wasmModule = _activeFlowContext.module;
+
+		if (!_output && _activeFlowContext.params.hasOwnProperty("wasm-binary")) {
+			_output = _activeFlowContext.params["wasm-binary"];
+		}
+	
+		let _vars = Object.assign({}, _activeFlowContext.params);
+		let workflowCtx = {
+			id: _workflowActive.id,
+			module: _wasmModule,
+			setVariable: function(name, value) {
+				_vars[name] = value;
+			},
+			getVariable: function(name) {
+				if (_vars.hasOwnProperty(name)) {
+					return _vars[name];
+				}
+	
+				return undefined;
+			}
+		};
+	
+		Object.defineProperty(workflowCtx, "input", {
+			get: function() {
+				return _input;
+			}
+		});
+	
+		Object.defineProperty(workflowCtx, "output", {
+			get: function() {
+				return _output;
+			}
+		});
+
 		//storeRecentWorkflowInDB(_workflowActive.id, options);
-		runWorkflowActions(flow.module, _workflowActive.actions, ctxmap, options.params).then(function(res) {
-			populateWebAssemblyInfo(flow.module);
+		runWorkflowActions(workflowCtx.module, _workflowActive.actions, workflowCtx, options.params).then(function(res) {
+			populateWebAssemblyInfo(workflowCtx.module);
 			console.log("workflow did complete");
 		}, function (err) {
 			console.error(err);
@@ -3926,6 +3914,8 @@ class WasmTablesInspectorView {
 		let ylen = tables.length;
 		for (let y = 0; y < ylen; y++) {
 			let table = tables[y];
+			if (table instanceof ImportedTable)
+				continue;
 			let vector = table.contents;
 			let xlen = vector.length;
 			for (let x = 0; x < xlen; x++) {
@@ -4233,7 +4223,13 @@ function filesFromDataTransfer(dataTransfer) {
 		for (let i = 0; i < len; i++) {
 			let item = dataTransfer.items[i];
 			if (item.kind == "file") {
-				let file = item.getAsFile();
+				let file;
+				if (typeof item.getAsFileSystemHandle == "function") {
+					file = item.getAsFileSystemHandle();
+				} else {
+					file = item.getAsFile();
+				}
+				
 				files.push(file);
 			}
 		}
@@ -4254,6 +4250,8 @@ class WorkflowUIFilePicker {
 
 	constructor() {
 
+		this._isDefaultInput = false;
+		this._isDefaultOutput = false;
 		let _self = this;
 		let element = document.createElement("li");
 		element.classList.add("workflow-action", "workflow-param-file");
@@ -4307,6 +4305,16 @@ class WorkflowUIFilePicker {
 					console.warn("should apply logics for sorting out multiple files");
 				}
 
+				if (_self.context) {
+					if (_self._isDefaultInput) {
+						_self.context.input = file;
+					} else if (_self._isDefaultInput) {
+						_self.context.output = file;
+					} else if (typeof _self._paramName == "string" && _self._paramName.length > 0) {
+						_self.context.params[_self._paramName] = file;
+					}
+				}
+
 				_fileViews.set(file, _self);
 
 				this._file = file;
@@ -4332,21 +4340,36 @@ class WorkflowUIFilePicker {
 
 		element.addEventListener("drop", (evt) => {
 
+			let _self = this;
 			let files = filesFromDataTransfer(evt.dataTransfer);
 			if (files.length == 0) {
-				event.preventDefault();
+				evt.preventDefault();
 				return;
 			}
- 
-			findInputFiles(files);
 
-			nameText.textContent = files[0].name;
-			sizeText.textContent = humanFileSize(files[0].size, true);
-			appendFiles(files);
-			_fileViews.set(file, _self);
-			this._file = files[0];
+			Promise.all(files).then(function(files) {
+				
+				let file = files[0];
+				if (_self.context) {
+					if (_self._isDefaultInput) {
+						_self.context.input = file;
+					} else if (_self._isDefaultInput) {
+						_self.context.output = file;
+					} else if (typeof _self._paramName == "string" && _self._paramName.length > 0) {
+						_self.context.params[_self._paramName] = file;
+					}
+				}
 
-			event.preventDefault();
+				nameText.textContent = files[0].name;
+				//sizeText.textContent = humanFileSize(files[0].size, true);
+				appendFiles(files);
+				
+				_fileViews.set(file, _self);
+				_self._file = files[0];
+			
+			}, console.error);
+
+			evt.preventDefault();
 		});
 
 		this._element = element;
@@ -4418,7 +4441,7 @@ function tryMigrateWorkflowParams(oldWorkflow, newWorkflow) {
 
 }
 
-function setupWorkflowUIForTarget(newWorkflow, wasmBinary, wasmSymbolDump) {
+function setupWorkflowUIForTarget(newWorkflow, wasmBinary, wasmSymbolDump, workflowCtx) {
 
 	let container = document.querySelector("ul.workflow-ui");
 	let workflow;
@@ -4457,13 +4480,16 @@ function setupWorkflowUIForTarget(newWorkflow, wasmBinary, wasmSymbolDump) {
 	_workflowParamViews = {};
 
 	let srcfileView = new WorkflowUIFilePicker();
+	srcfileView.context = workflowCtx;
 	srcfileView.role = "Source";
+	srcfileView._isDefaultInput = true;
 	let label = srcfileView.element.querySelector(".action-body .filename");
 	label.textContent = wasmBinary.name;
 	label = srcfileView.element.querySelector(".action-body .filesize");
 	label.textContent = humanFileSize(wasmBinary.size, true);
 	container.appendChild(srcfileView.element);
 	_fileViews.set(wasmBinary, srcfileView);
+	_activeFlowContext = workflowCtx;
 
 	let actions = workflow.actions;
 	let ylen = actions.length;
@@ -4482,11 +4508,15 @@ function setupWorkflowUIForTarget(newWorkflow, wasmBinary, wasmSymbolDump) {
 				let param = params[x];
 				if (param.type == "file") {
 					let view = new WorkflowUIFilePicker();
+					view.context = workflowCtx;
 					view.paramName = param.name;
 					view.types = param.types;
 					container.appendChild(view.element);
 					_workflowParamViews[param.name] = view;
 					_workflowParameters.push(param);
+					if (param.isdefaultoutput) {
+						view._isDefaultOutput = true;
+					}
 				}
 			}
 		}
@@ -4605,14 +4635,18 @@ function setupTargetPanel(container) {
 
 		let files = filesFromDataTransfer(evt.dataTransfer);
 		if (files.length == 0) {
-			event.preventDefault();
+			evt.preventDefault();
 			return;
 		}
 
-		findInputFiles(files);
-		appendFiles(files);
+		Promise.all(files).then(function(files) {
+			
+			findInputFiles(files);
+			appendFiles(files);
+		
+		}, console.error);
 
-		event.preventDefault();
+		evt.preventDefault();
 	});
 
 	// output data
@@ -4780,7 +4814,10 @@ function findInputFiles(files) {
 	let len = files.length;
 	for (let i = 0; i < len; i++) {
 		let file = files[i];
-		if (file.type == "application/wasm") {
+		if (file.kind != "file")
+			continue;
+		
+		if (file.name.endsWith(".wasm")) {	// application/wasm
 			wasmFiles.push({binary: file });
 		} else if (file.name.endsWith(".symbols")) {
 			hasSymbolFile = true;
@@ -4798,7 +4835,7 @@ function findInputFiles(files) {
 		let xlen = wasmFiles.length;
 		for (let x = 0; x < xlen; x++) {
 			let f2 = wasmFiles[x].binary;
-			let n2 = file.name;
+			let n2 = f2.name;
 			let prefix = n2.split(".");
 			prefix.pop();
 			prefix = prefix.join(".");
@@ -4815,17 +4852,18 @@ function findInputFiles(files) {
 		let file = wasmFiles[0].binary;
 		targetFilename = file.name;
 		//loadWebAssemblyBinary(buf);
-		loadFilePairs(wasmFiles[0].binary, wasmFiles[0].symbolMapFile).then(function(res) {
+		let options = {params: {}};
+		options.input = wasmFiles[0].binary;
+		if (wasmFiles[0].symbolMapFile) {
+			options.symbolsFile = wasmFiles[0].symbolMapFile;
+		}
+		loadFilePairs(wasmFiles[0].binary, wasmFiles[0].symbolMapFile, options).then(function(res) {
 			if (file.name == "kern.wasm") {
 				//postOptimizeWasm(targetModule);
 				//postOptimizeFreeBSDKernMainAction(null, targetModule, {});
 				inspectFreeBSDBinary(moduleBuffer, targetModule);
-			} else if (file.name == "netbsd-kern.wasm") {
-				//postOptimizeWasm(targetModule);
-				//postOptimizeFreeBSDKernMainAction(null, targetModule, {});
-				inspectNetBSDBinary(moduleBuffer, targetModule);
 			}
-			setupWorkflowUIForTarget(null, wasmFiles[0].binary, wasmFiles[0].symbolMapFile);
+			setupWorkflowUIForTarget(null, wasmFiles[0].binary, wasmFiles[0].symbolMapFile, options);
 		});
 		_openFiles = [{role: "input", kind: "wasm-binary", file: wasmFiles[0].binary}];
 		if (wasmFiles[0].symbolMapFile) {
@@ -4838,13 +4876,19 @@ function findInputFiles(files) {
 
 }
 
-async function loadFilePairs(binary, symbolMapFile) {
-	let buf1 = await binary.arrayBuffer();
+async function loadFilePairs(binary, symbolMapFile, options) {
+	let file;
+	if (binary instanceof FileSystemFileHandle) {
+		file = await binary.getFile();
+	}
+	let buf1 = await file.arrayBuffer();
 	let buf2;
-	if (symbolMapFile)
+	if (symbolMapFile && symbolMapFile instanceof FileSystemFileHandle) {
+		file = await symbolMapFile.getFile();
 		buf2 = await symbolMapFile.text();
+	}
 
-	return loadWebAssemblyBinary(buf1, buf2) 
+	return loadWebAssemblyBinary(buf1, buf2, options) 
 }
 
 const flow = {};
@@ -5432,14 +5476,14 @@ function mapGlobalsUsage(mod) {
 	console.log(locations);
 }
 
-function loadWebAssemblyBinary(buf, symbolsTxt) {
+function loadWebAssemblyBinary(buf, symbolsTxt, context) {
 	moduleBuffer = buf;
 	let mod = parseWebAssemblyBinary(buf);
 	showWasmInfoStats(mod, mod.sections);
 
 	console.log(mod);
 
-	flow.module = mod;
+	context.module = mod;
 
 	if (symbolsTxt) {
 		processSymbolsMap(mod, symbolsTxt);
