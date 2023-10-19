@@ -1964,6 +1964,7 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 function filterModuleExports(ctx, mod, options) {
 
 	let callback, names, regexps;
+	let keptnames = [];
 	if (typeof options.callback == "function") {
 		callback = options.callback;
 	} else if (Array.isArray(options.names)) {
@@ -1991,7 +1992,10 @@ function filterModuleExports(ctx, mod, options) {
 			keep = callback(exp);
 		} else {
 			let name = exp.name;
-			keep = names.indexOf(exp.name) !== -1;
+			keep = names.indexOf(name) !== -1;
+			if (keep && keptnames.indexOf(name) == -1) {
+				keptnames.push(name);
+			}
 			if (keep === false && regexps) {
 				let ylen = regexps.length;
 				for(let i = 0;i < ylen;i++){
@@ -2011,7 +2015,33 @@ function filterModuleExports(ctx, mod, options) {
 		} else {
 			idx++;
 		}
+	}
 
+	let notfound = [];
+	len = names.length;
+	for (let i = 0; i < len; i++) {
+		let name = names[i];
+		if (typeof name != "string")
+			continue;
+		if (keptnames.indexOf(name) == -1 && notfound.indexOf(name) == -1)
+			notfound.push(name);
+	}
+
+	let functions = mod.functions;
+	let ylen = functions.length;
+	len = notfound.length;
+	for (let i = 0; i < len; i++) {
+		let name = notfound[i];
+
+		for (let y = 0; y < ylen; y++) {
+			let func = functions[y];
+			if (func[__nsym] == name) {
+				let exp = new ExportedFunction();
+				exp.name = name;
+				exp.function = func;
+				exps.push(exp);
+			}
+		}
 	}
 }
 
@@ -4470,7 +4500,8 @@ let _userBinaries = ["init.wasm", "sh.wasm", "zsh.wasm", "awk.wasm", "ee.wasm", 
 					 "mv.wasm", "ps.wasm", "pwd.wasm", "realpath.wasm", "rm.wasm", "rmdir.wasm", "sleep.wasm",
 					 "touch.wasm", "file.wasm", "ls.wasm", "syslogd.wasm"];
 function isUserBinary(name) {
-	return _userBinaries.indexOf(name) !== -1;
+	let lc = name.toLowerCase();
+	return lc.indexOf("kern") == -1 && lc.indexOf("tinybsd") == -1 && lc.indexOf("netbsd") == -1;
 }
 
 function autoSelectWorkflow(files) {
@@ -4489,12 +4520,15 @@ function setupWorkflowUIForTarget(newWorkflow, wasmBinary, wasmSymbolDump, workf
 
 	if (!newWorkflow) {
 
-		if (targetFilename == "kern.wasm") {
-			workflow = globalApp.workflowById("tinybsd_14_0.kern-main-binary");
-		} else if (targetFilename == "netbsd-kern.wasm") {
-			workflow = globalApp.workflowById("netbsd_10.kern-main-binary");
-		} else if (isUserBinary(targetFilename)) {
-			workflow = globalApp.workflowById("netbsd_10.user-binary+emul-fork");
+		if (wasmBinary) {
+			let fname = wasmBinary.name;
+			if (fname == "kern.wasm") {
+				workflow = globalApp.workflowById("tinybsd_14_0.kern-main-binary");
+			} else if (fname == "netbsd-kern.wasm") {
+				workflow = globalApp.workflowById("netbsd_10.kern-main-binary");
+			} else if (isUserBinary(fname)) {
+				workflow = globalApp.workflowById("netbsd_10.user-binary+emul-fork");
+			}
 		}
 
 	} else {
@@ -4926,7 +4960,7 @@ async function loadFilePairs(binary, symbolMapFile, options) {
 	let buf2;
 	if (symbolMapFile && symbolMapFile instanceof FileSystemFileHandle) {
 		file = await symbolMapFile.getFile();
-		buf2 = await symbolMapFile.text();
+		buf2 = await file.text();
 	}
 
 	return loadWebAssemblyBinary(buf1, buf2, options) 
@@ -5066,7 +5100,7 @@ setupMainUI();
 
 function processSymbolsMap(mod, txt) {
 
-	let map = new Map();
+	let functions = mod.functions;
 	let len = txt.length;
 	let idx = 0;
 	while (idx < len) {
@@ -5085,12 +5119,9 @@ function processSymbolsMap(mod, txt) {
 			name = txt.substring(idx);
 			idx = len;
 		}
-		map.set(num, name);
+		let fn = functions[num];
+		fn[__nsym] = name;
 	}
-
-	console.log(map);
-	mod.names = {};
-	mod.names.functions = map;
 }
 
 
