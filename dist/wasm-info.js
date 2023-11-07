@@ -129,6 +129,29 @@ function UTF8ArrayToString(heap, idx, maxBytesToRead) {
     return str;
 }
 
+function ASCIIArrayToString(buf, off, maxBytesToRead) {
+    let str = "";
+    let end = off + maxBytesToRead;
+    while(off < end) {
+        let chr = buf[off++];
+        str += String.fromCharCode(chr);
+    }
+
+    return str;
+}
+
+function ASCIICStringToString(buf, off) {
+    let str = "";
+    while(true) {
+        let chr = buf[off++];
+        if (chr == 0x00)
+            break;
+        str += String.fromCharCode(chr);
+    }
+
+    return str;
+}
+
 // Base Classes
 
 class WebAssemblySection {
@@ -754,8 +777,79 @@ class ReThrowInst extends Inst {
         super(opcode);
     }
 }
+/**
+ * Returns the index range of opcodes that make up the given pull-index.
+ */
+function rangeAtPullIndex(fn, instructions, fromIndex, pullIndex) {
+    let pullcnt = pullIndex;
+    let pushcnt = 0;
+    let count = -1;
+
+    let wasZero, first, last;
+
+    let i = fromIndex;
+    let ylen = pullIndex + 1;
+    for (let y = 0; y < ylen; y++) {
+        let islast = y == pullIndex;
+        count = -1;
+        if (islast)
+            last = instructions[i];
+
+        while (count != 0) {
+
+            let inst = instructions[i--];
+            let opcls = opclsmap.get(inst.opcode);
+            let pullv, pushv;
+            if (typeof opcls.push == "function") {
+                pushv = opcls.push(fn, inst);
+            } else {
+                pushv = opcls.push;
+            }
+
+            if (pushv == WA_TYPE_I32 || pushv == WA_TYPE_I64 || pushv == WA_TYPE_F32 || pushv == WA_TYPE_F64 || pushv == WA_TYPE_V128  || pushv == WA_TYPE_NUMRIC  || pushv == WA_TYPE_ANY) {
+                count++;
+            }
+
+            if (Array.isArray(pushv)) {
+                debugger;
+            }
+
+            if (count == 0)
+                wasZero = true;
+
+            if (typeof opcls.pull == "function") {
+                pullv = opcls.pull(fn, inst);
+            } else {
+                pullv = opcls.pull;
+            }
+
+            if (Array.isArray(pullv)) {
+                count -= pullv.length;
+            } else if (pullv && pullv != WA_TYPE_VOID) {
+                count--;
+            }
+
+            if (islast && wasZero && inst.opcode == 0x22 && count == -1) {
+                first = inst;
+                break;
+            }
+
+            if (islast && count == 0) {
+                first = inst;
+                break;
+            }
+        }
+    }
+
+    //console.log("first: %o", first);
+    //console.log("last: %o", last);
+
+    return {start: instructions.indexOf(first), end: instructions.indexOf(last)};
+}
+
 
 /**
+ * @TODO remove this function
  * walks the bytecode backwards to find the instruction which is the nearest instruction that would end up at position.
  * For example finding the memory address for a i32.store, it takes into account that stack might have been used in instruction
  * or a tree of instruction prior. This by counting push & pull to the stack from instructions.
@@ -764,9 +858,11 @@ class ReThrowInst extends Inst {
  * @param  {Array}   instructions [description]
  * @param  {integer}   fromIndex    The index to start from, should be the index directly prior to the instruction which consumes the values.
  * @param  {integer}   relative     The signatures are in reverse, so for example src in memory.copy would be at position 2.
- * @return {Instruction}                [description]
+ * @param  {Boolean}   captureRange Satisfies the pullv array of inst range that results in the instruction that ends up at the relative index.
+ * @return {Instruction|Range}                [description]
  */
-function traverseStack(fn, instructions, fromIndex, relative) {
+function traverseStack(fn, instructions, fromIndex, relative, captureRange) {
+
     let count = -1;
     for (let i = fromIndex; i >= 0; i--) {
         let inst = instructions[i];
@@ -1849,7 +1945,7 @@ class WebAssemblyInstructionSet {
 
 // https://webassembly.github.io/spec/core/binary/instructions.html#binary-expr
 // https://webassembly.github.io/spec/core/appendix/index-instructions.html
-function decodeByteCode(data, mod, locals) {
+function decodeByteCode(data, mod, locals, reloc) {
     
     let start = data.offset;
     let brk = false;
@@ -1861,9 +1957,11 @@ function decodeByteCode(data, mod, locals) {
     let tables = mod.tables;
     let types = mod.types;
     let locend = locals ? locals.length - 1 : 0;
+    let rloc = undefined;
 
     while(brk == false) {
         let op_code = data.readUint8();
+        rloc = data.offset;
         switch (op_code) {
             case 0x00: // unreachable
                 opcodes.push(new UnreachableInst());
@@ -2020,7 +2118,9 @@ function decodeByteCode(data, mod, locals) {
             case 0x10: // call          [t1] -> [t2]
             {
                 let funcidx = data.readULEB128();
-                opcodes.push(new CallInst(op_code, functions[funcidx]));
+                let fn = functions[funcidx];
+                opcodes.push(new CallInst(op_code, fn));
+                fn._usage++;
                 break;
             }
             case 0x11: // call_indirect [t1 i32] -> [t2]
@@ -2152,6 +2252,8 @@ function decodeByteCode(data, mod, locals) {
             case 0x3e: // i64.store32       [i32] -> []
             {
                 let a = data.readULEB128();
+                if (reloc)
+                    rloc = data.offset;
                 let o = data.readULEB128();
                 opcodes.push({opcode: op_code, offset: o, align: a});
                 break;
@@ -2835,6 +2937,8 @@ function decodeByteCode(data, mod, locals) {
                     case 0x4E: // i64.atomic.rmw32.cmpxchg_u m  [i32 i64 i64] -> [i64]
                     {
                         let a = data.readULEB128();
+                        if (reloc)
+                            rloc = data.offset;
                         let o = data.readULEB128();
                         opcodes.push({opcode: (op_code << 8) | sub, offset: o, align: a});
                         break;
@@ -2849,6 +2953,9 @@ function decodeByteCode(data, mod, locals) {
                 brk = true;
                 break;
         }
+
+        if (reloc)
+            topInsts[topInsts.length - 1]._roff = rloc;
     }
 
     return {start: start, end: data.offset, opcodes: topInsts};
@@ -4570,7 +4677,7 @@ class WasmTable {
 class WasmFunction {
 
     constructor() {
-
+        this._usage = 0;
     }
 };
 
@@ -4601,11 +4708,12 @@ class WasmType {
 
         if (argc != 0) {
 
-            if (!Array.isArray(type1.retv) || !Array.isArray(type2.retv))
-                throw new Error("type inconsistency");
-
             let a1 = type1.argv;
             let a2 = type2.argv;
+
+            if (!Array.isArray(a1) || !Array.isArray(a2)) {
+                throw new Error("type inconsistency");
+            }
 
             for (let x = 0; x < argc; x++) {
                 if (a1[x] !== a2[x]) {
@@ -4792,6 +4900,7 @@ class ImportedFunction {
         this.module = undefined;
         this.name = undefined;
         this.type = undefined;
+        this._usage = 0;
     }
 };
 
@@ -4802,6 +4911,7 @@ class ImportedTable {
         this.name = undefined;
         this.min = null;
         this.max = null;
+        this._usage = 0;
     }
 };
 
@@ -4813,6 +4923,7 @@ class ImportedMemory {
         this.min = null;
         this.max = null;
         this.shared = false;
+        this._usage = 0;
     }
 };
 
@@ -4823,6 +4934,16 @@ class ImportedGlobal {
         this.name = undefined;
         this.type = undefined;
         this.mutable = false;
+        this._usage = 0;
+    }
+
+    static create(module, name, type, mutable) {
+        let imp = new ImportedGlobal();
+        imp.module = module;
+        imp.name = name;
+        imp.type = type;
+        imp.mutable = mutable === true ? true : false;
+        return imp;
     }
 };
 
@@ -4832,6 +4953,7 @@ class ImportedTag {
         this.module = undefined;
         this.name = undefined;
         this.type = undefined;
+        this._usage = 0;
     }
 };
 
@@ -5170,7 +5292,6 @@ class WebAssemblyFunctionSection extends WebAssemblySection {
             type.count++;
             functions.push(fn);
         }
-        console.log("function vector count: %d", cnt);
 
         return new WebAssemblyFunctionSection(module);
     }
@@ -5267,9 +5388,6 @@ class WebAssemblyTableSection extends WebAssemblySection {
             vector.push(table);
         }
 
-        console.log("table vector count: %d", cnt);
-        console.log(tables);
-
         return new WebAssemblyTableSection(module);
     }
 }
@@ -5354,7 +5472,6 @@ class WebAssemblyTagSection extends WebAssemblySection {
             tags.push(tag);
         }
 
-        console.log("table vector count: %d", cnt);
         console.log(tags);
 
         return new WebAssemblyTagSection(module);
@@ -5482,9 +5599,6 @@ class WebAssemblyMemorySection extends WebAssemblySection {
             }
             vector.push(mem);
         }
-
-        console.log("memory vector count: %d", cnt);
-        console.log(vector);
 
         return new WebAssemblyMemorySection(module);
     }
@@ -5685,9 +5799,11 @@ class WebAssemblyExportSection extends WebAssemblySection {
 
             if (type == 0x00) {
                 let exp = new ExportedFunction();
+                let func = module.functions[idx];
                 exp.name = name;
-                exp.function = module.functions[idx];
+                exp.function = func;
                 vector.push(exp);
+                func._usage++;
             } else if (type == 0x01) {
                 let exp = new ExportedTable();
                 exp.name = name;
@@ -5707,7 +5823,7 @@ class WebAssemblyExportSection extends WebAssemblySection {
                 console.warn("export of type %d is not supported", type);
             }
         }
-        console.log("export vector count: %d", cnt);
+
         //console.log(results);
         //console.log(vector);
 
@@ -5752,8 +5868,7 @@ class WebAssemblyStartSection extends WebAssemblySection {
         let funcidx = data.readULEB128();
         let func = mod.functions[funcidx];
         mod.startfn = func;
-        console.log("start section entry-fn-idx: %d", funcidx);
-
+        
         return new WebAssemblyStartSection(module);
     }
 }
@@ -5849,7 +5964,7 @@ class WebAssemblyElementSection extends WebAssemblySection {
                     console.log(expr);
                     throw new TypeError("only static offset expressions supported ATM");
                 }
-                console.log(expr);
+
                 let vlen = data.readULEB128();
                 let tableidx = 0;
                 let table;
@@ -5866,6 +5981,7 @@ class WebAssemblyElementSection extends WebAssemblySection {
                     let fn = functions[funcidx];
                     table[idx++] = fn;
                     vec.push(fn);
+                    fn._usage++;
                 }
 
                 let element = new WasmElementSegment();
@@ -5936,6 +6052,8 @@ class WebAssemblyCodeSection extends WebAssemblySection {
         let sec_sz = 0;
         let buffers = [];
         let modcnt = 0;
+        let wcb = options.write_callback;
+        let has_wcb = typeof wcb == "function";
 
         for (let i = start; i < len; i++) {
             let func = funcvec[i];
@@ -6026,18 +6144,17 @@ class WebAssemblyCodeSection extends WebAssemblySection {
         data.writeULEB128(cnt);
         buffers.unshift(header);
 
-        console.log("encoded %d of which %d where modified", cnt, modcnt);
-
         return buffers;
     }
 
-    static decode(module, data, size) {
+    static decode(module, data, size, options) {
         
         let end = data.offset + size;
         let cnt = data.readULEB128();
         let idx = 0;
         let functions = module.functions;
         let start = 0;
+        let reloc = options.linking === true;
 
         // first lets find where the our first non-import appears.
         for (let i = 0; i < functions.length; i++) {
@@ -6082,11 +6199,10 @@ class WebAssemblyCodeSection extends WebAssemblySection {
                     _locals.push(local);
                 }
             }
-            if (data.offset == 32549)
-                console.log("debug here!");
+
             let opcode_start = data.offset;
             let opcode_end = tmp + bytesz;
-            let opcodes = decodeByteCode(data, module, _locals);
+            let opcodes = decodeByteCode(data, module, _locals, reloc);
             
             func.narg = type.argc;
             func.locals = _locals;
@@ -6097,7 +6213,6 @@ class WebAssemblyCodeSection extends WebAssemblySection {
             func.opcodes = opcodes.opcodes;
             data.offset = opcode_end;
         }
-        console.log("code vector count: %d", cnt);
 
         return new WebAssemblyCodeSection(module);
     }
@@ -6273,8 +6388,6 @@ class WebAssemblyDataSection extends WebAssemblySection {
                 break;
             }
         }
-        console.log("data vector count: %d", cnt);
-        console.log(segments);
 
         return new WebAssemblyDataSection(module);
     }
@@ -6534,7 +6647,6 @@ class WebAssemblyCustomSectionProducers extends WebAssemblyCustomSection {
     static decode(module, data, size) {
 
         let count = data.readULEB128();
-        console.log("count: %d", count);
         let fields = {};
         for (let i = 0; i < count; i++) {
             let namesz = data.readULEB128();
@@ -6555,8 +6667,6 @@ class WebAssemblyCustomSectionProducers extends WebAssemblyCustomSection {
             }
             fields[fname] = values;
         }
-
-        console.log(fields);
 
         let section = new WebAssemblyCustomSectionProducers(module);
         section.data = fields;
@@ -6979,7 +7089,6 @@ class WebAssemblyCustomSectionName extends WebAssemblyCustomSection {
             sectionIds.push(id);
             if (id == 0x01) { // function names: vec(nameassoc)
 
-                //console.log("id %d size: %d", id, subsz);
                 let functions = module.functions;
                 let cnt = data.readULEB128();
                 for (let i = 0; i < cnt; i++) {
@@ -6990,7 +7099,6 @@ class WebAssemblyCustomSectionName extends WebAssemblyCustomSection {
                     func[__nsym] = name;
                 }
 
-                //console.log(map);
                 data.offset = substart + subsz;
 
             } else if (id == 0x00) { // module name
@@ -7136,6 +7244,295 @@ class WebAssemblyCustomSectionName extends WebAssemblyCustomSection {
         return typeof obj[__nsym] == "string";
     }
 }
+
+// clang & wasm-ld modules
+
+const WASM_SYM_BINDING_WEAK = 0x01;
+const WASM_SYM_BINDING_LOCAL = 0x02;
+const WASM_SYM_VISIBILITY_HIDDEN = 0x04;
+const WASM_SYM_UNDEFINED = 0x10;
+const WASM_SYM_EXPORTED = 0x20;
+const WASM_SYM_EXPLICIT_NAME = 0x40;
+const WASM_SYM_NO_STRIP = 0x80;
+const WASM_SYM_TLS = 0x100;
+const WASM_SYM_ABSOLUTE = 0x200;
+const WASM_SYM_EXTERNAL = 0x400; // not standard.
+
+class LinkerSymbol {
+
+    constructor () {
+        this.kind = undefined;
+        this.name = undefined;
+        this.flags = 0;
+    }
+}
+
+class WebAssemblyCustomSectionLinker extends WebAssemblyCustomSection {
+
+    constructor(module) {
+        super(module, "linking");
+    }
+
+    encode(options) {
+
+        throw new ReferenceError("encoding linker section not supported");
+    }
+
+    static decode(module, data, size) {
+
+        let segments;
+        let ctors;
+        let comdat;
+        let symtable;
+
+        let end = data.offset + size;
+        let version = data.readULEB128();
+        console.log("version: %d", version);
+        let subsections = [];
+        while (data.offset < end) {
+            let type = data.readUint8();
+            let payload_len = data.readULEB128();
+            let start = data.offset;
+            if (type == 0x05) {
+                // WASM_SEGMENT_INFO
+                segments = [];
+                let count = data.readULEB128();
+                for (let i = 0; i < count; i++) {
+                    let nlen = data.readULEB128();
+                    let name = data.readUTF8Bytes(nlen);
+                    let alignment = data.readULEB128();
+                    let flags = data.readULEB128();
+                    segments.push({name: name, name_len: nlen, alignment: alignment, bitflags: flags});
+                }
+
+                //console.log("linker %d WASM_SEGMENT_INFO size: %d %o", type, payload_len, segments);
+                
+            } else if (type == 0x06) {
+                // WASM_INIT_FUNCS
+                ctors = [];
+                let count = data.readULEB128();
+                for (let i = 0; i < count; i++) {
+                    let priority = data.readULEB128();
+                    let symbol_index = data.readULEB128();
+                    ctors.push({priority: priority, symbol_index: symbol_index});
+                }
+                //console.log("linker %d WASM_INIT_FUNCS size: %d %o", type, payload_len, ctors);
+            } else if (type == 0x07) {
+                // WASM_COMDAT_INFO
+                comdat = [];
+                let xcnt = data.readULEB128();
+                for (let x = 0; x < xcnt; x++) {
+                    let nlen = data.readULEB128();
+                    let name = data.readUTF8Bytes(nlen);
+                    let flags = data.readULEB128();
+                    let ycnt = data.readULEB128();
+                    let symtbl = new Map();
+                    for (let y = 0; y < ycnt; y++) {
+                        let kind = data.readUint8();
+                        let index = data.readULEB128();
+                        symtbl.set(index, kind);
+                    }
+
+                    comdat.push({name: name, name_len: nlen, flags: flags, symtbl: symtbl});
+                }
+
+                //console.log("linker %d WASM_COMDAT_INFO size: %d", type, payload_len, comdat);
+            } else if (type == 0x08) {
+                // WASM_SYMBOL_TABLE
+                symtable = [];
+                let count = data.readULEB128();
+                for (let i = 0; i < count; i++) {
+                    let sym = new LinkerSymbol();
+                    let kind = data.readUint8();
+                    let flags = data.readULEB128();
+                    sym.kind = kind;
+                    sym.flags = flags;
+                    if (kind == 0x0) {              // func
+
+                        let funcidx = data.readULEB128();
+                        let func = module.functions[funcidx];
+                        sym.value = func;
+
+                        if (func instanceof WasmFunction || (func instanceof ImportedFunction && (flags & WASM_SYM_EXPLICIT_NAME) != 0)) {
+                            let nlen = data.readULEB128();
+                            let name = data.readUTF8Bytes(nlen);
+                            sym.name = name;
+                            sym.name_len = nlen;
+                        }
+
+                    } else if (kind == 0x2) {       // global
+
+                        let globidx = data.readULEB128();
+                        let glob = module.globals[globidx];
+                        sym.value = glob;
+
+                        if (glob instanceof WasmGlobal || (glob instanceof ImportedFunction && (flags & WASM_SYM_EXPLICIT_NAME) != 0)) {
+                            let nlen = data.readULEB128();
+                            let name = data.readUTF8Bytes(nlen);
+                            sym.name = name;
+                            sym.name_len = nlen;
+                        }
+
+                    } else if (kind == 0x04) {      // event (error-handling)
+
+                        let tagidx = data.readULEB128();
+                        let tag = module.tags[tagidx];
+                        sym.value = tag;
+
+                        if (tag instanceof WasmTag || (tag instanceof ImportedTag && (flags & WASM_SYM_EXPLICIT_NAME) != 0)) {
+                            let nlen = data.readULEB128();
+                            let name = data.readUTF8Bytes(nlen);
+                            sym.name = name;
+                            sym.name_len = nlen;
+                        }
+
+                    } else if (kind == 0x05) {      // table
+
+                        let tblidx = data.readULEB128();
+                        let table = module.tables[tblidx];
+                        sym.value = table;
+
+                        if (table instanceof WasmTable || (table instanceof ImportedTable && (flags & WASM_SYM_EXPLICIT_NAME) != 0)) {
+                            let nlen = data.readULEB128();
+                            let name = data.readUTF8Bytes(nlen);
+                            sym.name = name;
+                            sym.name_len = nlen;
+                        }
+
+                    } else if (kind == 0x1) {       // data
+
+                        let nlen = data.readULEB128();
+                        let name = data.readUTF8Bytes(nlen);
+                        sym.name = name;
+                        sym.name_len = nlen;
+                        if ((flags & WASM_SYM_UNDEFINED) == 0) {
+                            sym.index = data.readULEB128();
+                            sym.offset = data.readULEB128();
+                            sym.size = data.readULEB128();
+                            sym.dataSegment = module.dataSegments[sym.index];
+                        }
+
+
+                    } else if (kind == 0x3) {       // section
+                        sym.section = data.readULEB128();
+                    }
+                    symtable.push(sym);
+                }
+                //console.log("linker %d WASM_SYMBOL_TABLE size: %d", type, payload_len, symtable);
+            }
+            data.offset = start + payload_len;
+        }
+
+        let section = new WebAssemblyCustomSectionLinker(module);
+        section._segments = segments;
+        section._symtable = symtable;
+        section._ctors = ctors;
+        section._comdat = comdat;
+
+        return section;
+    }
+}
+
+const R_WASM_FUNCTION_INDEX_LEB = 0x00;
+const R_WASM_TABLE_INDEX_SLEB = 0x01;
+const R_WASM_TABLE_INDEX_I32 = 0x02;
+const R_WASM_MEMORY_ADDR_LEB = 0x03;
+const R_WASM_MEMORY_ADDR_SLEB = 0x04;
+const R_WASM_MEMORY_ADDR_I32 = 0x05;
+const R_WASM_TYPE_INDEX_LEB = 0x06;
+const R_WASM_GLOBAL_INDEX_LEB = 0x07;
+const R_WASM_FUNCTION_OFFSET_I32 = 0x08;
+const R_WASM_SECTION_OFFSET_I32 = 0x09;
+const R_WASM_EVENT_INDEX_LEB = 0x10;
+const R_WASM_GLOBAL_INDEX_I32 = 0x13;
+const R_WASM_MEMORY_ADDR_LEB64 = 0x14;
+const R_WASM_MEMORY_ADDR_SLEB64 = 0x15;
+const R_WASM_MEMORY_ADDR_I64 = 0x16;
+const R_WASM_TABLE_INDEX_SLEB64 = 0x18;
+const R_WASM_TABLE_INDEX_I64 = 0x19;
+const R_WASM_TABLE_NUMBER_LEB = 0x20;
+
+function relocTypeName(type) {
+    switch (type) {
+        case 0x00:
+            return "R_WASM_FUNCTION_INDEX_LEB";
+        case 0x01:
+            return "R_WASM_TABLE_INDEX_SLEB";
+        case 0x02:
+            return "R_WASM_TABLE_INDEX_I32";
+        case 0x03:
+            return "R_WASM_MEMORY_ADDR_LEB";
+        case 0x04:
+            return "R_WASM_MEMORY_ADDR_SLEB";
+        case 0x05:
+            return "R_WASM_MEMORY_ADDR_I32";
+        case 0x06:
+            return "R_WASM_TYPE_INDEX_LEB";
+        case 0x07:
+            return "R_WASM_GLOBAL_INDEX_LEB";
+        case 0x08:
+            return "R_WASM_FUNCTION_OFFSET_I32";
+        case 0x09:
+            return "R_WASM_SECTION_OFFSET_I32";
+        case 0x10:
+            return "R_WASM_EVENT_INDEX_LEB";
+        case 0x13:
+            return "R_WASM_GLOBAL_INDEX_I32";
+        case 0x14:
+            return "R_WASM_MEMORY_ADDR_LEB64";
+        case 0x15:
+            return "R_WASM_MEMORY_ADDR_SLEB64";
+        case 0x16:
+            return "R_WASM_MEMORY_ADDR_I64";
+        case 0x18:
+            return "R_WASM_TABLE_INDEX_SLEB64";
+        case 0x19:
+            return "R_WASM_TABLE_INDEX_I64";
+        case 0x20:
+            return "R_WASM_TABLE_NUMBER_LEB";
+    }
+}
+
+class WebAssemblyCustomSectionReloc extends WebAssemblyCustomSection {
+
+    constructor(module, name) {
+        super(module, null);
+    }
+
+    encode(options) {
+
+        throw new ReferenceError("encoding reloc.CODE section not supported");
+    }
+
+    static decode(module, data, size, name) {
+
+        let end = data.offset + size;
+        let secidx = data.readULEB128();
+        let count = data.readULEB128();
+        let relocs = [];
+        for (let i = 0; i < count; i++) {
+            let reloc = {};
+            let type = data.readUint8();
+            reloc.type = type;
+            reloc.offset = data.readULEB128();
+            reloc.index = data.readULEB128();
+
+            if (type == 3 || type == 4 || type == 5 || type == 8 || type == 9) {
+                reloc.addend = data.readSLEB128(32);
+            }
+
+            relocs.push(reloc);
+        }
+
+        //console.log("%s secidx = %d relocs = %o", name, secidx, relocs);
+        
+
+        let section = new WebAssemblyCustomSectionReloc(module, name);
+        section.relocs = relocs;
+        return section;
+    }
+}
+
 
 function isValidSectionType(type) {
 
@@ -8995,18 +9392,24 @@ WebAssemblyModule.Name = __nsym;
 
 // https://webassembly.github.io/spec/core/binary/modules.html#binary-version
 // https://coinexsmartchain.medium.com/wasm-introduction-part-1-binary-format-57895d851580
-function parseWebAssemblyBinary(buf) {
+function parseWebAssemblyBinary(buf, options) {
+
     let data = new ByteArray(buf);
     let magic = data.readUint32();
     let version = data.readUint32();
 
     data.offset = 0;
-    if (data.readUint8() != 0x00 || data.readUint8() != 0x61 || data.readUint8() != 0x73 || data.readUint8() != 0x6D) {
+    if (magic != 0x6d736100) {
         console.error("magic is not equal to '\\0asm'");
         return false;
     }
 
-    console.log("magic: %s version: %d", magic.toString(16), version);
+    if (version != 1) {
+        console.error("version is not 1.0");
+        return false;
+    }
+
+    //console.log("magic: %s version: %d", magic.toString(16), version);
 
     data.offset = 8;
     let end = buf.byteLength;
@@ -9164,7 +9567,7 @@ function parseWebAssemblyBinary(buf) {
             }
             case 0x0A:  // code
             {
-                let sec = WebAssemblyCodeSection.decode(mod, data, size);
+                let sec = WebAssemblyCodeSection.decode(mod, data, size, options);
                 chunks[chunk.index] = sec;
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                 //decodeCodeSection(data, size, mod, impfncnt);
@@ -9200,26 +9603,44 @@ function parseWebAssemblyBinary(buf) {
                 let name = chunk.name;
                 switch (name) {
                     case 'producers':
-                        sec = WebAssemblyCustomSectionProducers.decode(mod, data, size);
+                        sec = WebAssemblyCustomSectionProducers.decode(mod, data, size, name);
                         chunks[chunk.index] = sec;
                         mod.producers = sec.data;
                         chunk.data = sec.data;
                         sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                         break;
                     case 'name':
-                        sec = WebAssemblyCustomSectionName.decode(mod, data, size);
+                        sec = WebAssemblyCustomSectionName.decode(mod, data, size, name);
                         chunks[chunk.index] = sec;
                         sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                         break;
                     case 'dylink.0':
-                        sec = WebAssemblyCustomSectionDylink0.decode(mod, data, size);
+                        sec = WebAssemblyCustomSectionDylink0.decode(mod, data, size, name);
                         chunks[chunk.index] = sec;
                         mod.dylink0 = sec.data;
                         chunk.data = sec.data;
                         sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                         break;
                     case 'target_features':
-                        sec = WebAssemblyCustomSectionTargetFeatures.decode(mod, data, size);
+                        sec = WebAssemblyCustomSectionTargetFeatures.decode(mod, data, size, name);
+                        chunks[chunk.index] = sec;
+                        mod.features = sec.data;
+                        chunk.data = sec.data;
+                        sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                        break;
+                    // generated by clang and used by wasm-ld
+                    case 'linking':
+                        sec = WebAssemblyCustomSectionLinker.decode(mod, data, size, name, options);
+                        chunks[chunk.index] = sec;
+                        mod.features = sec.data;
+                        chunk.data = sec.data;
+                        sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                        break;
+                    // generated by clang and used by wasm-ld
+                    case 'reloc.CODE':
+                    case 'reloc.DATA':
+                        sec = WebAssemblyCustomSectionReloc.decode(mod, data, size, name, options);
+                        sec.name = name;
                         chunks[chunk.index] = sec;
                         mod.features = sec.data;
                         chunk.data = sec.data;
