@@ -13,7 +13,7 @@ const WA_TYPE_NUMRIC = Symbol("@type-numric");
 const WA_LOCAL_TYPE = Symbol("@local-type"); // indicates that the pull/push value is of the type of the local at given index.
 
 const WA_ROLE_ADDR = "addr";
-const WA_TYPE_ADDR = Symbol("@addr");   // everything that is a memory address has this type.. 
+const WA_TYPE_ADDR = WA_TYPE_I32; //Symbol("@addr");   // everything that is a memory address has this type.. 
 
 // the .type or .flag field [8 bits = type][8 bit = natural alignment (memory load/store)][16 bit flags]
 const OP_TYPE_CTRL = 0x00;
@@ -222,7 +222,13 @@ const opcode_info = [
         name: "call_indirect",
         pull: function(fn, inst) {
             let type = inst.type;
-            return type.argc !== 0 ? type.argv : WA_TYPE_VOID;
+            if (type.argc !== 0) {
+                let pullv = type.argv.slice();
+                pullv.push(WA_TYPE_I32);
+                return pullv;
+            } else {
+                return WA_TYPE_I32;
+            }
         },
         push: function(fn, inst) {
             let type = inst.type;
