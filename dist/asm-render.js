@@ -227,6 +227,28 @@ function wat_render_mem_wait32(element, mod, fn, op, opcls) {
 
 }
 
+let _last_pullv_lines = [];
+
+function add_highlight_lines(lines, cls) {
+    let len = lines.length;
+    for (let i = 0; i < len; i++) {
+        let line = lines[i];
+        if (!line.classList.contains(cls)) {
+            line.classList.add(cls);
+        }
+    }
+}
+
+function remove_highlight_lines(lines, cls) {
+    let len = lines.length;
+    for (let i = 0; i < len; i++) {
+        let line = lines[i];
+        if (line.classList.contains(cls)) {
+            line.classList.remove(cls);
+        }
+    }
+}
+
 function wat_render_call(element, mod, fn, op, opcls) {
 
     wat_render_inst(element, mod, fn, op, opcls);
@@ -237,10 +259,82 @@ function wat_render_call(element, mod, fn, op, opcls) {
     v.textContent = typeof func[__nsym] == "string" ? func[__nsym] : mod.functions.indexOf(func);
     element.appendChild(v);
     element.appendChild(document.createTextNode('\x20'));
+
+    let pullvnodes;
+
+    function wat_mouseover_pullv(evt) {
+
+        let idx = pullvnodes.indexOf(evt.target);
+
+        let pullidx = (func.type.argc - idx) - 1;
+        console.log("hover over pullv argidx: %d pullidx: %d", idx, pullidx);
+
+        let range = rangeAtPullIndex(fn, fn.opcodes, fn.opcodes.indexOf(op) - 1, pullidx);
+        console.log(range);
+
+        let first = fn.opcodes[range.start];
+        let last = fn.opcodes[range.end];
+
+        let opcodes = fn.opcodes;
+        let lines = [];
+        let end = range.end;
+        for (let i = range.start; i <= end; i++) {
+            let opcode = opcodes[i];
+            let line = inst_to_line.get(opcode);
+            lines.push(line);
+        }
+
+        console.log(lines);
+
+        if (_last_pullv_lines && _last_pullv_lines.length > 0) {
+            remove_highlight_lines(_last_pullv_lines, "pullv-range");
+        }
+
+        if (lines.length > 0) {
+            add_highlight_lines(lines, "pullv-range");
+        }
+        _last_pullv_lines = lines;
+    }
+
+    function wat_mouseout_pullv(evt) {
+        if (_last_pullv_lines && _last_pullv_lines.length > 0) {
+            remove_highlight_lines(_last_pullv_lines, "pullv-range");
+            _last_pullv_lines = undefined;
+        }
+    }
+
+    let node;
     v = document.createElement("span");
     v.classList.add("stack-signature");
+    node = document.createElement("span");
+    node.textContent = "[";
+    v.appendChild(node);
     let type = func.type;
-    v.textContent = "[" + (type.argc > 0 ? type.argv.map(type_name).join(", ") : '') + "] → [" + (type.retc > 0 ? type.retv.map(type_name).join(", ") : '') + "]";
+    let argc = type.argc;
+    let argv = type.argv;
+
+    if (argc > 0)
+        pullvnodes = [];
+
+    for (let i = 0; i < argc; i++) {
+        node = document.createElement("span");
+        node.classList.add("pullv-pos");
+        node.textContent = type_name(argv[i]);
+        node.addEventListener("mouseover", wat_mouseover_pullv);
+        node.addEventListener("mouseout", wat_mouseout_pullv);
+        v.appendChild(node);
+        pullvnodes.push(node);
+        if (i != argc - 1) {
+            node = document.createElement("span");
+            node.textContent = ",\x20";
+            v.appendChild(node);
+        }
+    }
+    node = document.createElement("span");
+    node.textContent = "] → [" + (type.retc > 0 ? type.retv.map(type_name).join(", ") : '') + "]";
+    v.appendChild(node);
+    //v.textContent = "[" + (type.argc > 0 ? type.argv.map(type_name).join(", ") : '') + "] → [" + (type.retc > 0 ? type.retv.map(type_name).join(", ") : '') + "]";
+    
     element.appendChild(v);
 }
 
@@ -250,12 +344,12 @@ function wat_render_call_indirect(element, mod, fn, op, opcls) {
 
     element.appendChild(document.createTextNode('\x20'));
     let v = document.createElement("span");
-    v.textContent = "tableidx=" + op.tableidx;
+    v.textContent = "tableidx=" + mod.tables.indexOf(op.table);
     element.appendChild(v);
     element.appendChild(document.createTextNode('\x20'));
     v = document.createElement("span");
     v.classList.add("stack-signature");
-    let type = mod.types[op.typeidx];
+    let type = op.type;
     v.textContent = "[" + (type.argc > 0 ? type.argv.map(type_name).join(", ") : '') + "] → [" + (type.retc > 0 ? type.retv.map(type_name).join(", ") : '') + "]";
     element.appendChild(v);
 }
@@ -331,6 +425,15 @@ function wat_render_f32_load(element, mod, fn, op, opcls) {
 
 function wat_render_f32_store(element, mod, fn, op, opcls) {
     wat_render_inst(element, mod, fn, op, opcls);
+
+    element.appendChild(document.createTextNode('\x20'));
+    let v = document.createElement("span");
+    v.textContent = "align=" + ((op.align).toString());
+    element.appendChild(v);
+    element.appendChild(document.createTextNode('\x20'));
+    v = document.createElement("span");
+    v.textContent = "offset=" + ((op.offset).toString());
+    element.appendChild(v);
 }
 
 function wat_render_f64_load(element, mod, fn, op, opcls) {
@@ -339,6 +442,15 @@ function wat_render_f64_load(element, mod, fn, op, opcls) {
 
 function wat_render_f64_store(element, mod, fn, op, opcls) {
     wat_render_inst(element, mod, fn, op, opcls);
+
+    element.appendChild(document.createTextNode('\x20'));
+    let v = document.createElement("span");
+    v.textContent = "align=" + ((op.align).toString());
+    element.appendChild(v);
+    element.appendChild(document.createTextNode('\x20'));
+    v = document.createElement("span");
+    v.textContent = "offset=" + ((op.offset).toString());
+    element.appendChild(v);
 }
 
 function wat_render_mem_size(element, mod, fn, op, opcls) {
