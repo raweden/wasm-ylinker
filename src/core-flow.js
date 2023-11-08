@@ -1,3 +1,6 @@
+
+// The core flow is was is common for GUI & Shell command, and is not part of a specific type of binary.
+
 let _flowActions = {
 	postOptimizeAtomicInst: {
 		handler: postOptimizeAtomicInst
@@ -71,14 +74,14 @@ function getWorkflowParameterValues() {
 	return obj;
 }
 
-function runWorkflowActions(mod, actions, ctxmap, params) {
+function runWorkflowActions(mod, actions, defaultContext, runOptions) {
 
 	/*
 	let len = actions.length;
 	for (let i = 0; i < len; i++) {
 		let ret, obj = actions[i];
 		let name = obj.action;
-		let fn = _workflowActions[name];
+		let fn = _flowActions[name];
 		let options = typeof obj.options == "object" && obj.options !== null ? obj.options : undefined;
 		if (options) {
 			ret = fn(mod, options);
@@ -95,7 +98,6 @@ function runWorkflowActions(mod, actions, ctxmap, params) {
 		resolveFn = resolve;
 		rejectFn = reject;
 	});
-	let defaultContext = Object.assign({}, params);
 	let returnValue;
 	let index = 0;
 
@@ -110,13 +112,8 @@ function runWorkflowActions(mod, actions, ctxmap, params) {
 		for (let i = index; i < actions.length; i++) {
 			let ret;
 			actionData = actions[i];
-			if (ctxmap && ctxmap.has(actionData)) {
-				ctx = ctxmap.get(actionData);
-			} else {
-				ctx = null;
-			}
 			let name = actionData.action;
-			let action = _workflowActions[name];
+			let action = _flowActions[name];
 			let fn = action.handler;
 			let options = typeof actionData.options == "object" && actionData.options !== null ? actionData.options : undefined;
 			if (options) {
@@ -133,7 +130,7 @@ function runWorkflowActions(mod, actions, ctxmap, params) {
 		/*
 		let obj = actions[index];
 		let name = obj.action;
-		let fn = _workflowActions[name];
+		let fn = _flowActions[name];
 		let options = typeof obj.options == "object" && obj.options !== null ? obj.options : undefined;
 		if (options) {
 			ret = fn(mod, options);
@@ -398,38 +395,6 @@ function extractDataSegmentsAction(ctx, mod, options) {
 	if (options.format == "wasm") {
 		// there might be more modules that are required at minimum.
 		let buffers = [];
-		let off = 0;
-		let buf = new Uint8Array(8);
-		let data = new DataView(buf.buffer);
-		buffers.push(buf.buffer);
-		data.setUint8(0, 0x00); // \0asm
-		data.setUint8(1, 0x61);
-		data.setUint8(2, 0x73);
-		data.setUint8(3, 0x6D);
-		data.setUint32(4, 0x1, true);
-		buf = new Uint8Array(15);
-		data = new DataView(buf.buffer);
-		buffers.push(buf.buffer);
-		// types 0x01 		(write empty)
-		data.setUint8(off++, 0x01);
-		data.setUint8(off++, 0x01);
-		data.setUint8(off++, 0x00);
-		// funcs 0x03 		(write empty)
-		data.setUint8(off++, 0x03);
-		data.setUint8(off++, 0x01);
-		data.setUint8(off++, 0x00);
-		// tables 0x04 		(write empty)
-		data.setUint8(off++, 0x04);
-		data.setUint8(off++, 0x01);
-		data.setUint8(off++, 0x00);
-		// mems 0x05 		(write empty)
-		data.setUint8(off++, 0x05);
-		data.setUint8(off++, 0x01);
-		data.setUint8(off++, 0x00);
-		// globals 0x06 	(write empty)
-		data.setUint8(off++, 0x06);
-		data.setUint8(off++, 0x01);
-		data.setUint8(off++, 0x00);
 
 		let tmod = new WebAssemblyModule();
         tmod._version = mod._version;
@@ -632,6 +597,8 @@ function outputAction(ctx, mod, options) {
 				writable.close().then(resolveFn, rejectFn);
 			}, rejectFn);
 
+			if (typeof updateFileSizeInUI == "function")
+				updateFileSizeInUI(file, blob.size);
 		}, rejectFn);
 
 		
@@ -887,249 +854,373 @@ function removeExportFor(mod, obj) {
 // mapping of placeholder atomic operations to dedicated wasm instructions.
 const atomic_op_replace_map = [
 	{ 	// atomic operations.
-		name: "atomic_notify",
+		name: {module: "__builtin", name: "memory_atomic_notify"},
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
-		replace: function(inst, index, arr) {
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE00, 2, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_wait32",
+		name: {module: "__builtin", name: "memory_atomic_wait32"},
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I32]),
-		replace: function(inst, index, arr) {
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE01, 2, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: ["wasm_atomic_fence", "wasm32_atomic_fence"],
+		name: {module: "__builtin", name: "atomic_fence"}, // "wasm_atomic_fence", "wasm32_atomic_fence", "atomic_fence"],
 		type: WasmType.create(null, null),
-		replace: function(inst, index, arr) {
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0xFE03, memidx: 0};
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_load8",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_load8_u"},
+		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE12, 0, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_store8",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_store8"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], null),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE19, 0, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_add8",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw8_add_u"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE20, 0, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_sub8",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw8_sub_u"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE27, 0, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_and8",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw8_and_u"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE2E, 0, 0);
+			calle._usage--;
 			return true;
 		}
 	},{
-		name: "atomic_or8",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw8_or_u"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE35, 0, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_xor8",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw8_xor_u"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE3C, 0, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_xchg8",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw8_xchg_u"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE43, 0, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_cmpxchg8",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw8_cmpxchg_u"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE4A, 0, 0);
+			calle._usage--;
 			return true;
 		}
 	},  {
-		name: "atomic_load16",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_load16_u"},
+		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE13, 1, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_store16",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_store16"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], null),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE1A, 1, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_add16",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw16_add_u"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE21, 1, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_sub16",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw16_sub_u"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE28, 1, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_and16",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw16_and_u"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE2F, 1, 0);
+			calle._usage--;
 			return true;
 		}
 	},{
-		name: "atomic_or16",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw16_or_u"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE36, 1, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_xor16",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw16_xor_u"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE3D, 1, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_xchg16",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw16_xchg_u"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE44, 1, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_cmpxchg16",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw16_cmpxchg_u"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE4B, 0, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_load32",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_load"},
+		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE10, 1, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_store32",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_store"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], null),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE17, 2, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_add32",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw_add"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE1E, 2, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_sub32",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw_sub"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE25, 2, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_and32",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw_and"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE2C, 2, 0);
+			calle._usage--;
 			return true;
 		}
 	},{
-		name: "atomic_or32",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw_or"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE33, 2, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_xor32",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw_xor"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE3A, 2, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_xchg32",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw_xchg"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE41, 2, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_cmpxchg32",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i32_atomic_rmw_cmpxchg"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE48, 2, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_wait64",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "memory_atomic_wait64"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64, WA_TYPE_I64], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE02, 3, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_load64",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i64_atomic_load"},
+		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I64]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE11, 3, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_store64",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i64_atomic_store"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], null),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE18, 3, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_add64",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i64_atomic_rmw_add"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE1F, 3, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_sub64",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i64_atomic_rmw_sub"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE26, 3, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_and64",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i64_atomic_rmw_and"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE2D, 3, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_or64",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i64_atomic_rmw_or"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE34, 3, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_xor64",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i64_atomic_rmw_xor"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE3B, 3, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
-		name: "atomic_xchg64",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i64_atomic_rmw_xchg"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE42, 3, 0);
+			calle._usage--;
 			return true;
 		}
 	},{
-		name: "atomic_cmpxchg64",
-		replace: function(inst, index, arr) {
+		name: {module: "__builtin", name: "i64_atomic_rmw_cmpxchg"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64, WA_TYPE_I64], [WA_TYPE_I64]),
+		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE49, 3, 0);
+			calle._usage--;
 			return true;
 		}
 	}
+];
+
+// replaces standard named mathimatical function with wasm opcode equal.
+const libc_op_replace_map = [
+	{ 	// math operations
+		name: "ceil",
+		type: WasmType.create([WA_TYPE_F64], [WA_TYPE_F64]),	// TODO: should check for placeholder __panic_abort as first inst in impl.
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0x9b};
+			calle._usage--;
+			return true;
+		}
+	}, {
+		name: "floor",
+		type: WasmType.create([WA_TYPE_F64], [WA_TYPE_F64]),
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0x9c};
+			calle._usage--;
+			return true;
+		}
+	}, {
+		name: "fabs",
+		type: WasmType.create([WA_TYPE_F64], [WA_TYPE_F64]),
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0x99};
+			calle._usage--;
+			return true;
+		}
+	}, { 	// f32 math operations
+		name: "ceilf",
+		type: WasmType.create([WA_TYPE_F32], [WA_TYPE_F32]),
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0x8d};
+			calle._usage--;
+			return true;
+		}
+	}, {
+		name: "floorf",
+		type: WasmType.create([WA_TYPE_F32], [WA_TYPE_F32]),
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0x8e};
+			calle._usage--;
+			return true;
+		}
+	},
+
+	// isnan = https://webassembly.github.io/spec/core/exec/numerics.html#aux-fbits
 ];
 
 // other common operations which could be replaced:
@@ -1138,15 +1229,19 @@ const atomic_op_replace_map = [
 // mapping of memcpy/memset into dedicated wasm instructions.
 const memory_op_replace_map = [{ 							// memory operations.
 		name: "memcpy",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: memcpyReplaceHandler
 	}, {
 		name: "__memcpy",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: memcpyReplaceHandler
 	}, {
 		name: "memcpy_early",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: memcpyReplaceHandler
 	}, {
 		name: "memset",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		// replacing memset vs. memory.fill is where it gets complicated, memset returns which the 
 		// memory.fill instruction does not. check for drop instruction but if not found we must fake
 		// the return of memset 
@@ -1393,6 +1488,7 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 
 	let opsopt = [];
 	
+	let impfnarr = [];
 	let namemap = new Map();
 	let funcmap = new Map();
 	let names = [];
@@ -1427,12 +1523,41 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 					namemap.set(name, handler);
 				}
 			}
+		} else if (name instanceof WasmFunction) {
+			
+			funcmap.set(name, handler);
+
+		} else if (name instanceof ImportedFunction) {
+
+			if (mod.function.indexOf(name) != -1) {
+				funcmap.set(name, handler);
+			} else {
+				impfnarr.push(handler);
+			}
+
+		} else if (typeof name == "object" && typeof name.module == "string" && typeof name.name == "string") {
+			impfnarr.push(handler);
 		}
 		
 	}
 
 	
 	let fns = mod.functions;
+	ylen = fns.length;
+	xlen = impfnarr.length;
+	for (let x = 0; x < xlen; x++) {
+		let obj = impfnarr[x];
+		let imp = obj.name;
+		for (let y = 0; y < ylen; y++) {
+			let func = fns[y];
+			if (!(func instanceof ImportedFunction))
+				break;
+			if (func.module == imp.module && func.name == imp.name) {
+				funcmap.set(func, obj);
+			}
+		}
+	}
+
 	ylen = fns.length;
 	for (let y = 0; y < ylen; y++) {
 		let idx, name, func = fns[y];
@@ -1469,12 +1594,12 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 						handler = handlers;
 					}
 					//handler.count++;
-					let res = handler.replace(op, x, opcodes, func);
+					let res = handler.replace(op, x, opcodes, func, call);
 					if (res === false && zlen > 1) {
 						let z = 1;
 						while (res === false && z < zlen) {
 							handler = handlers[z++];
-							res = handler.replace(op, x, opcodes, func);
+							res = handler.replace(op, x, opcodes, func, call);
 						}
 					}
 					if (res === op) {
@@ -1501,6 +1626,29 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 		}
 	}
 
+	for (const [calle, handler] of funcmap) {
+
+		if (calle._usage < 0) {
+			console.warn("refcount for function is less than zero");
+			continue;
+		} else if (calle._usage !== 0) {
+			continue;
+		}
+
+		let idx;
+		if (calle instanceof ImportedFunction) {
+			idx = mod.imports.indexOf(calle);
+			if (idx !== -1)
+				mod.imports.splice(idx, 1);
+		}
+
+		idx = mod.functions.indexOf(calle);
+		if (idx !== -1)
+			mod.functions.splice(idx, 1);
+
+		mod.removeExportByRef(calle);
+    }
+
 	//
 }
 
@@ -1521,6 +1669,7 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 function filterModuleExports(ctx, mod, options) {
 
 	let callback, names, regexps;
+	let keptnames = [];
 	if (typeof options.callback == "function") {
 		callback = options.callback;
 	} else if (Array.isArray(options.names)) {
@@ -1548,7 +1697,10 @@ function filterModuleExports(ctx, mod, options) {
 			keep = callback(exp);
 		} else {
 			let name = exp.name;
-			keep = names.indexOf(exp.name) !== -1;
+			keep = names.indexOf(name) !== -1;
+			if (keep && keptnames.indexOf(name) == -1) {
+				keptnames.push(name);
+			}
 			if (keep === false && regexps) {
 				let ylen = regexps.length;
 				for(let i = 0;i < ylen;i++){
@@ -1568,7 +1720,33 @@ function filterModuleExports(ctx, mod, options) {
 		} else {
 			idx++;
 		}
+	}
 
+	let notfound = [];
+	len = names.length;
+	for (let i = 0; i < len; i++) {
+		let name = names[i];
+		if (typeof name != "string")
+			continue;
+		if (keptnames.indexOf(name) == -1 && notfound.indexOf(name) == -1)
+			notfound.push(name);
+	}
+
+	let functions = mod.functions;
+	let ylen = functions.length;
+	len = notfound.length;
+	for (let i = 0; i < len; i++) {
+		let name = notfound[i];
+
+		for (let y = 0; y < ylen; y++) {
+			let func = functions[y];
+			if (func[__nsym] == name) {
+				let exp = new ExportedFunction();
+				exp.name = name;
+				exp.function = func;
+				exps.push(exp);
+			}
+		}
 	}
 }
 
