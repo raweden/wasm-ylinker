@@ -5717,6 +5717,10 @@ class ExportedGlobal {
     }
 };
 
+/**
+ * @todo how to handle reference count for exports?
+ * @todo unify .value instead of dedicated property per each?
+ */
 class WebAssemblyExportSection extends WebAssemblySection {
 
     constructor(module) {
@@ -5740,6 +5744,8 @@ class WebAssemblyExportSection extends WebAssemblySection {
             let idx = -1;
             if (exp instanceof ExportedFunction) {
                 idx = mod.functions.indexOf(exp.function);
+                //if (exp._function._usage <= 0)
+                //    throw new ReferenceError("exporting function with usage zero");
             } else if (exp instanceof ExportedTable) {
                 idx = mod.tables.indexOf(exp.table);
             } else if (exp instanceof ExportedMemory) {
@@ -5803,7 +5809,6 @@ class WebAssemblyExportSection extends WebAssemblySection {
                 exp.name = name;
                 exp.function = func;
                 vector.push(exp);
-                func._usage++;
             } else if (type == 0x01) {
                 let exp = new ExportedTable();
                 exp.name = name;
@@ -5876,13 +5881,16 @@ class WebAssemblyStartSection extends WebAssemblySection {
 class WasmElementSegment {
 
     constructor() {
-        this.prefix = undefined;
+        this.kind = undefined;
         this.opcodes = undefined;
         this.vector = undefined;
         this.count = undefined;
     }
 }
 
+/**
+ * @todo there is alot more kinds to add support for https://webassembly.github.io/spec/core/binary/modules.html#element-section
+ */
 class WebAssemblyElementSection extends WebAssemblySection {
 
     constructor(module) {
@@ -5900,21 +5908,41 @@ class WebAssemblyElementSection extends WebAssemblySection {
 
         for (let y = 0; y < ylen; y++) {
             let element = elementSegments[y];
-            totsz += byteCodeComputeByteLength(mod, element.opcodes, null);
-            let vector = element.vector;
-            let xlen = vector.length;
-            for (let x = 0; x < xlen; x++) {
-                let func = vector[x];
-                let funcidx = functions.indexOf(func);
-                if (funcidx === -1)
-                    throw ReferenceError("function in element is not defined in module.functions");
-                totsz += lengthULEB128(funcidx);
-            }
+            let kind = element.kind;
+            if (kind == 0x00) {
 
-            totsz += lengthULEB128(xlen);
+                totsz += byteCodeComputeByteLength(mod, element.opcodes, null);
+                let vector = element.vector;
+                let xlen = vector.length;
+                for (let x = 0; x < xlen; x++) {
+                    let func = vector[x];
+                    let funcidx = functions.indexOf(func);
+                    if (funcidx === -1)
+                        throw ReferenceError("function in element is not defined in module.functions");
+                    totsz += lengthULEB128(funcidx);
+                }
+
+                totsz += lengthULEB128(xlen);
+                totsz += lengthULEB128(element.kind);
+            } else if (kind == 0x01) {
+                let vector = element.vector;
+                let xlen = vector.length;
+                for (let x = 0; x < xlen; x++) {
+                    let func = vector[x];
+                    let funcidx = functions.indexOf(func);
+                    if (funcidx === -1)
+                        throw ReferenceError("function in element is not defined in module.functions");
+                    totsz += lengthULEB128(funcidx);
+                }
+
+                totsz += lengthULEB128(xlen);
+                totsz += lengthULEB128(0x00);           // element.elemtype
+                totsz += lengthULEB128(element.kind);
+            } else {
+                throw new ReferenceError("Other element.kind not supported");
+            }
         }
 
-        totsz += ylen; // for element.prefix (one byte per element item)
         totsz += lengthULEB128(ylen);
         secsz = totsz;
         totsz += lengthULEB128(secsz);
@@ -5928,15 +5956,29 @@ class WebAssemblyElementSection extends WebAssemblySection {
 
         for (let y = 0; y < ylen; y++) {
             let element = elementSegments[y];
-            data.writeUint8(element.prefix);
-            encodeByteCode(mod, element.opcodes, null, data);
-            let vector = element.vector;
-            let xlen = vector.length;
-            data.writeULEB128(xlen);
-            for (let x = 0; x < xlen; x++) {
-                let func = vector[x];
-                let funcidx = functions.indexOf(func);
-                data.writeULEB128(funcidx);
+            let kind = element.kind;
+            if (kind == 0x00) {
+                data.writeULEB128(kind);
+                encodeByteCode(mod, element.opcodes, null, data);
+                let vector = element.vector;
+                let xlen = vector.length;
+                data.writeULEB128(xlen);
+                for (let x = 0; x < xlen; x++) {
+                    let func = vector[x];
+                    let funcidx = functions.indexOf(func);
+                    data.writeULEB128(funcidx);
+                }
+            } else if (kind == 0x01) {
+                data.writeULEB128(kind);
+                data.writeULEB128(0x00);
+                let vector = element.vector;
+                let xlen = vector.length;
+                data.writeULEB128(xlen);
+                for (let x = 0; x < xlen; x++) {
+                    let func = vector[x];
+                    let funcidx = functions.indexOf(func);
+                    data.writeULEB128(funcidx);
+                }
             }
         }
 
@@ -5951,8 +5993,8 @@ class WebAssemblyElementSection extends WebAssemblySection {
         let elementSegments = [];
         module.elementSegments = elementSegments;
         for (let i = 0; i < cnt; i++) {
-            let prefix = data.readULEB128();
-            if (prefix == 0x00) {
+            let kind = data.readULEB128();
+            if (kind == 0x00) {
                 let expr = decodeByteCode(data, module);
                 let idx;
                 if (expr.opcodes.length == 2 && expr.opcodes[0].opcode == 0x41 && expr.opcodes[1].opcode == 0x0B) {
@@ -5985,13 +6027,34 @@ class WebAssemblyElementSection extends WebAssemblySection {
                 }
 
                 let element = new WasmElementSegment();
-                element.prefix = prefix;
+                element.kind = kind;
                 element.opcodes = expr.opcodes;
                 element.vector = vec;
                 element.count = vlen;
                 elementSegments.push(element);
 
-                //console.log("prefix: %d expr: %o vec(funcidx) %o", prefix, expr, vec);
+                //console.log("kind: %d expr: %o vec(funcidx) %o", kind, expr, vec);
+            } else if (kind == 0x01) {
+                let elemtype = data.readULEB128();
+                let vlen = data.readULEB128();
+                let tableidx = 0;
+                let table;
+                let vec = [];
+                //vec.length = idx + vlen;
+                for (let x = 0; x < vlen; x++) {
+                    let funcidx = data.readULEB128();
+                    let fn = functions[funcidx];
+                    vec.push(fn);
+                    fn._usage++;
+                }
+
+                let element = new WasmElementSegment();
+                element.kind = kind;
+                element.elemtype = elemtype;
+                element.opcodes = undefined;
+                element.vector = vec;
+                element.count = vlen;
+                elementSegments.push(element);
             }
         }
 
@@ -6308,10 +6371,27 @@ class WebAssemblyDataSection extends WebAssemblySection {
         let len = segments.length;
         for (let i = 0; i < len; i++) {
             let seg = segments[i];
-            tot += lengthULEB128(0); // seg.kind (not implemented)
-            tot += byteCodeComputeByteLength(mod, seg.inst.opcodes, null);
-            tot += lengthULEB128(seg.size);
-            tot += seg.size;
+            let kind = seg.kind;
+            if (kind == 0x00) {
+                tot += lengthULEB128(kind);
+                tot += byteCodeComputeByteLength(mod, seg.inst.opcodes, null);
+                tot += lengthULEB128(seg.size);
+                tot += seg.size;
+            } else if (kind == 0x01) {
+                tot += lengthULEB128(kind);
+                tot += lengthULEB128(seg.size);
+                tot += seg.size;
+            } else if (kind == 0x02) {
+                tot += lengthULEB128(kind);
+                let memidx = seg.memory ? module.memory.indexOf(seg.memory) : -1;
+                if (memidx == -1) {
+                    throw new ReferenceError("memory ref not defined in module.memory");
+                }
+                tot += lengthULEB128(memidx);
+                tot += byteCodeComputeByteLength(mod, seg.inst.opcodes, null);
+                tot += lengthULEB128(seg.size);
+                tot += seg.size;
+            }
         }
         tot += lengthULEB128(len); // vector-length
         secsz = tot;
@@ -6325,16 +6405,44 @@ class WebAssemblyDataSection extends WebAssemblySection {
         data.writeULEB128(len);
         for (let i = 0; i < len; i++) {
             let seg = segments[i];
-            data.writeULEB128(0); // seg.kind (not implemented)
-            encodeByteCode(mod, seg.inst.opcodes, null, data);
-            data.writeULEB128(seg.size);
-            if (seg._mutableDataBuffer) {
-                let off = seg._mutableDataOffset;
-                u8_memcpy(seg._mutableDataBuffer, off, seg.size, buffer, data.offset);
-                data.offset += seg.size;
-            } else {
-                u8_memcpy(seg._buffer, 0, seg.size, buffer, data.offset);
-                data.offset += seg.size;
+            let kind = seg.kind;
+            if (kind == 0x00) {
+                data.writeULEB128(kind); // seg.kind (not implemented)
+                encodeByteCode(mod, seg.inst.opcodes, null, data);
+                data.writeULEB128(seg.size);
+                if (seg._mutableDataBuffer) {
+                    let off = seg._mutableDataOffset;
+                    u8_memcpy(seg._mutableDataBuffer, off, seg.size, buffer, data.offset);
+                    data.offset += seg.size;
+                } else {
+                    u8_memcpy(seg._buffer, 0, seg.size, buffer, data.offset);
+                    data.offset += seg.size;
+                }
+            } else if (kind == 0x01) {
+                data.writeULEB128(kind);
+                data.writeULEB128(seg.size);
+                if (seg._mutableDataBuffer) {
+                    let off = seg._mutableDataOffset;
+                    u8_memcpy(seg._mutableDataBuffer, off, seg.size, buffer, data.offset);
+                    data.offset += seg.size;
+                } else {
+                    u8_memcpy(seg._buffer, 0, seg.size, buffer, data.offset);
+                    data.offset += seg.size;
+                }
+            } else if (kind == 0x02) {
+                data.writeULEB128(kind);
+                let memidx = module.memory.indexOf(seg.memory);
+                data.writeULEB128(memidx);
+                encodeByteCode(mod, seg.inst.opcodes, null, data);
+                data.writeULEB128(seg.size);
+                if (seg._mutableDataBuffer) {
+                    let off = seg._mutableDataOffset;
+                    u8_memcpy(seg._mutableDataBuffer, off, seg.size, buffer, data.offset);
+                    data.offset += seg.size;
+                } else {
+                    u8_memcpy(seg._buffer, 0, seg.size, buffer, data.offset);
+                    data.offset += seg.size;
+                }
             }
         }
 
@@ -6364,7 +6472,6 @@ class WebAssemblyDataSection extends WebAssemblySection {
             let kind = data.readULEB128();
             if (kind == 0x00) {
                 let inst = decodeByteCode(data, module, null);
-                let data_start = inst.end;
                 data.offset = inst.end;
                 let datasz = data.readULEB128();
                 let segment = new WasmDataSegment();
@@ -6377,14 +6484,36 @@ class WebAssemblyDataSection extends WebAssemblySection {
                 segments.push(segment);
                 data.offset += datasz;
             } else if (kind == 0x01) {
-                console.warn("data segment of type `init b*, mode passive` is not implemented");
+                // init b*, mode passive` is not implemented"
+                let datasz = data.readULEB128();
+                let segment = new WasmDataSegment();
+                segment.kind = kind;
+                segment.memory = undefined
+                segment.inst = undefined;
+                segment.offset = data.offset;
+                segment.size = datasz;
+                segment._buffer = data._u8.slice(data.offset, data.offset + datasz);
+                segments.push(segment);
+                data.offset += datasz;
                 break;
             } else if (kind == 0x02) {
-                console.warn("data segment of type `init b*, mode active {memory, offset }` is not implemented");
+                // init b*, mode active {memory, offset }
                 let memidx = data.readULEB128();
+                let inst = decodeByteCode(data, module, null);
+                data.offset = inst.end;
+                let datasz = data.readULEB128();
+                let segment = new WasmDataSegment();
+                segment.kind = kind;
+                segment.memory = module.memory[memidx];
+                segment.inst = inst;
+                segment.offset = data.offset;
+                segment.size = datasz;
+                segment._buffer = data._u8.slice(data.offset, data.offset + datasz);
+                segments.push(segment);
+                data.offset += datasz;
                 break;
             } else {
-                console.warn("undefined data-segment mode!");
+                console.warn("unsupported data-segment mode!");
                 break;
             }
         }
@@ -7256,7 +7385,10 @@ const WASM_SYM_EXPLICIT_NAME = 0x40;
 const WASM_SYM_NO_STRIP = 0x80;
 const WASM_SYM_TLS = 0x100;
 const WASM_SYM_ABSOLUTE = 0x200;
-const WASM_SYM_EXTERNAL = 0x400; // not standard.
+const WASM_SYM_EXTERNAL = 0x400;                // not standard.
+const WASM_SYM_WEAK_EXTERNAL = 0x400;           // not standard. use external dylib symbol over internal if found,
+const WASM_SYM_INTERNAL = 0x800;                // not standard.
+const WASM_SYM_LINKTIME_CONSTRUCT = 0x1000;     // not standard.
 
 class LinkerSymbol {
 
@@ -7409,7 +7541,7 @@ class WebAssemblyCustomSectionLinker extends WebAssemblyCustomSection {
                             sym.index = data.readULEB128();
                             sym.offset = data.readULEB128();
                             sym.size = data.readULEB128();
-                            sym.dataSegment = module.dataSegments[sym.index];
+                            sym.value = module.dataSegments[sym.index];
                         }
 
 
