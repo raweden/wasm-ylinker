@@ -15,6 +15,104 @@ function readSelectorType(buf) {
     return str;
 }
 
+function generateRelocImportGlobalName(name) {
+    let glob_name = name.replace(/[\.\-\s]/gm, '_');
+    if (glob_name[0] != '_')
+        glob_name = '_' + glob_name;
+    if (glob_name[0] != '_' && glob_name[1] != '_')
+        glob_name = '_' + glob_name;
+
+    return glob_name;
+}
+
+function packDataSegments(dataSection) {
+    let dataSegments = dataSection.dataSegments;
+    let alignmap = new Map();
+    let alignidx = [];          // index of all alignments [32, 16, 8, 4, 0];
+    let ylen = dataSegments.length;
+    let unaligned = [];
+    let zlen = 0;
+    for (let y = 0; y < ylen; y++) {
+        let dataSegment = dataSegments[y];
+        let name = dataSegment[__nsym];
+        let align = dataSegment._alignment !== 0 ? Math.pow(2, dataSegment._alignment) : 0;
+        if (align === 0) {
+            unaligned.push(dataSegment);
+        } else if (alignmap.has(align)) {
+            let arr = alignmap.get(align);
+            arr.push(dataSegment);
+            zlen++;
+        } else {
+            let arr = [];
+            arr.push(dataSegment);
+            alignmap.set(align, arr);
+            alignidx.push(align);
+            zlen++;
+        }
+    }
+
+    // .rodata..L.str.2
+
+    alignidx.sort(function(a, b) {
+        if (a > b) {
+            return -1;
+        } else if (a < b) {
+            return 1;
+        }
+
+        return 0;
+    });
+
+    let padt = 0;
+    let offset = 0;
+    for (let y = 0; y < zlen; y++) {
+        let dataSegment;
+        let rem, align, match = -1;
+        let xlen = alignidx.length;
+        for (let x = 0; x < xlen; x++) {
+            align = alignidx[x];
+            rem = align !== 0 ? offset % align : 0;
+            if (rem == 0) {
+                match = x;
+                break;
+            }
+        }
+
+        let arr = alignmap.get(align);
+        dataSegment = arr.shift();
+        if (arr.length == 0) {
+            let idx = alignidx.indexOf(align);
+            alignidx.splice(idx, 1);
+            alignmap.delete(align);
+        }
+
+
+        if (match == -1) {
+            let pad = (align - rem);
+            offset += pad;
+            padt += pad;
+        }
+
+        let size = dataSegment.size;
+        dataSegment._reloc = offset;
+        offset += size;
+        dataSegments[y] = dataSegment;
+    }
+
+    let z = zlen;
+    ylen = unaligned.length;
+    for (let y = 0; y < ylen; y++) {
+        let dataSegment = unaligned[y];
+        dataSegments[z] = dataSegment;
+        z++;
+    }
+    
+
+    dataSection._packedSize = offset;
+    dataSection._size = offset;
+    dataSection._paddingTotal = padt;
+}
+
 class GnuStep2Linker {
 
 	constructor() {
@@ -208,7 +306,7 @@ class GnuStep2Linker {
             let len = symtable.length;
             for (let i = 0; i < len; i++) {
                 let symbol = symtable[i];
-                if (symbol.kind == 1 && symbol.dataSegment == segment) {
+                if (symbol.kind == 1 && symbol.value == segment) {
                     return symbol;
                 }
             }
@@ -252,32 +350,6 @@ class GnuStep2Linker {
             }
 
             return arr;
-        }
-
-        function find_objc_constant_string(strbuf) {
-            let len = _objc_constant_strings.length;
-            for (let i = 0; i < len; i++) {
-                let obj = _objc_constant_strings[i];
-                let buf = obj.dataSegment._buffer;
-                if (buf.byteLength != strbuf.byteLength) {
-                    continue;
-                }
-
-                let match = true;
-                let xlen = buf.byteLength;
-                for (let x = 0; x < xlen; x++) {
-                    if (buf[x] != strbuf[x]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return obj;
-                }
-            }
-
-            return null;
         }
 
         function replaceRelocByRef(oldsym, newsym) {
@@ -360,8 +432,8 @@ class GnuStep2Linker {
                             dst_funcmap.set(oldsym.value, newsym.value);
                             replaceRelocByRef(oldsym, newsym);
                         } else if (kind == 1) {
-                            if (oldsym.dataSegment && newsym.dataSegment) {
-                                dst_datamap.set(oldsym.dataSegment, newsym.dataSegment);
+                            if (oldsym.value && newsym.value) {
+                                dst_datamap.set(oldsym.value, newsym.value);
                             }
                             replaceRelocByRef(oldsym, newsym);
                         }
@@ -374,199 +446,41 @@ class GnuStep2Linker {
             }
         } 
 
-        
-        // data section mapping.
-        let gs2sections = {
-            '__objc_selectors': {
-                null_selector: null,
-                datamap: this.getDataSegmentSubMap("__objc_selectors"),
-                handler: function (segment) {
-                    let relocs = findDataReloc(segment);
-                    let symbol = findSymbolFor(segment);
-                    let name = symbol.name;
+        let __segmentkeys = this.__segmentkeys;
+        let __segments = this.__segments;
 
-                    if (relocs.length != 2 && name != ".objc_null_selector") {
-                        console.warn("relocs.length is not 2 (%d) for %s", relocs.length, name);
-                    }
+        let _segrodata = __segments[".rodata"];
+        let _segdata = __segments[".data"];
+        let _segbss = __segments[".bss"];
 
-                    /*
-                    if (relocs[0].off !== 0) {
-                        let a = relocs[0];
-                        let b = relocs[1];
-                        relocs[0] = b;
-                        relocs[1] = a;
-                    }
-                    //console.log("segment: '%s'", name);
-                    //console.log(relocs);
-                    let reloc, sel, type, sym = "";
-                    reloc = relocs[0];
-                    sel = reloc.ref.name;
-                    if (sel.startsWith(".objc_sel_name_")) {
-                        sym = sel.substring(15);
-                    }
-                    reloc = relocs[1];
-                    type = reloc.ref.name;
-                    if (type.startsWith(".objc_sel_types_")) {
-                        sym += '\x00' + readSelectorType(reloc.ref.dataSegment._buffer);
-                    }
-
-                    name = "__objc_selectors." + sym;
-                    segment[__nsym] = name;*/
-
-                    let datamap = this.datamap;
-
-                    if (datamap.hasOwnProperty(name)) {
-                        src_datamap.set(segment, datamap[name]);
-                    } else {
-                        datamap[name] = segment;
-                    }
-
-                }
-            },
-            '__objc_constant_string': {
-                datamap: this.getDataSegmentSubMap("__objc_constant_string"),
-                handler: function (segment) {
-                    let relocs = findDataReloc(segment);
-                    let symbol = findSymbolFor(segment);
-                    let name = symbol.name;
-
-                    if (relocs.length != 2 && name != ".objc_null_constant_string") {
-                        console.warn("relocs.length is not 2 (%d) for %s", relocs.length, name);
-                        return;
-                    }
-                    if (relocs.length == 2 && relocs[1].ref.name.startsWith(".L__unnamed_") == false) {
-                        console.warn("relocs[1] is not .L__unnamed_ (%s)", relocs[1].ref.name);
-                        return;
-                    }
-
-                    let datamap = this.datamap;
-                    if (datamap.hasOwnProperty(name)) {
-                        src_datamap.set(segment, datamap[name]);
-                    } else {
-                        datamap[name] = segment;
-                    }
-
-                }
-            },
-            '__objc_class_refs': {
-                datamap: this.getDataSegmentSubMap("__objc_class_refs"),
-                handler: function (segment) {
-                    let relocs = findDataReloc(segment);
-                    let symbol = findSymbolFor(segment);
-                    let name = symbol.name;
-                    
-                    let datamap = this.datamap;
-                    if (datamap.hasOwnProperty(name)) {
-                        src_datamap.set(segment, datamap[name]);
-                    } else {
-                        datamap[name] = segment;
-                    }
-                }
-            },
-            '__objc_protocols': {
-
-                datamap: this.getDataSegmentSubMap("__objc_protocols"),
-                handler: function (segment) {
-                    let relocs = findDataReloc(segment);
-                    let symbol = findSymbolFor(segment);
-                    let name = symbol.name;
-                    
-                    let datamap = this.datamap;
-                    if (datamap.hasOwnProperty(name)) {
-                        src_datamap.set(segment, datamap[name]);
-                    } else {
-                        datamap[name] = segment;
-                    }
-                }
-            },
-            '__objc_protocol_refs': {
-
-                datamap: this.getDataSegmentSubMap("__objc_protocol_refs"),
-                handler: function (segment) {
-                    let relocs = findDataReloc(segment);
-                    let symbol = findSymbolFor(segment);
-                    let name = symbol.name;
-                    
-                    let datamap = this.datamap;
-                    if (datamap.hasOwnProperty(name)) {
-                        src_datamap.set(segment, datamap[name]);
-                    } else {
-                        datamap[name] = segment;
-                    }
-                }
-            },
-            '__objc_class_aliases': {
-
-                datamap: this.getDataSegmentSubMap("__objc_class_aliases"),
-                handler: function (segment) {
-                    let relocs = findDataReloc(segment);
-                    let symbol = findSymbolFor(segment);
-                    let name = symbol.name;
-                    
-                    let datamap = this.datamap;
-                    if (datamap.hasOwnProperty(name)) {
-                        src_datamap.set(segment, datamap[name]);
-                    } else {
-                        datamap[name] = segment;
-                    }
-                }
-            },
-            '__objc_cats': {
-
-                datamap: this.getDataSegmentSubMap("__objc_cats"),
-                handler: function (segment) {
-                    let relocs = findDataReloc(segment);
-                    let symbol = findSymbolFor(segment);
-                    let name = symbol.name;
-                    
-                    let datamap = this.datamap;
-                    if (datamap.hasOwnProperty(name)) {
-                        src_datamap.set(segment, datamap[name]);
-                    } else {
-                        datamap[name] = segment;
-                    }
-                }
-            },
-            '__objc_classes': {
-
-                datamap: this.getDataSegmentSubMap("__objc_classes"),
-                handler: function (segment) {
-                    let relocs = findDataReloc(segment);
-                    let symbol = findSymbolFor(segment);
-                    let name = symbol.name;
-                    
-                    let datamap = this.datamap;
-                    if (datamap.hasOwnProperty(name)) {
-                        src_datamap.set(segment, datamap[name]);
-                    } else {
-                        datamap[name] = segment;
-                    }
-                }
-            }
-        };
-
-
+        // mapping data-segments
+        // TODO: fix this section, assign to segment here 
+        //  do not organize into .dataSegments array per segment here, simply use the ref later to collect segments.
+        //  should also use symbols..
         let dataSegments = wasmModule.dataSegments;
         let ylen, xlen = dataSegments.length;
         for (let x = 0; x < xlen; x++) {
             let segment = dataSegments[x];
             let name = segment[__nsym];
-            if (gs2sections.hasOwnProperty(name)) {
-                let sec = gs2sections[name];
-                sec.handler(segment);
-            } else if (name.startsWith("__objc_")) {
-                console.log("name %s", name);
-            } else if (name.startsWith(".rodata.") || name.startsWith(".data.") || name.startsWith(".bss.")) {
-
-                if (name.startsWith(".rodata..L__unnamed_")) {
-                    continue;
-                }
-                
-                if (_datamap.hasOwnProperty(name)) {
-                    src_datamap.set(segment, _datamap[name]);
+            if (name.startsWith(".rodata.")) {
+                segment.dataSection = _segrodata;
+            } else if (name.startsWith(".data.")) {
+                segment.dataSection = _segdata;
+            } else if (name.startsWith(".bss.")) {
+                segment.dataSection = _segbss;
+            } else {
+                let segref;
+                if (__segments.hasOwnProperty(name)) {
+                    segref = __segments[name];
                 } else {
-                    _datamap[name] = segment;
+                    if (name.startsWith("__objc_") == false)
+                        debugger;
+                    segref = {};
+                    segref.name = name;
+                    __segments[name] = segref;
+                    __segmentkeys.push(name);
                 }
+                segment.dataSection = segref;
             }
         }
         
@@ -801,9 +715,9 @@ class GnuStep2Linker {
                 let reloc = code_relocs[i];
                 let type = reloc.type;
                 if (type == R_WASM_MEMORY_ADDR_LEB || type == R_WASM_MEMORY_ADDR_LEB) {
-                    let segment = reloc.ref.dataSegment;
+                    let segment = reloc.ref.value;
                     if (dst_datamap.has(segment))
-                        reloc.ref.dataSegment = dst_datamap.has(segment);
+                        reloc.ref.value = dst_datamap.has(segment);
 
                 }
             }
@@ -1119,9 +1033,9 @@ class GnuStep2Linker {
                     let reloc = code_relocs[i];
                     let type = reloc.type;
                     if (type == R_WASM_MEMORY_ADDR_LEB || type == R_WASM_MEMORY_ADDR_LEB) {
-                        let segment = reloc.ref.dataSegment;
+                        let segment = reloc.ref.value;
                         if (src_datamap.has(segment))
-                            reloc.ref.dataSegment = src_datamap.has(segment);
+                            reloc.ref.value = src_datamap.has(segment);
 
                     }
                 }
@@ -1186,7 +1100,7 @@ class GnuStep2Linker {
             if (((sym.flags & WASM_SYM_BINDING_LOCAL) != 0) || ((sym.flags & WASM_SYM_UNDEFINED) != 0)) {
                 continue;
             }
-            let segment = sym.dataSegment;
+            let segment = sym.value;
             let txt = segment._reloc_glob.name + "\x20+\x200x" + (segment._reloc).toString(16);
             txt += '\n' + sym.name + '\n';
             lines.push(txt);
@@ -1336,9 +1250,9 @@ class GnuStep2Linker {
                     loader.resolveFuncSymbol(name, func.type);
                 }
             } else if (sym.kind == 1) {
-                let segment = sym.dataSegment;
+                let segment = sym.value;
                 if (!segment) {
-                    loader.resolveDataSymbol(segment.name);
+                    loader.resolveDataSymbol(sym.name);
                 }
             }
         }
@@ -1350,12 +1264,23 @@ class GnuStep2Linker {
         let dst_symtable = this._symtable;
         let dst_datasym = {};
         let dst_funcsym = {};
+
+        let src_globmap = new Map();
+        let src_funcmap = new Map();
+        let src_datamap = new Map();
+        let src_tblmap = new Map();
+        let src_memmap = new Map();
+        let src_tagmap = new Map();
+
+        let dst_funcmap = new Map();
+        let dst_datamap = new Map();
+
         let len = dst_symtable.length;
         for (let i = 0; i < len; i++) {
             let sym = dst_symtable[i];
             let name = sym.name;
             let flags = sym.flags;
-            let islocal = (flags & WASM_SYM_BINDING_LOCAL) == 0;
+            let islocal = (flags & WASM_SYM_BINDING_LOCAL) != 0;
             if (sym.type == 0 && !islocal) {
                 if (dst_funcsym.hasOwnProperty(name))
                     console.error("name '%s' already exists ", name);
@@ -1370,8 +1295,20 @@ class GnuStep2Linker {
         
         len = src_symtable.length;
         for (let i = 0; i < len; i++) {
-            let sym = src_symtable[i];
+            let type, sym = src_symtable[i];
             sym.flags |= WASM_SYM_EXTERNAL;
+            if ((sym.flags & WASM_SYM_BINDING_LOCAL) == 0) {
+                dst_symtable.push(sym);
+            }
+            type = sym.type;
+            if (type == 0) {
+                let name = sym.name;
+                if (dst_funcmap.hasOwnProperty(name)) {
+
+                }
+            } else {
+
+            }
         }
 
         return null;
@@ -1766,6 +1703,7 @@ class GnuStep2Linker {
             if (!sym)
                 throw new TypeError("NOT_FOUND");
             sym.value = func2;
+            sym.flags &= ~WASM_SYM_UNDEFINED;
             sym.flags |= WASM_SYM_EXTERNAL;
         }
 
@@ -1869,7 +1807,7 @@ class GnuStep2Linker {
                 continue;
 
             name = sym.name;
-            if (sym.dataSegment || sym._reloc || name.startsWith("__start_") || name.startsWith("__stop_")) {
+            if (sym.value || sym._reloc || name.startsWith("__start_") || name.startsWith("__stop_")) {
                 continue;
             }
 
@@ -1879,10 +1817,11 @@ class GnuStep2Linker {
                 continue;
             }
             if (reloc instanceof LinkerSymbol) {
-                sym.dataSegment = reloc.dataSegment;
+                sym.value = reloc.value;
             } else {
                 sym._reloc = reloc;
             }
+            sym.flags &= ~WASM_SYM_UNDEFINED;
             sym.flags |= WASM_SYM_EXTERNAL;
         }
 
@@ -1897,250 +1836,177 @@ class GnuStep2Linker {
             }
         }
 
+        // TODO: find and merge duplicate .rodata..L.str.???
+
         // TODO: what about all the imports in libc? these seams to be weak aliases?
         // build data-segments
+        let so_ident = this.so_ident;
+        let so_data_reloc = [];
+        let singleDataReloc = true;
+        let customDataSections = [];
+        let _segmentkeys = this.__segmentkeys
+        let __segments = this.__segments;
+        let _section_rodata = __segments[".rodata"];
+        let _section_data = __segments[".data"];
+        let _section_bss = __segments[".bss"];
+        
 
-        let dataSections = {
-            '.rodata': {
-                name: '.rodata',
-                dataSegments: [],
-                max_align: 0,
-                size: 0,
-                reloc_glob_name: "__rodata_reloc"
-            },
-            '.data': {
-                name: '.data',
-                dataSegments: [],
-                max_align: 0,
-                size: 0,
-                reloc_glob_name: "__data_reloc"
-            },
-            '.bss': {
-                name: '.bss',
-                dataSegments: [],
-                max_align: 0,
-                size: 0,
-                reloc_glob_name: "__bss_reloc"
+        len = _segmentkeys.length;
+        for (let i = 0; i < len; i++) {
+            let secname = _segmentkeys[i];
+            let dataSection = __segments[secname];
+            dataSection.dataSegments = [];
+            dataSection.max_align = 0;
+            dataSection._size = 0;
+            dataSection._dataSize = 0;      // total size excluding padding.
+            dataSection._packedSize = 0;    // total actual size after packing
+
+            if (dataSection != _section_rodata && dataSection != _section_data && dataSection != _section_bss) {
+                dataSection.startSymbol = findModuleDataSymbol("__start_" + secname);
+                dataSection.stopSymbol = findModuleDataSymbol("__stop_" + secname);
+                customDataSections.push(dataSection);
             }
-        };
-
-        let customSegments = [];
-        let rodata = dataSections[".rodata"];
-        let data = dataSections[".data"];
-        let bss = dataSections[".bss"];
-
-        let datasubmap = this.datasubmap;
-        for (let secname in datasubmap) {
-            let dataSegments = [];
-            let max_align = 0;
-            let tot_size = 0;
-            let map = datasubmap[secname];
-            let dsec = {};
-            for (let p in map) {
-                let segment = map[p];
-                segment._dsec = dsec;
-                let align = segment._alignment !== 0 ? Math.pow(segment._alignment, 2) : 0;
-                dataSegments.push(segment);
-                tot_size += segment.size;
-                if (align > max_align)
-                    max_align = align;
-            }
-
-            dsec.name = secname;
-            dsec.dataSegments = dataSegments;
-            dsec.max_align = max_align;
-            dsec.size = tot_size;
-            dsec.reloc_glob_name = secname + "_reloc";
-
-            dsec.startSymbol = findModuleDataSymbol("__start_" + secname);
-            dsec.stopSymbol = findModuleDataSymbol("__stop_" + secname);
-
-            dataSections[secname] = dsec;
-            customSegments.push(secname);
         }
 
-        
+        // collect all data-segments into the section where they belong..
         len = _dataSegments.length;
         for (let i = 0; i < len; i++) {
             let dataSegment = _dataSegments[i];
 
-            let align = dataSegment._alignment !== 0 ? Math.pow(dataSegment._alignment, 2) : 0;
-            let name = dataSegment[__nsym];
-
-            if (name.startsWith(".rodata")) {
-                rodata.dataSegments.push(dataSegment);
-                rodata.size += dataSegment.size;
-                if (align > rodata.max_align)
-                    rodata.max_align = align;
-            } else if (name.startsWith(".data")) {
-                data.dataSegments.push(dataSegment);
-                data.size += dataSegment.size;
-                if (align > data.max_align)
-                    data.max_align = align;
-            } else if (name.startsWith(".bss")) {
-                bss.dataSegments.push(dataSegment);
-                bss.size += dataSegment.size;
-                if (align > bss.max_align)
-                    bss.max_align = align;
-            } else {
-                console.warn("unexpected data-segment %s", name)
+            if (!dataSegment.dataSection) {
+                console.error("%o missing data-section reference", dataSegment);
+                continue;
             }
+
+            let dataSection = dataSegment.dataSection;
+
+            let align = dataSegment._alignment !== 0 ? Math.pow(2, dataSegment._alignment) : 0;
+            if (align > dataSection.max_align)
+                dataSection.max_align = align;
+
+            dataSection._dataSize += dataSegment.size;
+            dataSection.dataSegments.push(dataSegment);
+            
         }
 
-        let uintptr = [];
-        let strings = [];
-        let pow2 = [];
-        let misc = [];
-        let sorted, segments = rodata.dataSegments;
-        len = segments.length;
+        // pack each data-section in the most efficient way.
+        len = _segmentkeys.length;
         for (let i = 0; i < len; i++) {
-            let segment = segments[i];
-            let name = segment[__nsym];
-            let size = segment.size;
-            if (name.startsWith(".rodata..L.str")) {
-                strings.push(segment);
-            } else if (size == 4) {
-                uintptr.push(segment);
-            } else if (size % 4 == 0) {
-                pow2.push(segment);
-            } else {
-                misc.push(segment);
-            }
+            let secname = _segmentkeys[i];
+            let dataSection = __segments[secname];
+            packDataSegments(dataSection);
         }
 
-        function sort_segment(seg1, seg2) {
-            let s1, n1 = seg1[__nsym];
-            let s2, n2 = seg2[__nsym];
-            if (n1 < n2) {
-                return -1;
-            } else if (n1 > n2) {
-                return 1;
-            }
-            s1 = seg1.size;
-            s2 = seg2.size;
-            if (s1 < s2) {
-                return -1;
-            } else if (s1 > s2) {
-                return 1;
-            }
+        // add .rodata, .data and .bss at their respective placement.
+        let outputSegments = customDataSections.slice();
+        outputSegments.unshift(_section_data);      // secound
+        outputSegments.unshift(_section_rodata);    // first
+        outputSegments.push(_section_bss);          // last
 
-            return 0;
-        }
 
-        // TODO: orginize by alignment and check best fit on every insert..
 
-        rodata.dataSegments.sort(sort_segment);
-        data.dataSegments.sort(sort_segment);
-        bss.dataSegments.sort(sort_segment);
-
-        let single_data = true;
-        let so_ident = this.so_ident;
-        let so_data_reloc;
-        let outputSegments = [rodata, data];
-
-        len = customSegments.length;
-        for (let i = 0; i < len; i++) {
-            let name = customSegments[i];
-            let datasec = dataSections[name];
-            outputSegments.push(datasec);
-        }
-
-        outputSegments.push(bss);
-
-        if (single_data) {
+        // data-section / data-segments reloc
+        if (singleDataReloc) {
             so_data_reloc = [ImportedGlobal.create(so_ident, "__data_reloc", WA_TYPE_I32, false)];
         } else {
             so_data_reloc = [];
         }
 
         let off = 0;
-        let padb = 0;
-        let last;
+        let padt = 0;
+        let lastDataSection;
         let ylen = outputSegments.length;
         for (let y = 0; y < ylen; y++) {
-            let grp = outputSegments[y];
-            let segments = grp.dataSegments;
-            let xlen = segments.length;
+            let dataSection = outputSegments[y];
+            
             let reloc;
-            if (single_data) {
+            if (singleDataReloc) {
                 reloc = so_data_reloc[0];
 
                 // ensure that we do not pad the first object.
-                if (off !== 0) {
-                    let first = segments[0];
-                    let align = first && first._alignment !== 0 ? Math.pow(first._alignment, 2) : 0;
-                    let rem = align !== 0 ? (off % align) : 0;
+                if (lastDataSection) {
+                    let max_align = dataSection.max_align;
+                    let rem = (off % max_align);
                     if (rem !== 0) {
-                        let pad = (align - rem);
-                        padb += pad;
+                        let pad = (max_align - rem);
+                        padt += pad;
                         off += pad;
+                        lastDataSection._size += pad;
+                        lastDataSection._paddingTotal += pad;
                     }
                 }
             } else {
-                reloc = ImportedGlobal.create(so_ident, grp.reloc_glob_name, WA_TYPE_I32, false);
+                let reloc_glob_name = generateRelocImportGlobalName(dataSection.name);
+                reloc = ImportedGlobal.create(so_ident, reloc_glob_name, WA_TYPE_I32, false);
                 so_data_reloc.push(reloc);
                 off = 0;
             }
 
             let start = off;
-            let padbs = padb;
-            grp._reloc_glob = reloc;
-            grp._reloc_start = off;
-            for (let x = 0; x < xlen; x++) {
-                let segment = segments[x];
-                let size = segment.size;
-                let align = segment._alignment !== 0 ? Math.pow(segment._alignment, 2) : 0;
-                let rem = align !== 0 ? (off % align) : 0;
-                if (rem == 0) {
-                    segment._reloc = off;
-                    off += size;
-                } else {
-                    let pad = (align - rem);
-                    padb += pad;
-                    off += pad;
-                    segment._reloc = off;
-                    off += size;
+            dataSection._reloc_glob = reloc;
+            dataSection._reloc_start = off;
+             let dataSegments = dataSection.dataSegments;
+            let xlen = dataSegments.length;
+            if (singleDataReloc) {
+               
+                for (let x = 0; x < xlen; x++) {
+                    let dataSegment = dataSegments[x];
+                    dataSegment._reloc += off;
+                    dataSegment._reloc_glob = reloc;
                 }
-                segment._reloc_glob = reloc;
-                segment._dsec = grp;
+            } else {
+                for (let x = 0; x < xlen; x++) {
+                    let dataSegment = dataSegments[x];
+                    dataSegment._reloc_glob = reloc;
+                    // _reloc is already set, starting at zero
+                }
             }
-            grp._reloc_stop = off;
-            grp._bytesize = off - start;
-            grp._padtot = padb - padbs;
+            off += dataSection._packedSize;
 
-            if (grp.startSymbol) {
-                let symbol = grp.startSymbol;
+            dataSection._reloc_stop = off;
+
+            if (dataSection.startSymbol) {
+                let symbol = dataSection.startSymbol;
                 symbol._reloc = {reloc_global: reloc, reloc_offset: start};
             }
 
-            if (grp.stopSymbol) {
-                let symbol = grp.stopSymbol;
+            if (dataSection.stopSymbol) {
+                let symbol = dataSection.stopSymbol;
                 symbol._reloc = {reloc_global: reloc, reloc_offset: off};
             }
+
+            lastDataSection = dataSection;
         }
 
-        // TODO: merge data-segments
-        let new_dataSegments = [];
+        // merge data-segments
+        this._orgDataSegments = _dataSegments.slice();
+        _dataSegments.length = outputSegments.length;
         ylen = outputSegments.length;
         for (let y = 0; y < ylen; y++) {
-            let grp = outputSegments[y];
-            let segments = grp.dataSegments;
-            let xlen = segments.length;
-            let reloc = grp._reloc_glob;
-            let start = grp._reloc_start;
+            let dataSection = outputSegments[y];
+            let dataSegments = dataSection.dataSegments;
+            let xlen = dataSegments.length;
+            let reloc = dataSection._reloc_glob;
+            let start = dataSection._reloc_start;
 
-            let u8 = new Uint8Array(grp._bytesize);
+            let u8 = new Uint8Array(dataSection._size);
             for (let x = 0; x < xlen; x++) {
-                let segment = segments[x];
-                let size = segment.size;
-                let off = segment._reloc - start;
-                u8_memcpy(segment._buffer, 0, size, u8, off);
+                let dataSegment = dataSegments[x];
+                let size = dataSegment.size;
+                let off = dataSegment._reloc - start;
+                u8_memcpy(dataSegment._buffer, 0, size, u8, off);
             }
 
-            let segment = new WasmDataSegment();
-            segment._buffer = u8;
+            let newDataSegment = new WasmDataSegment();
+            newDataSegment.kind = 0x01;
+            newDataSegment.memory = undefined;
+            newDataSegment.size = dataSection._size;
+            newDataSegment._buffer = u8;
+            newDataSegment[__nsym] = dataSection.name;
+            newDataSegment.dataSection = dataSection;
 
-            new_dataSegments.push(segment);
+            _dataSegments[y] = newDataSegment;
+            dataSection.dataSegment = newDataSegment;
         }
         this._dataSections = outputSegments;
 
@@ -2158,8 +2024,10 @@ class GnuStep2Linker {
         let so_tbl_reloc = ImportedGlobal.create(so_ident, "__tbl_reloc", WA_TYPE_I32, false);
         let so_tbl_objc_reloc = ImportedGlobal.create(so_ident, "__tbl_objc_reloc", WA_TYPE_I32, false);
 
-        let indirect_tbl_objc = [];
-        let indirect_tbl = [];
+        let indirect_tbl_objc;
+        let indirect_tbl_objc_elem, indirect_tbl_objc_vec = [];
+        let indirect_tbl;
+        let indirect_tbl_elem, indirect_tbl_vec = [];
 
         // mapping indirect function references in code (for example used as callback arguments)
         len = _code_relocs.length;
@@ -2174,9 +2042,9 @@ class GnuStep2Linker {
                 continue;
             }
 
-            let idx = indirect_tbl.indexOf(func);
+            let idx = indirect_tbl_vec.indexOf(func);
             if (idx == -1) {
-                indirect_tbl.push(func);
+                indirect_tbl_vec.push(func);
                 func._usage++;
             } else {
 
@@ -2196,9 +2064,9 @@ class GnuStep2Linker {
                 continue;
             }
 
-            let idx = indirect_tbl.indexOf(func);
+            let idx = indirect_tbl_vec.indexOf(func);
             if (idx == -1) {
-                indirect_tbl.push(func);
+                indirect_tbl_vec.push(func);
                 func._usage++;
             }
         }
@@ -2223,7 +2091,7 @@ class GnuStep2Linker {
                     continue;
                 }
 
-                let funcidx = indirect_tbl.indexOf(funcref);
+                let funcidx = indirect_tbl_vec.indexOf(funcref);
 
                 let func = reloc.func;
                 let inst = reloc.inst;
@@ -2246,8 +2114,8 @@ class GnuStep2Linker {
                 let ref = reloc.ref;
                 let reloc_global;
                 let reloc_offset;
-                if (ref.dataSegment) {
-                    let dataSegment = ref.dataSegment;
+                if (ref.value) {
+                    let dataSegment = ref.value;
                     reloc_global = dataSegment._reloc_glob;
                     reloc_offset = dataSegment._reloc;
                 } else if (ref._reloc) {
@@ -2352,8 +2220,8 @@ class GnuStep2Linker {
                 let ref = reloc.ref;
                 let reloc_global;
                 let reloc_offset;
-                if (ref.dataSegment) {
-                    let dataSegment = ref.dataSegment;
+                if (ref.value) {
+                    let dataSegment = ref.value;
                     reloc_global = dataSegment._reloc_glob;
                     reloc_offset = dataSegment._reloc;
                 } else if (ref._reloc) {
@@ -2436,7 +2304,7 @@ class GnuStep2Linker {
                 let src_glob = so_tbl_reloc;
                 let dst_glob = dataSegment._reloc_glob;
                 let cmd = {};
-                cmd.src_idx = indirect_tbl.indexOf(func);
+                cmd.src_idx = indirect_tbl_vec.indexOf(func);
                 cmd.dst_off = dataSegment._reloc + reloc.off;
                 cmd._reloc = reloc;
                 let grp = findRelocGroup(type, src_glob, dst_glob)
@@ -2447,8 +2315,8 @@ class GnuStep2Linker {
                     debugger;
                 let src_reloc_global;
                 let src_reloc_offset;
-                if (ref.dataSegment) {
-                    let dataSegment = ref.dataSegment;
+                if (ref.value) {
+                    let dataSegment = ref.value;
                     src_reloc_global = dataSegment._reloc_glob;
                     src_reloc_offset = dataSegment._reloc;
                 } else if (ref._reloc) {
@@ -2527,22 +2395,86 @@ class GnuStep2Linker {
         }
 
         // creating element segments
-        if (indirect_tbl.length > 0) {
+        if (indirect_tbl_vec.length > 0) {
             let elem = new WasmElementSegment();
-            elem.count = indirect_tbl.length;
-            elem.vector = indirect_tbl.slice();
-            // TODO: should be passive
+            elem.kind = 0x01;       // passive
+            elem.elemtype = 0x00;   // funcref
+            elem.count = indirect_tbl_vec.length;
+            elem.vector = indirect_tbl_vec.slice();
             this.elementSegments.push(elem);
+            indirect_tbl_elem = elem;
         }
 
-        if (indirect_tbl_objc.length > 0) {
+        if (indirect_tbl_objc_vec.length > 0) {
             let elem = new WasmElementSegment();
-            elem.count = indirect_tbl_objc.length;
-            elem.vector = indirect_tbl_objc.slice();
-            // TODO: should be passive
+            elem.kind = 0x01;     // passive
+            elem.elemtype = 0x00; // funcref
+            elem.count = indirect_tbl_objc_vec.length;
+            elem.vector = indirect_tbl_objc_vec.slice();
             this.elementSegments.push(elem);
+            indirect_tbl_objc_elem = elem;
         }
+
+        // TODO: generate dylib ctor functions.
+        let ops, ctor_dylib_mem = new WasmFunction();
+        ctor_dylib_mem[__nsym] = "__wasm_ctor_dylib_mem";
+        ctor_dylib_mem.locals = undefined;
+        ctor_dylib_mem.opcodes = [];
+        ops = ctor_dylib_mem.opcodes;
+
+        len = outputSegments.length;
+        for (let i = 0; i < len; i++) {
+            let dataSection = outputSegments[i];
+            let dataSegment = dataSection.dataSegment;
+            let relocOffset, relocGlobal = dataSection._reloc_glob;
+
+            ops.push({opcode: 0x41, value: 0});                             // i32.const    (src)
+            ops.push({opcode: 0x41, value: dataSegment.size});              // i32.const    (len)
+            if (singleDataReloc) {
+                ops.push({opcode: 0x23, global: relocGlobal});              // global.get
+                ops.push({opcode: 0x41, value: dataSection._reloc_start});  // i32.const
+                ops.push({opcode: 0x6a});                                   // i32.add      (dst)
+            } else {
+                ops.push({opcode: 0x23, global: relocGlobal});              // global.get   (dst)
+            }
+            ops.push({opcode: 0xfc08, dataSegment: dataSegment}); // memory.init
+
+        }
+
+        for (let i = 0; i < len; i++) {
+            let dataSection = outputSegments[i];
+            let dataSegment = dataSection.dataSegment;
+            ops.push({opcode: 0xfc09, dataSegment: dataSegment});           // data.drop
+
+        }
+
+        _functions.push(ctor_dylib_mem);
+
+        if (indirect_tbl_elem || indirect_tbl_objc_elem) {
+
+            let ctor_dylib_tbl = new WasmFunction();
+            ctor_dylib_tbl[__nsym] = "__wasm_ctor_dylib_tbl";
+            ctor_dylib_tbl.opcodes = [];
+            ops = ctor_dylib_tbl.opcodes;
+
+            if (indirect_tbl_elem) {
+                ops.push({opcode: 0x41, value: 0});                                                 // i32.const    (src)
+                ops.push({opcode: 0x41, value: indirect_tbl_vec.length});                           // i32.const    (len)
+                ops.push({opcode: 0x23, global: so_tbl_reloc});                                     // global.get   (dst)
+                ops.push({opcode: 0xfc12, table: indirect_tbl, elem: indirect_tbl_elem});           // table.init  
+            }
+
+            if (indirect_tbl_objc_elem) {
+                ops.push({opcode: 0x41, value: 0});                                                 // i32.const    (src)
+                ops.push({opcode: 0x41, value: indirect_tbl_objc_vec.length});                      // i32.const    (len)
+                ops.push({opcode: 0x23, global: so_tbl_objc_reloc});                                // global.get   (dst)
+                ops.push({opcode: 0xfc12, table: indirect_tbl_objc, elem: indirect_tbl_objc_elem}); // table.init
+            }
+
+
+            _functions.push(ctor_dylib_tbl);
         
+        }
 
         debugger;
     }
@@ -2627,41 +2559,20 @@ class GnuStep2Linker {
 
         let len = _dataSections.length;
         for(let i = 0;i < len;i++){
-            let segment = _dataSections[i];
-            let glob = segment._reloc_glob;
+            let dataSection = _dataSections[i];
+            let glob = dataSection._reloc_glob;
             if (reloc_globs.indexOf(glob) == -1)
                 reloc_globs.push(glob);
 
             let obj = {};
-            obj.name = segment.name;
-            obj.size = segment._bytesize;
-            obj.reloc_global = segment._reloc_glob;
-            obj.reloc_offset = segment._reloc_start;
-            obj.alignment = segment.max_align;
+            obj.name = dataSection.name;
+            obj.size = dataSection._size;
+            obj.reloc_global = dataSection._reloc_glob;
+            obj.reloc_offset = dataSection._reloc_start;
+            obj.alignment = dataSection.max_align;
 
-            data_section_map.set(segment, obj);
+            data_section_map.set(dataSection, obj);
             data_section_tbl.push(obj);
-        }
-
-        len = dataSegments.length;
-        for(let i = 0;i < len;i++){
-            let segment = dataSegments[i];
-            let glob = segment._reloc_glob;
-            if (reloc_globs.indexOf(glob) == -1)
-                reloc_globs.push(glob);
-
-            let dsec = segment._dsec;
-            if (!data_section_map.has(dsec)) {
-                let obj = {};
-                obj.name = dsec.name;
-                obj.size = dsec._bytesize;
-                obj.reloc_global = dsec._reloc_glob;
-                obj.reloc_offset = dsec._reloc_start;
-                obj.alignment = dsec.max_align;
-
-                data_section_map.set(dsec, obj);
-                data_section_tbl.push(obj);
-            }
         }
 
         len = symtable.length;
@@ -2676,19 +2587,19 @@ class GnuStep2Linker {
             external = ((sym.flags & WASM_SYM_EXTERNAL) != 0);
             if (external)
                 continue;
-            let segment = sym.dataSegment;
+            let segment = sym.value;
             let obj = {};
             obj.name = sym.name;
             obj.nlen = lengthBytesUTF8(sym.name);
-            let dsec;
-            if (!segment._dsec) {
+            let secobj;
+            if (!segment.dataSection) {
                 throw new ReferenceError("data-segment missing data-section");
-            } else if (!data_section_map.has(segment._dsec)) {
+            } else if (!data_section_map.has(segment.dataSection)) {
                 throw new ReferenceError("data-section not defined");
             } else {
-                dsec = data_section_map.get(segment._dsec)
+                secobj = data_section_map.get(segment.dataSection)
             }
-            obj.segment = dsec;
+            obj.segment = secobj;
             obj.size = 0;
             obj.reloc_global = segment._reloc_glob;
             obj.reloc_offset = segment._reloc;
