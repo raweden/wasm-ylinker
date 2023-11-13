@@ -1,6 +1,7 @@
 
 
 const fs = require("fs");
+const encodeYLinkerData = require("./ylinker-data.js").encodeYLinkerData;
 //const fixup_builtins = require("./fixup-builtin.js");
 //const fixup_objc_gnustep2 = require("./fixup-objc.js");
 
@@ -141,7 +142,14 @@ class GnuStep2Linker {
 	constructor() {
 		this.funcmap = {};
 		this.datamap = {};
+        // symbol data.
+        this._datasym = {};
+        this._funcsym = {};
+        this._globsym = [];
+        this._tagsym = [];
+        this._tblsym = [];
         this.datasubmap = {};
+        // standard wasm data.
 	    this.dataSegments = [];
 	    this.elementSegments = [];
 	    this.exports = [];
@@ -153,6 +161,7 @@ class GnuStep2Linker {
 	    this.types = [];
         this.tags = [];
         this.sections = [];
+        this.producers = {};
         this.objc_constant_strings = [];
         this._code_relocs = [];
         this._data_relocs = [];
@@ -204,6 +213,7 @@ class GnuStep2Linker {
         mod.imports = this.imports;
         mod.exports = this.exports;
         mod.sections = this._wasmModuleSections;
+        mod.producers = this.producers;
 	}
 
     prepareModule(wasmModule) {
@@ -336,28 +346,63 @@ class GnuStep2Linker {
         }
     }
 
+    _findOrCreateDataSectionEarly(name) {
+
+        let __segmentkeys = this.__segmentkeys;
+        let __segments = this.__segments;
+
+        if (name.startsWith(".rodata.")) {
+            return __segments[".rodata"];
+        } else if (name.startsWith(".data.")) {
+            return __segments[".data"];
+        } else if (name.startsWith(".bss.")) {
+            return __segments[".bss"];
+        } else {
+            let segref;
+            if (__segments.hasOwnProperty(name)) {
+                return __segments[name];
+            } else {
+                if (name.startsWith("__objc_") == false)
+                    debugger;
+                segref = {};
+                segref.name = name;
+                __segments[name] = segref;
+                __segmentkeys.push(name);
+
+                return segref;
+            }
+        }
+    }
+
 	mergeWithModule(wasmModule) {
 
         // TODO: must respect WASM_SYM_BINDING_LOCAL
 
-		let _funcmap = this.funcmap;
-		let _datamap = this.datamap;
-	    let _dataSegments = this.dataSegments;
-	    let _elementSegments = this.elementSegments;
-	    let _functions = this.functions;
-	    let _globals = this.globals;
-	    let _imports = this.imports;
-	    let _memory = this.memory;
-	    let _tables = this.tables;
-	    let _types = this.types;
-        let _tags = this.tags;
-        let _objc_constant_strings = this.objc_constant_strings;
+        let dst_symtable = this._symtable;
+        let dst_datasym = this._datasym;
+        let dst_funcsym = this._funcsym;
+        let dst_globsym = this._globsym;
+        let dst_tagsym = this._tagsym;
+        let dst_tblsym = this._tblsym;
+
+	    let dst_dataSegments = this.dataSegments;
+	    let dst_functions = this.functions;
+	    let dst_globals = this.globals;
+	    let dst_imports = this.imports;
+	    let dst_memory = this.memory;
+	    let dst_tables = this.tables;
+	    let dst_types = this.types;
+        let dst_tags = this.tags;
         let _code_relocs = this._code_relocs;
         let _data_relocs = this._data_relocs;
-        let _symtable = this._symtable;
+        let dst_code_reloc = _code_relocs;
+        let dst_data_reloc = _data_relocs;
+
+        let src_types = wasmModule.types;
 
 	    // key = value in wasmModule
 	    // val = value in combined module
+        let src_typemap = new Map(); // key = type in src, value = type in dst (bc linker on which this method is called)
 	    let src_globmap = new Map();
         let src_funcmap = new Map();
         let src_datamap = new Map();
@@ -373,13 +418,21 @@ class GnuStep2Linker {
 
         let code_relocs = relocCodeSection ? relocCodeSection.relocs : [];
         let data_relocs = relocDataSection ? relocDataSection.relocs : [];
+        let src_code_reloc = code_relocs;
+        let src_data_reloc = data_relocs;
         let linking = wasmModule.findSection("linking");
-        let symtable = linking._symtable;
+        let src_symtable = linking._symtable;
+
+        let new_func = [];
+        let new_data = [];
+        let new_globals = [];
+        let new_tables = [];
+        let new_tags = [];
 
         function findSymbolFor(segment) {
-            let len = symtable.length;
+            let len = src_symtable.length;
             for (let i = 0; i < len; i++) {
-                let symbol = symtable[i];
+                let symbol = src_symtable[i];
                 if (symbol.kind == 1 && symbol.value == segment) {
                     return symbol;
                 }
@@ -428,17 +481,17 @@ class GnuStep2Linker {
 
         function replaceRelocByRef(oldsym, newsym) {
 
-            let len = _code_relocs.length;
+            let len = dst_code_reloc.length;
             for (let i = 0; i < len; i++) {
-                let reloc = _code_relocs[i];
+                let reloc = dst_code_reloc[i];
                 if (reloc.ref == oldsym) {
                     reloc.ref = newsym;
                 }
             }
 
-            len = _data_relocs.length;
+            len = dst_data_reloc.length;
             for (let i = 0; i < len; i++) {
-                let reloc = _data_relocs[i];
+                let reloc = dst_data_reloc[i];
                 if (reloc.ref == oldsym) {
                     reloc.ref = newsym;
                 }
@@ -477,142 +530,259 @@ class GnuStep2Linker {
         }
 
         // symbol mapping
-        if (symtable && symtable.length > 0) {
-            let xlen = symtable.length;
-            let ylen = _symtable.length;
-            
+        if (src_symtable && src_symtable.length > 0) {
 
-            for (let x = 0; x < xlen; x++) {
-                let oldsym, newsym = symtable[x];
-                let found = false;
-                let idx = -1;
-                for (let y = 0; y < ylen; y++) {
-                    oldsym = _symtable[y];
-                    if (oldsym.kind == newsym.kind && oldsym.name == newsym.name) {
-                        idx = y;
-                        break;
-                    }
-                }
+            let len = src_symtable.length;
+            for (let i = 0; i < len; i++) {
+                let kind, sym = src_symtable[i];
+                kind = sym.kind;
+                if (kind == 0x00) { // functions
 
-                if (idx !== -1) {
-                    if (oldsym.name == "class_getInstanceMethod")
-                        debugger;
-                    let kind = newsym.kind;
-                    let oldf = oldsym.flags;
-                    let newf = newsym.flags;
-                    if (replacesOldSymbol(oldsym, newsym)) {
-                        _symtable[idx] = newsym;
-                        if (kind == 0) {
-                            dst_funcmap.set(oldsym.value, newsym.value);
-                            replaceRelocByRef(oldsym, newsym);
-                        } else if (kind == 1) {
-                            if (oldsym.value && newsym.value) {
-                                dst_datamap.set(oldsym.value, newsym.value);
-                            }
-                            replaceRelocByRef(oldsym, newsym);
+                    //if (sym.value && (((sym.value instanceof WasmFunction) && sym.value[__nsym] == "__sysconf") || ((sym.value instanceof ImportedFunction) && sym.value.name == "__sysconf")))
+                    //    debugger;
+
+                    // just merge local symbols.
+                    if ((sym.flags & WASM_SYM_BINDING_LOCAL) != 0) {
+                        dst_symtable.push(sym);
+                        if (sym.value && new_func.indexOf(sym.value) === -1) {
+                            new_func.push(sym.value);
                         }
-                    } else {
-                        replaceModuleRelocByRef(newsym, oldsym);
+                        continue;
                     }
+
+                    // Objective-C methods are declared as local, these does not appear here.
+                    
+                    if (sym.name == "__paritysi2")
+                        debugger;
+
+                    let name = sym.name;
+                    if (dst_funcsym.hasOwnProperty(name)) {
+                        let dstsym = dst_funcsym[name];
+                        if ((dstsym.flags & WASM_SYM_BINDING_WEAK) != 0 && (dstsym.flags & WASM_SYM_BINDING_WEAK) != 0) {
+                            // if both symbols are weak, keep the one in self.
+                            src_funcmap.set(sym.value, dstsym.value);
+                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
+                        } else if ((dstsym.flags & WASM_SYM_VISIBILITY_HIDDEN) != 0 && (dstsym.flags & WASM_SYM_VISIBILITY_HIDDEN) != 0) {
+                            // if both symbols are weak, keep the one in self.
+                            src_funcmap.set(sym.value, dstsym.value);
+                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
+                        } else if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0 && (sym.flags & WASM_SYM_UNDEFINED) != 0) {
+                            // if both are undefined; keep self
+                            src_funcmap.set(sym.value, dstsym.value);
+                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
+                        } else if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0) {
+                            // keep extneral (linker arg)
+                            dst_funcmap.set(dstsym.value, sym.value);
+                            _replaceRelocByRef(dst_code_reloc, dst_data_reloc, dstsym, sym);
+                            let idx = dst_symtable.indexOf(dstsym);
+                            if (idx == -1)
+                                throw new ReferenceError("symbol not in table");
+                            dst_symtable[idx] = sym;
+                            dst_funcsym[name] = sym;
+                        } else if ((sym.flags & WASM_SYM_UNDEFINED) != 0) {
+                            // external symbol is undefined; keep self
+                            src_funcmap.set(sym.value, dstsym.value);
+                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
+                        }
+
+                    } else {
+                        dst_symtable.push(sym);
+                        dst_funcsym[name] = sym;
+                        if (sym.value && new_func.indexOf(sym.value) === -1) {
+                            new_func.push(sym.value);
+                        }
+                    }
+
+                } else if (kind == 0x01) { // data
+
+                    // 
+                    if (sym.value && sym.value[__nsym] == ".bss._NSBlock")
+                        debugger;
+
+                    // just merge local symbols.
+                    if ((sym.flags & WASM_SYM_BINDING_LOCAL) != 0) {
+                        dst_symtable.push(sym);
+                        if (sym.value && new_data.indexOf(sym.value) === -1) {
+                            new_data.push(sym.value);
+                        }
+                        continue;
+                    }
+
+                    let name = sym.name;
+                    if (dst_datasym.hasOwnProperty(name)) {
+                        let dstsym = dst_datasym[name];
+                        if (sym == dstsym)
+                            continue;
+
+                        if ((dstsym.flags & WASM_SYM_BINDING_WEAK) != 0 && (dstsym.flags & WASM_SYM_BINDING_WEAK) != 0) {
+                            // if both symbols are weak, keep the one in self.
+                            src_datamap.set(sym.value, dstsym.value);
+                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
+                        } else if ((dstsym.flags & WASM_SYM_VISIBILITY_HIDDEN) != 0 && (dstsym.flags & WASM_SYM_VISIBILITY_HIDDEN) != 0) {
+                            // if both symbols are weak, keep the one in self.
+                            src_datamap.set(sym.value, dstsym.value);
+                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
+                        } else if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0 && (sym.flags & WASM_SYM_UNDEFINED) != 0) {
+                            // if both are undefined; keep self
+                            if (sym.value && dstsym.value)
+                                src_datamap.set(sym.value, dstsym.value);
+                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
+                        } else if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0) {
+                            // keep extneral (linker arg)
+                            if (sym.value && dstsym.value) {
+                                throw ReferenceError("old data should never have reference");
+                            }
+                            _replaceRelocByRef(dst_code_reloc, dst_data_reloc, dstsym, sym);
+                            let idx = dst_symtable.indexOf(dstsym);
+                            if (idx == -1)
+                                throw new ReferenceError("symbol not in table");
+                            dst_symtable[idx] = sym;
+                            dst_datasym[name] = sym;
+                            if (sym.value && new_data.indexOf(sym.value) === -1) {
+                                new_data.push(sym.value);
+                            }
+                        } else if ((sym.flags & WASM_SYM_UNDEFINED) != 0) {
+                            // external symbol is undefined; keep self
+                            if (sym.value && dstsym.value)
+                                src_datamap.set(sym.value, dstsym.value);
+                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
+                        } else {
+                            // else re-map to symbol within self.
+                            if (sym.value && dstsym.value)
+                                src_datamap.set(sym.value, dstsym.value);
+                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
+                        }
+
+                    } else {
+                        dst_symtable.push(sym);
+                        dst_datasym[name] = sym;
+                        if (sym.value && new_data.indexOf(sym.value) === -1) {
+                            new_data.push(sym.value);
+                        }
+                    }
+                } else if (kind == 0x02) { // globals.
+                    // just merge local symbols.
+                    if ((sym.flags & WASM_SYM_BINDING_LOCAL) != 0) {
+                        dst_symtable.push(sym);
+                        continue;
+                    }
+
+
+                    let val1 = sym.value;
+                    if (val1 instanceof ImportedGlobal) {
+                        let xlen = dst_globsym.length;
+                        let match = undefined;
+                        for (let x = 0; x < xlen; x++) {
+                            let dstsym = dst_globsym[x];
+                            let val2 = dstsym.value;
+                            if (val2 instanceof ImportedGlobal && val1.module == val2.module && val1.name == val2.name) {
+                                match = val2;
+                                break;
+                            }
+                        }
+
+                        if (match) {
+                            src_globmap.set(val1, match);
+                        } else {
+                            dst_symtable.push(sym);
+                            dst_globsym.push(sym);
+                            new_globals.push(val1);
+                        }
+
+                    } else {
+                        throw new TypeError("expected wasm.global symbol to be ImportedGlobal");
+                    }
+
+                } else if (kind == 0x04) { // event (error-handling)
+                    // just merge local symbols.
+                    if ((sym.flags & WASM_SYM_BINDING_LOCAL) != 0) {
+                        dst_symtable.push(sym);
+                        continue;
+                    }
+
+                    let val1 = sym.value;
+                    if (val1 instanceof ImportedTag) {
+
+                        let xlen = dst_tagsym.length;
+                        let match = undefined;
+                        for (let x = 0; x < xlen; x++) {
+                            let dstsym = dst_tagsym[x];
+                            let val2 = dstsym.value;
+                            if (val2 instanceof ImportedTag && val1.module == val2.module && val1.name == val2.name) {
+                                match = val2;
+                                break;
+                            }
+                        }
+
+                        if (match) {
+                            src_tagmap.set(val1, match);
+                        } else {
+                            dst_symtable.push(sym);
+                            dst_tagsym.push(sym);
+                            new_tags.push(val1);
+                        }
+
+                    } else {
+                        throw new TypeError("expected wasm.tag symbol to be ImportedTag");
+                    }
+
+                } else if (kind == 0x05) { // table
+                    // just merge local symbols.
+                    if ((sym.flags & WASM_SYM_BINDING_LOCAL) != 0) {
+                        dst_symtable.push(sym);
+                        continue;
+                    }
+
+                    let val1 = sym.value;
+                    if (val1 instanceof ImportedTable) {
+
+                        let xlen = dst_tblsym.length;
+                        let match = undefined;
+                        for (let x = 0; x < xlen; x++) {
+                            let dstsym = dst_tblsym[x];
+                            let val2 = dstsym.value;
+                            if (val2 instanceof ImportedTable && val1.module == val2.module && val1.name == val2.name) {
+                                match = val2;
+                                break;
+                            }
+                        }
+
+                        if (match) {
+                            src_tblmap.set(val1, match);
+                        } else {
+                            dst_symtable.push(sym);
+                            dst_tblsym.push(sym);
+                            new_tables.push(val1);
+                        }
+
+                    } else {
+                        throw new TypeError("expected wasm.table symbol to be ImportedTable");
+                    }
+
                 } else {
-                    _symtable.push(newsym);
+
                 }
             }
         } 
 
-        let __segmentkeys = this.__segmentkeys;
-        let __segments = this.__segments;
-
-        let _segrodata = __segments[".rodata"];
-        let _segdata = __segments[".data"];
-        let _segbss = __segments[".bss"];
-
-        // mapping data-segments
-        // TODO: fix this section, assign to segment here 
-        //  do not organize into .dataSegments array per segment here, simply use the ref later to collect segments.
-        //  should also use symbols..
-        let dataSegments = wasmModule.dataSegments;
-        let ylen, xlen = dataSegments.length;
-        for (let x = 0; x < xlen; x++) {
-            let segment = dataSegments[x];
-            let name = segment[__nsym];
-            if (name.startsWith(".rodata.")) {
-                segment.dataSection = _segrodata;
-            } else if (name.startsWith(".data.")) {
-                segment.dataSection = _segdata;
-            } else if (name.startsWith(".bss.")) {
-                segment.dataSection = _segbss;
-            } else {
-                let segref;
-                if (__segments.hasOwnProperty(name)) {
-                    segref = __segments[name];
-                } else {
-                    if (name.startsWith("__objc_") == false)
-                        debugger;
-                    segref = {};
-                    segref.name = name;
-                    __segments[name] = segref;
-                    __segmentkeys.push(name);
-                }
-                segment.dataSection = segref;
-            }
-        }
-        
-
-        let newfuncs = {};
-
-        // 
-        let functions = wasmModule.functions;
-        if (functions) {
-            let xlen = functions.length;
-            for (let x = 0; x < xlen; x++) {
-                let func = functions[x];
-                if (func instanceof ImportedFunction)
-                    continue;
-
-                let name = func[__nsym];
-                newfuncs[name] = func;
-            }
-        }
-
-        let len = _functions.length;
-        for (let i = 0; i < len; i++) {
-            let func = _functions[i];
-            if (!(func instanceof ImportedFunction))
-            	break;
-
-            if (func.module != 'env')
-            	continue;
-
-            if (newfuncs.hasOwnProperty(func.name)) {
-            	let repl = newfuncs[func.name];
-            	dst_funcmap.set(func, repl);
-            }
-        }
-
 	    // wasmModule.types
 	    // merges the type table of the two modules.
-        let oldtypes = []; // types to be replaced in wasmModule
-        let newtypes = []; // replacment for above, index mapped; oldtypes[i] = newtypes[i]
-
-        let otypes = wasmModule.types;
-        xlen = otypes.length;
-        ylen = _types.length;
+        let xlen = src_types.length;
+        let ylen = dst_types.length;
         for (let x = 0; x < xlen; x++) {
-            let t1 = otypes[x];
+            let t1 = src_types[x];
             let anymatch = false;
             for (let y = 0; y < ylen; y++) {
-                let t2 = _types[y];
+                let t2 = dst_types[y];
                 if (WasmType.isEqual(t1, t2)) {
-                    oldtypes.push(t1);
-                    newtypes.push(t2);
+                    src_typemap.set(t1, t2);
                     anymatch = true;
                     break;
                 }
             }
 
             if (!anymatch) {
-                _types.push(t1);
+                dst_types.push(t1); // its safe to append here, we are just running the length it was before start of loop.
             }
         }
 
@@ -633,22 +803,84 @@ class GnuStep2Linker {
             let len = tags.length;
             for (let i = 0; i < len; i++) {
                 let tag = tags[i];
-                let idx = oldtypes.indexOf(tag.type);
-                if (idx !== -1) {
-                    tag.type = newtypes[idx];
+                if (src_typemap.has(tag.type)) {
+                    tag.type = src_typemap.get(tag.type);
                 }
             }
         }
 
-        // replacing in functions & opcode
-        functions = wasmModule.functions;
-        if (functions) {
+        // matching memory instances (these does not get handled by symbols.)
+        let src_mem = wasmModule.memory;
+        if (src_mem && src_mem.length > 0) {
+            let ylen = dst_memory.length;
+            let xlen = src_mem.length;
+            for (let x = 0; x < xlen; x++) {
+                let smem = src_mem[x];
+                let found = false;
+                for (let y = 0; y < ylen; y++) {
+                    let dmem = dst_memory[y];
+                    if ((smem instanceof ImportedMemory) && (dmem instanceof ImportedMemory) && smem.module == dmem.module && smem.name == dmem.name) {
+                        src_memmap.set(smem, dmem);
+                        found = true;
+                    } else if ((smem instanceof WasmMemory) && (dmem instanceof WasmMemory) && smem[__nsym] == dmem[__nsym]) {
+                        src_memmap.set(smem, dmem);
+                        found = true;
+                    }
+                }
+
+                if (!found) {
+                    dst_memory.push(smem);
+                    if (smem instanceof ImportedMemory) {
+                        dst_imports.push(smem);
+                    }
+                }
+            }
+        }
+
+        // matching table instances (these does not always get handle by symbols)
+        let src_tables = wasmModule.tables;
+        if (src_tables && src_tables.length > 0) {
+            let ylen = dst_tables.length;
+            let xlen = src_tables.length;
+            for (let x = 0; x < xlen; x++) {
+                let stbl = src_tables[x];
+                if (src_tblmap.has(stbl) || new_tables.indexOf(stbl) !== -1)
+                    continue;
+                let found = false;
+                for (let y = 0; y < ylen; y++) {
+                    let dtbl = dst_tables[y];
+                    if ((stbl instanceof ImportedTable) && (dtbl instanceof ImportedTable) && stbl.module == dtbl.module && stbl.name == dtbl.name) {
+                        src_tblmap.set(stbl, dtbl);
+                        found = true;
+                    } else if ((stbl instanceof WasmTable) && (dtbl instanceof WasmTable) && stbl[__nsym] == dtbl[__nsym]) {
+                        src_tblmap.set(stbl, dtbl);
+                        found = true;
+                    }
+                }
+
+                if (!found) {
+                    new_tables.push(stbl);
+                }
+            }
+        }
+
+        // might be the same with .tags (which we have no case to test with ATM).
+
+        // merge producers custom-section
+        if (wasmModule.producers) {
+            _mergeProducersData(wasmModule.producers, this.producers);
+        }
+
+        // replacing in linker
+
+        // replacing in linker.functions & opcode
+        let functions = wasmModule.functions;
+        if (functions && functions.length > 0 && (src_typemap.size > 0 || src_funcmap.size > 0 || src_datamap.size > 0 || src_globmap.size > 0 || src_tblmap.size > 0 || src_memmap.size > 0)) {
             let xlen = functions.length;
             for (let x = 0; x < xlen; x++) {
                 let func = functions[x];
-                let idx = oldtypes.indexOf(func.type);
-                if (idx !== -1) {
-                    func.type = newtypes[idx];
+                if (src_typemap.has(func.type)) {
+                    func.type = src_typemap.get(func.type);
                 }
                 if (func instanceof ImportedFunction)
                     continue;
@@ -662,217 +894,36 @@ class GnuStep2Linker {
                         case 0x03:  // loop bt
                         case 0x04:  // if bt
                         case 0x06:  // try bt
-                        case 0x11:  // call_indirect
                         {
                             let type = inst.type;
-                            let idx = oldtypes.indexOf(type);
-                            if (idx !== -1) {
-                                inst.type = newtypes[idx];
+                            if (src_typemap.has(type)) {
+                                inst.type = src_typemap.get(type);
                             }
                             break;
                         }
-                    }
-                }
-            }
-        }
-
-        // wasmModule.imports
-       	let imports = wasmModule.imports;
-        if (imports) {
-            let xlen = imports.length;
-            let ylen = _imports.length;
-            for (let x = 0; x < xlen; x++) {
-                let cls, imp1 = imports[x];
-                if (imp1 instanceof ImportedFunction) {
-                	cls = ImportedFunction;
-                } else if (imp1 instanceof ImportedGlobal) {
-                	cls = ImportedGlobal;
-                } else if (imp1 instanceof ImportedMemory) {
-                	cls = ImportedMemory;
-                } else if (imp1 instanceof ImportedTable) {
-                	cls = ImportedTable;
-                } else if (imp1 instanceof ImportedTag) {
-                	cls = ImportedTag;
-                }
-
-                let found = false;
-
-                for (let y = 0; y < ylen; y++) {
-                	let imp2 = _imports[y];
-                	if (imp2 instanceof cls && imp2.module == imp1.module && imp2.name == imp1.name) {
-                		if (cls == ImportedFunction) {
-		                	src_funcmap.set(imp1, imp2);
-		                } else if (cls == ImportedGlobal) {
-		                	src_globmap.set(imp1, imp2);
-		                } else if (cls == ImportedMemory) {
-		                	src_memmap.set(imp1, imp2);
-		                } else if (cls == ImportedTable) {
-		                	src_tblmap.set(imp1, imp2);
-		                } else if (cls == ImportedTag) {
-		                	src_tagmap.set(imp1, imp2);
-		                }
-		                found = true;
-                		break;
-                	}
-                }
-
-                if (!found && imp1.module == "env") {
-                	if (_funcmap.hasOwnProperty(imp1.name)) {
-                        let func = _funcmap[imp1.name];
-                        // TODO: check type
-                        src_funcmap.set(imp1, func);
-                        found = true;
-                    }
-                }
-
-                if (!found) {
-                	_imports.push(imp1);
-
-                    this.appendImport(imp1);
-                }
-            }
-        }
-
-
-        // self.dataSegments
-        if (dst_datamap.size > 0) {
-
-            // find:
-            // - memory.init  (0xfc << 8) | 8
-            // - data.drop    (0xfc << 8) | 9
-            // 
-            // replace in:
-            // dataSegments (handled by not merging data-segments found in dst_datamap)
-            
-            let functions = wasmModule.functions;
-            let xlen = functions.length;
-            for (let x = 0; x < xlen; x++) {
-                let func = functions[x];
-                if (func instanceof ImportedFunction)
-                    continue;
-
-                let opcodes = func.opcodes;
-                let ylen = opcodes.length;
-                for (let y = 0; y < ylen; y++) {
-                    let inst = opcodes[y];
-                    switch (inst.opcode) {
+                        case 0x11:  // call_indirect
+                        {
+                            let tbl = inst.table;
+                            let type = inst.type;
+                            if (src_typemap.has(type)) {
+                                inst.type = src_typemap.get(type);
+                            }
+                            if (src_tblmap.has(tbl)) {
+                                inst.table = src_tblmap.get(tbl);
+                                tbl._usage--;
+                                inst.table._usage++;
+                            }
+                            break;
+                        }
                         case 0xfc08:  // memory.init
                         case 0xfc09:  // data.drop
                         {
                             let dataSegment = inst.dataSegment;
-                            if (dst_datamap.has(dataSegment)) {
-                                inst.dataSegment = dst_datamap.get(dataSegment);
+                            if (src_datamap.has(dataSegment)) {
+                                inst.dataSegment = src_datamap.get(dataSegment);
                             }
                             break;
                         }
-                    }
-                }
-            }
-
-            for (const [oldseg, newseg] of dst_datamap) {
-
-                let idx = _functions.indexOf(oldseg);
-                _dataSegments[idx] = newseg;
-            }
-
-            len = data_relocs.length;
-            for (let i = 0; i < len; i++) {
-                let reloc = data_relocs[i];
-                if (dst_datamap.has(reloc.dst))
-                    continue;
-                
-                _data_relocs.push(reloc);
-            }
-
-            len = code_relocs.length;
-            for (let i = 0; i < len; i++) {
-                let reloc = code_relocs[i];
-                let type = reloc.type;
-                if (type == R_WASM_MEMORY_ADDR_LEB || type == R_WASM_MEMORY_ADDR_LEB) {
-                    let segment = reloc.ref.value;
-                    if (dst_datamap.has(segment))
-                        reloc.ref.value = dst_datamap.has(segment);
-
-                }
-            }
-            
-
-        }
-
-        
-        // self.functions
-        if (dst_funcmap.size > 0) {
-
-            // find opcode:
-            // - call       0x10
-            // - ref.func   0xd2
-            // replace in:
-            // functions
-            // imports (replace/remove as needed)
-            // element-segments
-            
-            for (const [oldfunc, newfunc] of dst_funcmap) {
-
-            	let idx = _functions.indexOf(oldfunc);
-            	_functions.splice(idx, 1);
-            	if (oldfunc instanceof ImportedFunction) {
-            		idx = _imports.indexOf(oldfunc);
-            		_imports.splice(idx, 1);
-            	}
-            }
-            
-            let xlen = _functions.length;
-            for (let x = 0; x < xlen; x++) {
-                let func = _functions[x];
-                if (func instanceof ImportedFunction)
-                    continue;
-
-                let opcodes = func.opcodes;
-                let ylen = opcodes.length;
-                for (let y = 0; y < ylen; y++) {
-                    let inst = opcodes[y];
-                    switch (inst.opcode) {
-                        case 0x10:  // call
-                        case 0xd2:  // ref.func
-                        {
-                            let func = inst.func;
-                            if (dst_funcmap.has(func)) {
-                                inst.func = dst_funcmap.get(func);
-                                func._usage--;
-                                inst.func._usage++;
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // reloc in data should be replaced with a swap of ref in symbol handling
-        }
-
-        // wasmModule.functions
-        if (src_funcmap.size > 0) {
-
-            // find opcode:
-            // - call       0x10
-            // - ref.func   0xd2
-            // replace in:
-            // functions
-            // imports (replace/remove as needed)
-            // element-segments
-
-        	let functions = wasmModule.functions;
-            let xlen = functions.length;
-            for (let x = 0; x < xlen; x++) {
-                let func = functions[x];
-                if (func instanceof ImportedFunction)
-                    continue;
-
-                let opcodes = func.opcodes;
-                let ylen = opcodes.length;
-                for (let y = 0; y < ylen; y++) {
-                    let inst = opcodes[y];
-                    switch (inst.opcode) {
                         case 0x10:  // call
                         case 0xd2:  // ref.func
                         {
@@ -884,52 +935,6 @@ class GnuStep2Linker {
                             }
                             break;
                         }
-                    }
-                }
-            }
-
-            let len = data_relocs.length;
-            for (let i = 0; i < len; i++) {
-                let reloc = data_relocs[i];
-                let type = reloc.type;
-                if (type == R_WASM_TABLE_INDEX_I32) {
-                    let func = reloc.ref.value;
-                    if (src_funcmap.has(func))
-                        reloc.ref.value = src_funcmap.has(func);
-
-                }
-            }
-        }
-
-        // wasmModule.tables
-        if (src_tblmap.size > 0) {
-            // find in opcode:
-            // - call_indirect  0x11
-            // - table.set      0x26
-            // - table.get      0x25
-            // - table.size     (0xfc << 8) | 16
-            // - table.grow     (0xfc << 8) | 15
-            // - table.init     (0xfc << 8) | 12
-            // - table.copy     (0xfc << 8) | 14
-            // - table.fill     (0xfc << 8) | 17
-            //
-            // replace in:
-            // tables
-            // imports (replace/remove as needed)
-            
-            let functions = wasmModule.functions;
-            let xlen = functions.length;
-            for (let x = 0; x < xlen; x++) {
-                let func = functions[x];
-                if (func instanceof ImportedFunction)
-                    continue;
-
-                let opcodes = func.opcodes;
-                let ylen = opcodes.length;
-                for (let y = 0; y < ylen; y++) {
-                    let inst = opcodes[y];
-                    switch (inst.opcode) {
-                        case 0x11:      // call_indirect
                         case 0x25:      // table.get
                         case 0x26:      // table.set
                         case 0xfc0c:    // table.init
@@ -962,35 +967,6 @@ class GnuStep2Linker {
                             }
                             break;
                         }
-                    }
-                }
-            }
-        }
-
-        // wasmModule.globals
-        if (src_globmap.size > 0) {
-            // find:
-            // - global.set     0x24
-            // - global.get     0x23
-            // 
-            // (globals are also allowed in expr as in global.init, dataSegment.init)
-            // 
-            // replace in:
-            // globals
-            // imports (replace/remove as needed)
-            
-            let functions = wasmModule.functions;
-            let xlen = functions.length;
-            for (let x = 0; x < xlen; x++) {
-                let func = functions[x];
-                if (func instanceof ImportedFunction)
-                    continue;
-
-                let opcodes = func.opcodes;
-                let ylen = opcodes.length;
-                for (let y = 0; y < ylen; y++) {
-                    let inst = opcodes[y];
-                    switch (inst.opcode) {
                         case 0x23:  // global.get
                         case 0x24:  // global.set
                         {
@@ -1000,34 +976,6 @@ class GnuStep2Linker {
                             }
                             break;
                         }
-                    }
-                }
-            }
-        }
-
-        // wasmModule.tags
-        if (src_tagmap.size > 0) {
-            
-            // find:
-            // - throw      0x08
-            // - catch      0x07
-            // 
-            // replace in:
-            // tags
-            // imports (replace/remove as needed)
-            
-            let functions = wasmModule.functions;
-            let xlen = functions.length;
-            for (let x = 0; x < xlen; x++) {
-                let func = functions[x];
-                if (func instanceof ImportedFunction)
-                    continue;
-
-                let opcodes = func.opcodes;
-                let ylen = opcodes.length;
-                for (let y = 0; y < ylen; y++) {
-                    let inst = opcodes[y];
-                    switch (inst.opcode) {
                         case 0x07:  // catch
                         case 0x08:  // throw
                         {
@@ -1037,36 +985,7 @@ class GnuStep2Linker {
                             }
                             break;
                         }
-                    }
-                }
-            }
-        }
-
-        // wasmModule.memory
-        if (src_memmap.size > 0) {
-            // find in opcode: 
-            // memory.size  0x3f
-            // memory.grow  0x40
-            // memory.copy  (0xfc << 8) | 10
-            // memory.fill  (0xfc << 8) | 11 
-            // memory.init  (0xfc << 8) | 8
-            // 
-            // replace in:
-            // memory
-            // imports (replace/remove as needed)
-
-            let functions = wasmModule.functions;
-            let xlen = functions.length;
-            for (let x = 0; x < xlen; x++) {
-                let func = functions[x];
-                if (func instanceof ImportedFunction)
-                    continue;
-
-                let opcodes = func.opcodes;
-                let ylen = opcodes.length;
-                for (let y = 0; y < ylen; y++) {
-                    let inst = opcodes[y];
-                    switch (inst.opcode) {
+                        // module.memory
                         case 0x3f:
                         case 0x40:
                         case 0xfc0b:
@@ -1096,6 +1015,298 @@ class GnuStep2Linker {
             }
         }
 
+        // replacing in self.
+        
+        if (dst_datamap.size > 0 || dst_funcmap.size > 0) {
+
+            // find:
+            // - memory.init  (0xfc << 8) | 8
+            // - data.drop    (0xfc << 8) | 9
+            // 
+            // replace in:
+            // dataSegments (handled by not merging data-segments found in dst_datamap)
+            
+            let xlen = dst_functions.length;
+            for (let x = 0; x < xlen; x++) {
+                let func = dst_functions[x];
+                if (func instanceof ImportedFunction)
+                    continue;
+
+                let opcodes = func.opcodes;
+                let ylen = opcodes.length;
+                for (let y = 0; y < ylen; y++) {
+                    let inst = opcodes[y];
+                    switch (inst.opcode) {
+                        case 0xfc08:  // memory.init
+                        case 0xfc09:  // data.drop
+                        {
+                            let dataSegment = inst.dataSegment;
+                            if (dst_datamap.has(dataSegment)) {
+                                inst.dataSegment = dst_datamap.get(dataSegment);
+                            }
+                            break;
+                        }
+                        case 0x10:  // call
+                        case 0xd2:  // ref.func
+                        {
+                            let func = inst.func;
+                            if (dst_funcmap.has(func)) {
+                                inst.func = dst_funcmap.get(func);
+                                func._usage--;
+                                inst.func._usage++;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (dst_funcmap.size > 0) {
+            for (const [oldfunc, newfunc] of dst_funcmap) {
+
+                if (oldfunc instanceof ImportedFunction && newfunc instanceof ImportedFunction) {
+
+                    let idx1 = dst_functions.indexOf(oldfunc);
+                    let idx2 = dst_imports.indexOf(oldfunc);
+                    if (idx1 == -1 || dst_functions.indexOf(newfunc) != -1 || idx2 == -1 || dst_imports.indexOf(newfunc) != -1) {
+                        throw new ReferenceError("INVALID_STATE")
+                    }
+
+                    dst_functions[idx1] = newfunc;
+                    dst_imports[idx2] = newfunc;
+
+                } else if (oldfunc instanceof ImportedFunction && newfunc instanceof WasmFunction) {
+
+                    let idx1 = dst_functions.indexOf(oldfunc);
+                    let idx2 = dst_functions.indexOf(newfunc);
+                    let idx3 = dst_imports.indexOf(oldfunc);
+                    if (idx1 === -1 || idx3 === -1) {
+                        throw new ReferenceError("INVALID_STATE")
+                    }
+
+                    dst_functions.splice(idx1, 1);
+                    dst_imports.splice(idx3, 1);
+
+                    idx2 = dst_functions.indexOf(newfunc);
+                    if (idx2 === -1)
+                        dst_functions.push(newfunc);
+
+                } else if (oldfunc instanceof WasmFunction && newfunc instanceof ImportedFunction) {
+
+                    let idx1 = dst_functions.indexOf(oldfunc);
+                    let idx2 = dst_imports.indexOf(oldfunc);
+                    if (idx1 == -1 || dst_functions.indexOf(newfunc) != -1 || dst_imports.indexOf(newfunc) != -1) {
+                        throw new ReferenceError("INVALID_STATE");
+                    }
+
+                    let impidx = -1;
+                    let len = dst_functions.length;
+                    for (let i = 0; i < len; i++) {
+                        let func = dst_functions[i];
+                        if (!(func instanceof ImportedFunction)) {
+                            impidx = i - 1;
+                            break;
+                        }
+                    }
+
+                    dst_functions.splice(idx1, 1);
+                    if (impidx == -1) {
+                        dst_functions.unshift(newfunc);
+                    } else {
+                        dst_functions.splice(impidx, 0, newfunc);
+                    }
+
+                    dst_imports.push(newfunc);
+                    
+                } else if (oldfunc instanceof WasmFunction && newfunc instanceof WasmFunction) {
+                    
+                    let idx = dst_functions.indexOf(oldfunc);
+                    if (idx == -1 || dst_functions.indexOf(newfunc) != -1) {
+                        throw new ReferenceError("INVALID_STATE");
+                    }
+
+                    dst_functions[idx] = newfunc;
+
+                }
+            }
+        }
+
+        if (dst_datamap.size > 0) {
+            for (const [oldseg, newseg] of dst_datamap) {
+
+                let idx1 = dst_dataSegments.indexOf(oldseg);
+                let idx2 = dst_dataSegments.indexOf(newseg);
+                if (idx2 === -1) {
+                    dst_dataSegments[idx1] = newseg;
+                } else {
+                    dst_dataSegments.splice(idx1, 1);
+                }
+                
+
+                newseg.dataSection = this._findOrCreateDataSectionEarly(newseg[__nsym]);
+            }
+        }
+
+        let impidx = -1;
+        let len = dst_functions.length;
+        for (let i = 0; i < len; i++) {
+            let func = dst_functions[i];
+            if (!(func instanceof ImportedFunction)) {
+                impidx = i - 1;
+                break;
+            }
+        }
+        len = new_func.length;
+        for (let i = 0; i < len; i++) {
+            let func = new_func[i];
+            if (func instanceof ImportedFunction) {
+                let idx = dst_functions.indexOf(func); // might have been inserted trough dst_funcmap
+                if (idx === -1) {
+                    if (impidx == -1) {
+                        dst_functions.unshift(func);
+                        impidx++;
+                    } else {
+                        dst_functions.splice(impidx, 0, func);
+                        impidx++;
+                    }
+                }
+                idx = dst_imports.indexOf(func);
+                if (idx === -1)
+                    dst_imports.push(func);
+            } else {
+                let idx = dst_functions.indexOf(func);
+                if (idx === -1)
+                    dst_functions.push(func);
+            }
+        }
+
+        impidx = -1;
+        len = dst_globals.length;
+        for (let i = 0; i < len; i++) {
+            let glob = dst_globals[i];
+            if (!(glob instanceof ImportedGlobal)) {
+                impidx = i - 1;
+                break;
+            }
+        }
+
+        len = new_globals.length;
+        for (let i = 0; i < len; i++) {
+            let glob = new_globals[i];
+            if (glob instanceof ImportedGlobal) {
+                if (impidx == -1) {
+                    dst_globals.unshift(glob);
+                    impidx++;
+                } else {
+                    dst_globals.splice(impidx, 0, glob);
+                    impidx++;
+                }
+                let idx = dst_imports.indexOf(glob);
+                if (idx == -1)
+                    dst_imports.push(glob);
+            } else {
+                dst_globals.push(glob);
+            }
+        }
+
+        impidx = -1;
+        len = dst_tags.length;
+        for (let i = 0; i < len; i++) {
+            let tag = dst_tags[i];
+            if (!(tag instanceof ImportedTag)) {
+                impidx = i - 1;
+                break;
+            }
+        }
+
+        len = new_tags.length;
+        for (let i = 0; i < len; i++) {
+            let tag = new_tags[i];
+            if (tag instanceof ImportedTag) {
+                if (impidx == -1) {
+                    dst_tags.unshift(tag);
+                    impidx++;
+                } else {
+                    dst_tags.splice(impidx, 0, tag);
+                    impidx++;
+                }
+                let idx = dst_imports.indexOf(tag);
+                if (idx == -1)
+                    dst_imports.push(tag);
+            } else {
+                dst_tags.push(tag);
+            }
+        }
+
+        impidx = -1;
+        len = dst_tables.length;
+        for (let i = 0; i < len; i++) {
+            let tbl = dst_tables[i];
+            if (!(tbl instanceof ImportedTable)) {
+                impidx = i - 1;
+                break;
+            }
+        }
+
+        len = new_tables.length;
+        for (let i = 0; i < len; i++) {
+            let tbl = new_tables[i];
+            if (tbl instanceof ImportedTable) {
+                if (impidx == -1) {
+                    dst_tables.unshift(tbl);
+                    impidx++;
+                } else {
+                    dst_tables.splice(impidx, 0, tbl);
+                    impidx++;
+                }
+                let idx = dst_imports.indexOf(tbl);
+                if (idx == -1)
+                    dst_imports.push(tbl);
+            } else {
+                dst_tables.push(tbl);
+            }
+        }
+
+        len = new_data.length;
+        for (let i = 0; i < len; i++) {
+            let dataSegment = new_data[i];
+            if (dst_dataSegments.indexOf(dataSegment) !== -1)
+                continue;
+            dataSegment.dataSection = this._findOrCreateDataSectionEarly(dataSegment[__nsym]);
+            dst_dataSegments.push(dataSegment);
+        }
+
+
+        len = src_code_reloc.length;
+        for (let i = 0; i < len; i++) {
+            let reloc = src_code_reloc[i];
+            let type = reloc.type;
+
+            // reloc.CODE contains relocation for some of the value ylinker have already mapped due to the objectification of the bytecode.
+            if (type !== R_WASM_MEMORY_ADDR_LEB && type !== R_WASM_MEMORY_ADDR_SLEB && type != R_WASM_TABLE_INDEX_SLEB)
+                continue;
+
+            if (new_func.indexOf(reloc.func) !== -1) {
+                dst_code_reloc.push(reloc);
+            } else if (dst_funcmap.has(reloc.func)) {
+                dst_code_reloc.push(reloc);
+            }
+        }
+
+        len = src_data_reloc.length;
+        for (let i = 0; i < len; i++) {
+            let reloc = src_data_reloc[i];
+
+            if (new_data.indexOf(reloc.dst) !== -1) {
+                dst_data_reloc.push(reloc);
+            } else if (dst_datamap.has(reloc.dst)) {
+                dst_data_reloc.push(reloc);
+            }
+        }
+
+        return null;
+        /*
         dataSegments = wasmModule.dataSegments;
         if (dataSegments.length > 0) {
 
@@ -1139,7 +1350,7 @@ class GnuStep2Linker {
                     if (src_datamap.has(segment))
                         continue;
 
-                    _dataSegments.push(segment);
+                    dst_dataSegments.push(segment);
                 }
 
                 len = data_relocs.length;
@@ -1148,7 +1359,7 @@ class GnuStep2Linker {
                     if (src_datamap.has(reloc.dst))
                         continue;
                     
-                    _data_relocs.push(reloc);
+                    dst_data_reloc.push(reloc);
                 }
 
                 len = code_relocs.length;
@@ -1168,40 +1379,15 @@ class GnuStep2Linker {
                 let len = dataSegments.length;
                 for (let i = 0; i < len; i++) {
                     let segment = dataSegments[i];
-                    _dataSegments.push(segment);
+                    dst_dataSegments.push(segment);
                 }
                 len = data_relocs.length;
                 for (let i = 0; i < len; i++) {
                     let reloc = data_relocs[i];
-                    _data_relocs.push(reloc);
+                    dst_data_reloc.push(reloc);
                 }
             }
-        }
-
-
-        for (let n in newfuncs) {
-            let func = newfuncs[n];
-            if (src_funcmap.has(func))
-                continue;
-            if (_funcmap.hasOwnProperty(n)) {
-                console.warn("%s already defined", n);
-            }
-            _funcmap[n] = func;
-            _functions.push(func);
-            // TODO: read linking symbol-table
-            // TODO: never include .objcv2_load_function more than once.
-        }
-
-        len = code_relocs.length;
-        for (let i = 0; i < len; i++) {
-            let reloc = code_relocs[i];
-            let func = reloc.func;
-            let type = reloc.type;
-            if (type == R_WASM_FUNCTION_INDEX_LEB || type == R_WASM_TYPE_INDEX_LEB || type == R_WASM_GLOBAL_INDEX_LEB || src_funcmap.has(func))
-                continue;
-            if (_functions.indexOf(func) != -1)
-                _code_relocs.push(reloc);
-        }
+        }*/
 	}
 
 
@@ -1347,6 +1533,38 @@ class GnuStep2Linker {
         return null;
     }
 
+    _findSOFuncSymbol(name, functype) {
+        let loaders = this._loaders;
+        let len = loaders.length;
+        for (let i = 0; i < len; i++) {
+            let loader = loaders[i];
+            if (loader.linkage != "dylink")
+                continue;
+            let result = loader.resolveFuncSymbol(name, functype);
+            if (result) {
+                return result;
+            }
+        }
+
+        return null;
+    }
+
+    _findSODataSymbol(name) {
+        let loaders = this._loaders;
+        let len = loaders.length;
+        for (let i = 0; i < len; i++) {
+            let loader = loaders[i];
+            if (loader.linkage != "dylink")
+                continue;
+            let result = loader.resolveDataSymbol(name);
+            if (result) {
+                return result;
+            }
+        }
+
+        return null;
+    }
+
     _fixupBuiltin() {
 
     }
@@ -1359,23 +1577,61 @@ class GnuStep2Linker {
 
     // invoked by the parent linker before symbols within linker against a AR
     // file is merged with the target.
+    /**
+     * Recursivly loads undefined symbols within a AR-loader.
+     * @param  {ARLoader} loader
+     * @return {void}      
+     */
     _fixupARLinking(loader) {
+        if (loader._wholeArchive) {
+            return;
+        }
+        let loopcnt = 0;
+        let prevfunc = [];
+        let prevdata = [];
         let _symtable = this._symtable;
-        let len = _symtable.length;
-        for (let i = 0; i < len; i++) {
-            let name, sym = _symtable[i];
-            if (sym.kind == 0) {
-                let name = sym.name;
-                let func = sym.value;
-                if (!func) {
-                    loader.resolveFuncSymbol(name)
-                } else if (func instanceof ImportedFunction) {
-                    loader.resolveFuncSymbol(name, func.type);
+        while (true) {
+            if (loopcnt > 10000) {
+                throw new RangeError("LOOP_WATCHDOG");
+            }
+            loopcnt++;
+            let newsym = [];
+            let _symtable = this._symtable;
+            let len = _symtable.length;
+            for (let i = 0; i < len; i++) {
+                let name, sym = _symtable[i];
+                if ((sym.flags & WASM_SYM_UNDEFINED) == 0)
+                    continue;
+
+                if (sym.kind == 0) {
+                    let name = sym.name;
+                    if (prevfunc.indexOf(name) !== -1) {
+                        continue;
+                    }
+                    prevfunc.push(name);
+                    newsym.push(sym);
+                } else if (sym.kind == 1) {
+                    let name = sym.name;
+                    if (prevdata.indexOf(name) !== -1) {
+                        continue;
+                    }
+                    prevdata.push(name);
+                    newsym.push(sym);
                 }
-            } else if (sym.kind == 1) {
-                let segment = sym.value;
-                if (!segment) {
-                    loader.resolveDataSymbol(sym.name);
+            }
+
+            if (newsym.length == 0)
+                break;
+
+            len = newsym.length;
+            for (let i = 0; i < len; i++) {
+                let name, sym = newsym[i];
+                name = sym.name;
+
+                if (sym.kind == 0) {
+                    loader.loadFuncSymbol(name);
+                } else if (sym.kind == 1) {
+                    loader.loadDataSymbol(name);
                 }
             }
         }
@@ -1404,6 +1660,7 @@ class GnuStep2Linker {
         let dst_datamap = new Map();
         let dst_code_reloc = this._code_relocs;
         let dst_data_reloc = this._data_relocs;
+        let dst_functions = this.functions;
         let _dataSectionMap = this.__segments;
         let _dataSectionNames = this.__segmentkeys;
 
@@ -1429,6 +1686,7 @@ class GnuStep2Linker {
                 cpy._size = 0;
                 _dataSectionNames.push(secname);
                 _dataSectionMap[secname] = cpy;
+                dataSegment.dataSection = cpy;
             }
         }
 
@@ -1471,6 +1729,9 @@ class GnuStep2Linker {
                 // just merge local symbols.
                 if ((sym.flags & WASM_SYM_BINDING_LOCAL) != 0) {
                     dst_symtable.push(sym);
+                    if (sym.value && dst_functions.indexOf(sym.value) === -1 && new_func.indexOf(sym.value) === -1) {
+                        new_func.push(sym.value);
+                    }
                     continue;
                 }
 
@@ -1497,18 +1758,20 @@ class GnuStep2Linker {
 
                 } else {
                     dst_symtable.push(sym);
-                    if (sym.value) {
+                    if (sym.value && dst_functions.indexOf(sym.value) === -1 && new_func.indexOf(sym.value) === -1) {
                         new_func.push(sym.value);
                     }
                 }
 
             } else if (kind == 0x01) { // data
-                if (sym.name == "_ZN3icu5Grego12MONTH_LENGTHE")
-                    debugger;
+
                 // TODO: the issue with this symbol is likley caused by loading of static 
                 // libraries are done at the same time as linking with dynamic libaries..
                 // separate loading of static libraries to be step before this merge is done
                 // 
+                // REMARKS: Not totally sure that we can get away with just this, there might
+                // be scenarios where we need to splice a data-segment which holds multiple
+                // symbols?
 
                 // just merge local symbols.
                 if ((sym.flags & WASM_SYM_BINDING_LOCAL) != 0) {
@@ -1700,6 +1963,39 @@ class GnuStep2Linker {
             }
         }
 
+        // matching table instances (these does not always get handle by symbols)
+        let src_tables = linker.tables;
+        if (src_tables && src_tables.length > 0) {
+            let dst_tables = this.tables;
+            let ylen = dst_tables.length;
+            let xlen = src_tables.length;
+            for (let x = 0; x < xlen; x++) {
+                let stbl = src_tables[x];
+                if (src_tblmap.has(stbl) || new_tables.indexOf(stbl) !== -1)
+                    continue;
+                let found = false;
+                for (let y = 0; y < ylen; y++) {
+                    let dtbl = dst_tables[y];
+                    if ((stbl instanceof ImportedTable) && (dtbl instanceof ImportedTable) && stbl.module == dtbl.module && stbl.name == dtbl.name) {
+                        src_tblmap.set(stbl, dtbl);
+                        found = true;
+                    } else if ((stbl instanceof WasmTable) && (dtbl instanceof WasmTable) && stbl[__nsym] == dtbl[__nsym]) {
+                        src_tblmap.set(stbl, dtbl);
+                        found = true;
+                    }
+                }
+
+                if (!found) {
+                    new_tables.push(stbl);
+                }
+            }
+        }
+
+        // merge producers custom-section
+        if (linker.producers) {
+            _mergeProducersData(linker.producers, this.producers);
+        }
+
         // find in opcode:
         // - block
         // - loop
@@ -1746,7 +2042,6 @@ class GnuStep2Linker {
                         case 0x03:  // loop bt
                         case 0x04:  // if bt
                         case 0x06:  // try bt
-                        case 0x11:  // call_indirect
                         {
                             let type = inst.type;
                             if (src_typemap.has(type)) {
@@ -1754,6 +2049,21 @@ class GnuStep2Linker {
                             }
                             break;
                         }
+                        case 0x11:  // call_indirect
+                        {
+                            let tbl = inst.table;
+                            let type = inst.type;
+                            if (src_typemap.has(type)) {
+                                inst.type = src_typemap.get(type);
+                            }
+                            if (src_tblmap.has(tbl)) {
+                                inst.table = src_tblmap.get(tbl);
+                                tbl._usage--;
+                                inst.table._usage++;
+                            }
+                            break;
+                        }
+
                         case 0xfc08:  // memory.init
                         case 0xfc09:  // data.drop
                         {
@@ -1774,7 +2084,6 @@ class GnuStep2Linker {
                             }
                             break;
                         }
-                        case 0x11:      // call_indirect
                         case 0x25:      // table.get
                         case 0x26:      // table.set
                         case 0xfc0c:    // table.init
@@ -1903,10 +2212,83 @@ class GnuStep2Linker {
             }
         }
 
+        if (dst_funcmap.size > 0) {
+
+            let dst_functions = this.functions;
+            let dst_imports = this.imports;
+
+            for (const [oldfunc, newfunc] of dst_funcmap) {
+
+                if (oldfunc instanceof ImportedFunction && newfunc instanceof ImportedFunction) {
+
+                    let idx1 = dst_functions.indexOf(oldfunc);
+                    let idx2 = dst_imports.indexOf(oldfunc);
+                    if (idx1 == -1 || dst_functions.indexOf(newfunc) !== -1 || idx2 == -1 || dst_imports.indexOf(newfunc) != -1) {
+                        throw new ReferenceError("INVALID_STATE")
+                    }
+
+                    dst_functions[idx1] = newfunc;
+                    dst_imports[idx2] = newfunc;
+
+                } else if (oldfunc instanceof ImportedFunction && newfunc instanceof WasmFunction) {
+
+                    let idx1 = dst_functions.indexOf(oldfunc);
+                    let idx2 = dst_functions.indexOf(newfunc);
+                    let idx3 = dst_imports.indexOf(oldfunc);
+                    if (idx1 === -1 || idx2 === undefined || idx3 === -1) {
+                        throw new ReferenceError("INVALID_STATE")
+                    }
+
+                    dst_functions.splice(idx1, 1);
+                    dst_imports.splice(idx3, 1);
+
+                    if (idx2 === -1)
+                        dst_functions.push(newfunc);
+
+                } else if (oldfunc instanceof WasmFunction && newfunc instanceof ImportedFunction) {
+
+                    let idx1 = dst_functions.indexOf(oldfunc);
+                    if (idx1 == -1 || dst_functions.indexOf(newfunc) != -1 || dst_imports.indexOf(newfunc) != -1) {
+                        throw new ReferenceError("INVALID_STATE");
+                    }
+
+                    let impidx = -1;
+                    let len = dst_functions.length;
+                    for (let i = 0; i < len; i++) {
+                        let func = dst_functions[i];
+                        if (!(func instanceof ImportedFunction)) {
+                            impidx = i - 1;
+                            break;
+                        }
+                    }
+
+                    dst_functions.splice(idx1, 1);
+                    if (impidx == -1) {
+                        dst_functions.unshift(newfunc);
+                    } else {
+                        dst_functions.splice(impidx, 0, newfunc);
+                    }
+
+                    dst_imports.push(newfunc);
+                    
+                } else if (oldfunc instanceof WasmFunction && newfunc instanceof WasmFunction) {
+                    
+                    let idx = dst_functions.indexOf(oldfunc);
+                    if (idx == -1 || dst_functions.indexOf(newfunc) != -1) {
+                        throw new ReferenceError("INVALID_STATE");
+                    }
+
+                    dst_functions[idx] = newfunc;
+
+                }
+            }
+        }
+
         if (dst_datamap.size > 0) {
             for (const [oldseg, newseg] of dst_datamap) {
 
                 let idx = _dataSegments.indexOf(oldseg);
+                mapOrAdoptDataSection(newseg);
                 _dataSegments[idx] = newseg;
             }
         }
@@ -1925,6 +2307,8 @@ class GnuStep2Linker {
         len = new_func.length;
         for (let i = 0; i < len; i++) {
             let func = new_func[i];
+            if (_functions.indexOf(func) !== -1)
+                continue;
             if (func instanceof ImportedFunction) {
                 if (impidx == -1) {
                     _functions.unshift(func);
@@ -2033,6 +2417,8 @@ class GnuStep2Linker {
         len = new_data.length;
         for (let i = 0; i < len; i++) {
             let dataSegment = new_data[i];
+            if (dataSegment[__nsym] == ".rodata._ZTSN3icu7UMemoryE")
+                debugger;
             mapOrAdoptDataSection(dataSegment);
             _dataSegments.push(dataSegment);
         }
@@ -2293,6 +2679,7 @@ class GnuStep2Linker {
         let _symtable = this._symtable;
         let _code_relocs = this._code_relocs;
         let _data_relocs = this._data_relocs;
+        let dst_tables = this.tables;
         let dst_funcmap = new Map();
 
         function findModuleFuncSymbol(name) {
@@ -2335,6 +2722,7 @@ class GnuStep2Linker {
 
             let sym = findModuleFuncSymbol(func.name);
             if (sym && (sym.value && sym.value instanceof WasmFunction) && sym.value != func) {
+                console.error("nothing should be mapped here! it for a while and remove this loop later");
                 dst_funcmap.set(func, sym.value);
             }
         }
@@ -2430,6 +2818,8 @@ class GnuStep2Linker {
             }
         }
 
+        // Triggering loading of statically linked dependecies.
+        // TODO: trigger loading of linking of static to static
         let arloaders = [];
         let loaders = this._loaders;
         len = loaders.length;
@@ -2490,25 +2880,55 @@ class GnuStep2Linker {
 
 
         dst_funcmap.clear();
-        len = _functions.length;
+        // Finding missing func & data symbols
+        // This can be done after __start_ and __stop_ symbols have been taken care of.
+        len = _symtable.length;
         for (let i = 0; i < len; i++) {
-            let func = _functions[i]
-            if (!(func instanceof ImportedFunction))
-                break;
+            let name, sym = _symtable[i];
+            let kind = sym.kind;
 
-            let func2 = this._findFuncSymbol(func.name, func.type);
-            if (!func2) {
-                console.error("function not found %s", func.name);
-                continue
+            if (kind == 0) {
+                if ((sym.flags & WASM_SYM_UNDEFINED) == 0)
+                    continue;
+                let func = sym.value;
+                if (!(func instanceof ImportedFunction)) {
+                    throw new TypeError("symbol marked as undefined by is not ImportedFunction");
+                }
+
+                let func2 = this._findSOFuncSymbol(func.name, func.type);
+                if (!func2) {
+                    console.error("function not found %s", func.name);
+                    continue
+                }
+
+                dst_funcmap.set(func, func2);
+                sym.value = func2;
+                sym.flags &= ~WASM_SYM_UNDEFINED;
+                sym.flags |= WASM_SYM_EXTERNAL;
+
+            } else if (kind == 1) {
+                if ((sym.flags & WASM_SYM_UNDEFINED) == 0)
+                    continue;
+
+                name = sym.name;
+                if (sym.value || sym._reloc || name.startsWith("__start_") || name.startsWith("__stop_")) {
+                    continue;
+                }
+
+                let reloc = this._findSODataSymbol(name);
+                if (!reloc) {
+                    console.error("missing %s", name);
+                    continue;
+                }
+                if (reloc instanceof LinkerSymbol) {
+                    sym.value = reloc.value;
+                } else {
+                    sym._reloc = reloc;
+                }
+                sym.flags &= ~WASM_SYM_UNDEFINED;
+                sym.flags |= WASM_SYM_EXTERNAL;
+
             }
-
-            dst_funcmap.set(func, func2);
-            let sym = findModuleFuncSymbol(func.name);
-            if (!sym)
-                throw new TypeError("NOT_FOUND");
-            sym.value = func2;
-            sym.flags &= ~WASM_SYM_UNDEFINED;
-            sym.flags |= WASM_SYM_EXTERNAL;
         }
 
         // self.functions
@@ -2520,36 +2940,49 @@ class GnuStep2Linker {
             // replace in:
             // functions
             // imports (replace/remove as needed)
-            // element-segments
+            // element-segments (not generated yet)
             
             for (const [oldfunc, newfunc] of dst_funcmap) {
 
+                if (newfunc instanceof ImportedFunction && newfunc.name == "__libc_cond_destroy_stub")
+                    debugger;
+
                 if (oldfunc instanceof ImportedFunction && newfunc instanceof ImportedFunction) {
-                    let idx = _imports.indexOf(oldfunc);
-                    _imports[idx] = newfunc;
-                    idx = _functions.indexOf(oldfunc);
-                    if (idx != -1) {
-                        _functions[idx] = newfunc;
+                    let idx1 = _imports.indexOf(oldfunc);
+                    let idx2 = _imports.indexOf(newfunc);
+                    if (idx1 === -1)
+                        throw new Error("SCENARIO NOT HANDLED");
+                    if (idx2 === -1) {
+                        _imports[idx1] = newfunc;
                     } else {
-                        throw new ReferenceError("missing function");
+                        _imports.splice(idx1, 1);
                     }
+                    idx1 = _functions.indexOf(oldfunc);
+                    idx2 = _functions.indexOf(newfunc);
+                    if (idx1 === -1)
+                        throw new Error("SCENARIO NOT HANDLED");
+                    if (idx2 === -1) {
+                        _functions[idx1] = newfunc;
+                    } else {
+                        _functions.splice(idx1, 1);
+                    }
+                    
                 } else if (oldfunc instanceof ImportedFunction) {
                     // newfunc must be WasmFunction
-                    let idx = _functions.indexOf(oldfunc);
-                    _functions.splice(idx, 1);
-                    idx = _imports.indexOf(oldfunc);
-                    _imports.splice(idx, 1);
+                    let idx1 = _functions.indexOf(oldfunc);
+                    let idx2 = _imports.indexOf(oldfunc);
+                    if (idx1 === -1 || idx2 === -1)
+                        throw new Error("SCENARIO NOT HANDLED");
+                    _functions.splice(idx1, 1);
+                    _imports.splice(idx2, 1);
 
-                    idx = _functions.indexOf(newfunc);
+                    idx1 = _functions.indexOf(newfunc);
                     if (idx == -1) {
                         _functions.push(newfunc);
                     }
 
                 } else {
-                    throw new TypeError("what are we even replacing here");
-                    idx = _functions.indexOf(newfunc);
-                    if (idx == -1)
-                        _functions.push(newfunc);
+                    throw new TypeError("How did we end up here?");
                 }
             }
             
@@ -2592,34 +3025,79 @@ class GnuStep2Linker {
             }
         }
 
-        // Finding missing data symbols
-        // This can be done after __start_ and __stop_ symbols have been taken care of.
-        len = _symtable.length;
-        for (let i = 0; i < len; i++) {
-            let name, sym = _symtable[i];
-            if (sym.kind != 1)
-                continue;
+        // TODO: find and merge duplicate .rodata..L.str.???
+        {
+            let rodata_strsym = [];
+            let len = _symtable.length;
+            for (let i = 0; i < len; i++) {
+                let sym = _symtable[i];
+                if (sym.kind != 0x01 || (sym.flags & WASM_SYM_BINDING_LOCAL) == 0)
+                    continue;
+                let value = sym.value;
+                if (value[__nsym].startsWith(".rodata..L.str")) {
+                    rodata_strsym.push(sym);
+                }
+            }
+            let dupcnt = 0;
+            let dubbytes = 0;
 
-            name = sym.name;
-            if (sym.value || sym._reloc || name.startsWith("__start_") || name.startsWith("__stop_")) {
-                continue;
+            let dst_symmap = new Map();
+            len = rodata_strsym.length;
+            for (let x = 0; x < len; x++) {
+                let sym1 = rodata_strsym[x];
+                if (sym1 === null)
+                    continue;
+
+                let str1 = sym1.value._buffer;
+                for (let y = x + 1; y < len; y++) {
+                    let sym2 = rodata_strsym[y];
+                    if (sym2 === null)
+                        continue;
+
+                    let str2 = sym2.value._buffer;
+                    if (str1.byteLength != str2.byteLength)
+                        continue;
+                    let zlen = str1.byteLength;
+                    let match = true;
+                    for (let z = 0; z < zlen; z++) {
+                        if (str1[z] !== str2[z]) {
+                            match = false;
+                            break;
+                        }
+                    }
+
+                    if (match) {
+                        dst_symmap.set(sym2, sym1);
+                        dupcnt++;
+                        dubbytes += zlen;
+                        rodata_strsym[y] = null;
+                    }
+                }
             }
 
-            let reloc = this._findDataSymbol(name);
-            if (!reloc) {
-                console.error("missing %s", name);
-                continue;
+            for (const [oldsym, newsym] of dst_symmap) {
+                let oldata = oldsym.value;
+                _replaceRelocByRef(_code_relocs, _data_relocs, oldsym, newsym);
+                let idx = _symtable.indexOf(oldsym);
+                if (idx === -1)
+                    throw new RangeError("INVALID_REF");
+                _symtable.splice(idx, 1);
+                idx = _dataSegments.indexOf(oldata);
+                if (idx === -1)
+                    throw new RangeError("INVALID_REF");
+                _dataSegments.splice(idx, 1);
             }
-            if (reloc instanceof LinkerSymbol) {
-                sym.value = reloc.value;
-            } else {
-                sym._reloc = reloc;
-            }
-            sym.flags &= ~WASM_SYM_UNDEFINED;
-            sym.flags |= WASM_SYM_EXTERNAL;
+
+            console.log("remove-duplicates-local-str.. found %d duplicates with %d bytes", dupcnt, dubbytes);
         }
 
-        // TODO: find and merge duplicate .rodata..L.str.???
+        // Validate that the linking process has given correct results.
+        try {
+            validateWasmModuleDataSegments(_dataSegments);
+        } catch (err) {
+            console.error(err.errors);
+            throw err;
+        }
 
         // TODO: what about all the imports in libc? these seams to be weak aliases?
         // build data-segments
@@ -2817,6 +3295,20 @@ class GnuStep2Linker {
         let indirect_tbl;
         let indirect_tbl_elem, indirect_tbl_vec = [];
 
+        {
+            let len = dst_tables.length;
+            for (let i = 0; i < len; i++) {
+                let tbl = dst_tables[i];
+                if (!(tbl instanceof ImportedTable))
+                    break;
+                if (tbl.module == "env" && tbl.name == "__indirect_function_table") {
+                    indirect_tbl = tbl;
+                } else if (tbl.module == "env" && tbl.name == "__objc_indirect_method_table") {
+                    indirect_tbl_objc = tbl;
+                }
+            }
+        }
+
         // mapping indirect function references in code (for example used as callback arguments)
         len = _code_relocs.length;
         for (let i = 0; i < len; i++) {
@@ -2954,12 +3446,6 @@ class GnuStep2Linker {
                         debugger;
                     }
 
-                    if (func[__nsym] == "_i_NSBundle__executablePath") {
-                        debugger;
-                        // from inst at 123, the expected location is 114, but rangeAtPullIndex()
-                        // returns 115 to 116
-                    }
-
                     opcodes[instidx - 1] = {opcode: 0x23, global: reloc_global}; // global.get   ;; before
                     inst.offset = reloc_offset;
                     dropped.push(prev);
@@ -2972,12 +3458,6 @@ class GnuStep2Linker {
                     // global.get __rodata_reloc
                     // i32.const value=1234             
                     // i32.store offset=$reloc_offset
-
-                    if (func[__nsym] == "_i_NSBundle__executablePath" && instidx == 123) {
-                        debugger;
-                        // from inst at 123, the expected location is 114, but rangeAtPullIndex()
-                        // returns 115 to 116
-                    }
 
                     let addr_r = rangeAtPullIndex(func, opcodes, instidx - 1, 1);
                     if (addr_r.start != addr_r.end) {
@@ -3029,7 +3509,7 @@ class GnuStep2Linker {
                 }
 
                 if (Number.isInteger(ref.offset) && ref.offset != 0) {
-                    reloc_global += ref.offset;
+                    reloc_offset += ref.offset;
                 }
 
 
@@ -3069,6 +3549,9 @@ class GnuStep2Linker {
         // TODO: data reloc commands..
         let reloc_groups = [];
         function findRelocGroup(type, src, dst) {
+            if (src === undefined || dst === undefined)
+                throw new TypeError("INVALID_RELOC_PARAM");
+
             let len = reloc_groups.length
             for(let i = 0;i < len;i++){
                 let grp = reloc_groups[i];
@@ -3129,7 +3612,6 @@ class GnuStep2Linker {
 
                 if (Number.isInteger(ref.offset) && ref.offset != 0) {
                     src_reloc_offset += ref.offset;
-                    debugger;
                 }
 
                 let dst = reloc.dst;
@@ -3222,6 +3704,8 @@ class GnuStep2Linker {
             }
         }
 
+        // TODO: generate function exports
+
         // creating element segments
         if (indirect_tbl_vec.length > 0) {
             let elem = new WasmElementSegment();
@@ -3279,6 +3763,8 @@ class GnuStep2Linker {
 
         }
 
+        ops.push({opcode: 0x0b});   // end
+
         _functions.push(ctor_dylib_mem);
 
         if (indirect_tbl_elem || indirect_tbl_objc_elem) {
@@ -3289,6 +3775,7 @@ class GnuStep2Linker {
             ctor_dylib_tbl.opcodes = [];
             ops = ctor_dylib_tbl.opcodes;
 
+            // TODO: this should be dynamic!
             if (indirect_tbl_elem) {
                 ops.push({opcode: 0x41, value: 0});                                                 // i32.const    (src)
                 ops.push({opcode: 0x41, value: indirect_tbl_vec.length});                           // i32.const    (len)
@@ -3303,507 +3790,143 @@ class GnuStep2Linker {
                 ops.push({opcode: 0xfc12, table: indirect_tbl_objc, elem: indirect_tbl_objc_elem}); // table.init
             }
 
+            ops.push({opcode: 0x0b});   // end
 
             _functions.push(ctor_dylib_tbl);
-        
+        }
+
+        _producersAddProcessedBy(this.producers, "wasm-ylinker", "0.1 (https://github.com/raweden/wasm-ylinker)")
+
+        // export visiable symbols.
+        let dst_exports = this.exports;
+        let export_list = [];
+
+        len = _symtable.length;
+        for (let i = 0; i < len; i++) {
+            let func, flags, sym = _symtable[i];
+            if (sym.kind != 0)
+                continue;
+            flags = sym.flags;
+            if (((flags & WASM_SYM_BINDING_LOCAL) != 0) || ((flags & WASM_SYM_UNDEFINED) != 0)) {
+                continue;
+            }
+            
+            if (((flags & WASM_SYM_EXTERNAL) != 0) && ((flags & WASM_SYM_EXPORTED) == 0))
+                continue;
+            
+            func = sym.value;
+            if (func instanceof ImportedFunction)
+                continue;
+
+            // Temporary hack (do not export the objc_msgSend_vii functions)
+            let name = func[__nsym];
+            if (name.startsWith("objc_msgSend_"))
+                continue;
+
+            if (export_list.indexOf(func) === -1)
+                export_list.push(func);
+        }
+
+        len = export_list.length;
+        for (let i = 0; i < len; i++) {
+            let func = export_list[i];
+            let exp = new ExportedFunction();
+            exp.name = func[__nsym];
+            exp.function = func;
+            dst_exports.push(exp);
+        }
+
+        // convert memory parameters if needed.
+        {
+            let mem = this.memory[0];
+            mem.shared = true;
+            mem.min = 10;
+            mem.max = 4096;
+        }
+
+        // dylink data section 
+        let dylinkData = {
+            identifier: so_ident,
+            dependencies: null,
+            memory: null,
+            tables: null,
+        };
+
+        if (singleDataReloc) {
+            if (!dylinkData.memory)
+                dylinkData.memory = [];
+            let last = outputSegments[outputSegments.length - 1];
+            let reloc_global = last._reloc_glob
+            let obj = {};
+            obj.global = {module: reloc_global.module, name: reloc_global.name};
+            obj.max_align = last.max_align; // TODO: is this correct?
+            obj.size = last._reloc_stop;
+            dylinkData.memory.push(obj);
+        } else {
+            throw new Error("segmented memory initialization is not implemented; be my guest!");
+        }
+
+        // TODO: this should be dynamic!
+        if (indirect_tbl_elem) {
+            if (!dylinkData.tables)
+                dylinkData.tables = [];
+
+            let obj = {};
+            obj.global = {module: so_tbl_reloc.module, name: so_tbl_reloc.name};
+            obj.table = {module: indirect_tbl.module, name: indirect_tbl.name};
+            obj.max_align = 0;
+            obj.size = indirect_tbl_vec.length;
+            dylinkData.tables.push(obj);
+        }
+
+        if (indirect_tbl_objc_elem) {
+            if (!dylinkData.tables)
+                dylinkData.tables = [];
+
+            let obj = {};
+            obj.global = {module: so_tbl_objc_reloc.module, name: so_tbl_objc_reloc.name};
+            obj.table = {module: indirect_tbl_objc.module, name: indirect_tbl_objc.name};
+            obj.max_align = 0;
+            obj.size = indirect_tbl_objc_vec.length;
+            dylinkData.tables.push(obj);
+        }
+
+        {
+            if (!dylinkData.dependencies)
+                dylinkData.dependencies = [];
+            let dylinked = dylinkData.dependencies;
+            let loaders = this._loaders;
+            let len = loaders.length;
+            for (let i = 0; i < len; i++) {
+                let loader = loaders[i];
+                if (loader.linkage != "dylink")
+                    continue;
+                let ident = loader._dylib_info.sharedObjectIdent;
+                if (typeof ident !== "string")
+                    throw new TypeError("expected string");
+                dylinked.push(ident);
+            }            
+        }
+
+        let dylinkSec = new WebAssemblyCustomSectionNetBSDDylink(this._wasmModule);
+        dylinkSec.dylinkData = dylinkData;
+        this._wasmModuleSections.unshift(dylinkSec);
+
+        try {
+            validateWasmModule(this);
+        } catch (err) {
+            console.error(err.errors);
+            throw err;
         }
 
         debugger;
     }
 
     writeSymbolFile(fd) {
-        // table of memory symbols and their relative location
-        // table of visible function symbols
-        // - each function can be exports by
-        //   - export declartion and/or:
-        //     exported to a imported/exported table
-        // 
-        // table of function symbol aliases.
-        // 
-        // if table is used as means of exports.
-        // - one section must be declared which indicates which table it's exported to.
-        // 
-        // Rather than re-linking the entire share-object if not required, this file is 
-        // read into the linker and linked against.
-        // 
-        // Structure
-        // !YLNKR_D + i32 version
-        // - reloc-globals (vector of module + name)
-        // - data-segment table (info about .rodata, .data .bss)
-        //   - name
-        //   - size
-        //   - reloc global
-        //   - reloc offset
-        //   - alignment
-        // - data-symbols table
-        //   - name
-        //   - segment index
-        //   - size
-        //   - reloc global
-        //   - reloc offset
-        // - func-tables (tables which func are exported to module + name)
-        // - func-types  (same as module.types but only holds the exported/declared funcs)
-        // - func-symbols
-        //   - name
-        //   - wasm-type
-        //   - flags
-        //   - table-export-count
-        //      - table
-        //      - reloc global
-        //      - reloc index
-        //   - alias-count
-        //      - name
-        // 
-        // or nest table-export outeside of func-symbols
-        // - func-aliases (array of alternative names)
-        //   - index of symbol
-        //   - name
-        let _dataSections = this._dataSections;
-        let dataSegments = this.dataSegments;
-        let symtable = this._symtable;
-
-        let hdrbuf = new Uint8Array(12);
-        let data = new DataView(hdrbuf.buffer);
-        data.setUint32(0, 0x4E4C5921, true);
-        data.setUint32(4, 0x445F524B, true);
-        data.setUint32(8, 0x01, true);          // version
-        fs.writeSync(fd, hdrbuf, 0, hdrbuf.byteLength);
-
-        const YLNK_DATA_NAME = "ylinker.linking_data";
-        const YLNK_DATA_VER = 1;
-
-        const LDAT_DYLIB_INFO_TYPE = 0x15;
-        const LDAT_RLOC_GLB_TYPE = 0x16;
-        const LDAT_DATA_SEG_TYPE = 0x17;
-        const LDAT_DATA_SYM_TYPE = 0x18;
-        const LDAT_FUNC_TBL_TYPE = 0x19;
-        const LDAT_FUNC_TYP_TYPE = 0x20;
-        const LDAT_FUNC_SYM_TYPE = 0x21;
-
-        let sechdrsz = 0;
-        let buffers = [];
-        let reloc_globs = [];
-        let data_section_tbl = [];
-        let data_section_map = new Map();
-        let data_symbols_tbl = [];
-        let func_tbl = [];
-        let type_tbl = [];
-
-        let len = _dataSections.length;
-        for(let i = 0;i < len;i++){
-            let dataSection = _dataSections[i];
-            let glob = dataSection._reloc_glob;
-            if (reloc_globs.indexOf(glob) == -1)
-                reloc_globs.push(glob);
-
-            let obj = {};
-            obj.name = dataSection.name;
-            obj.size = dataSection._size;
-            obj.reloc_global = dataSection._reloc_glob;
-            obj.reloc_offset = dataSection._reloc_start;
-            obj.alignment = dataSection.max_align;
-
-            data_section_map.set(dataSection, obj);
-            data_section_tbl.push(obj);
-        }
-
-        len = symtable.length;
-        for (let i = 0; i < len; i++) {
-            let external, sym = symtable[i];
-            if (sym.kind != 1) {
-                continue;
-            }
-            if (((sym.flags & WASM_SYM_BINDING_LOCAL) != 0) || ((sym.flags & WASM_SYM_UNDEFINED) != 0)) {
-                continue;
-            }
-            external = ((sym.flags & WASM_SYM_EXTERNAL) != 0);
-            if (external)
-                continue;
-            let segment = sym.value;
-            let obj = {};
-            obj.name = sym.name;
-            obj.nlen = lengthBytesUTF8(sym.name);
-            let secobj;
-            if (!segment.dataSection) {
-                throw new ReferenceError("data-segment missing data-section");
-            } else if (!data_section_map.has(segment.dataSection)) {
-                throw new ReferenceError("data-section not defined");
-            } else {
-                secobj = data_section_map.get(segment.dataSection)
-            }
-            obj.segment = secobj;
-            obj.size = 0;
-            obj.reloc_global = segment._reloc_glob;
-            obj.reloc_offset = segment._reloc;
-            data_symbols_tbl.push(obj);
-        }
-
-        let functypes = [];
-        let expfunc = [];
-        let maxexp = 0;
-        let aliasmap = new Map();
-
-        for (let i = 0; i < len; i++) {
-            let external, flags, sym = symtable[i];
-            if (sym.kind != 0) {
-                continue;
-            }
-            flags = sym.flags;
-            if (((flags & WASM_SYM_BINDING_LOCAL) != 0) || ((flags & WASM_SYM_UNDEFINED) != 0)) {
-                continue;
-            }
-            external = ((flags & WASM_SYM_EXTERNAL) != 0);
-            if (external && ((flags & WASM_SYM_EXPORTED) == 0))
-                continue;
-
-            let func = sym.value;
-            let name = func[__nsym];
-            let idx = expfunc.indexOf(func);
-            if (idx === -1) {
-                expfunc.push(func);
-                if (functypes.indexOf(func.type) == -1) {
-                    functypes.push(func.type);
-                }
-            }
-
-            idx = type_tbl.indexOf(func.type);
-            if (idx === -1)
-                type_tbl.push(func.type);
-
-            if (sym.name != name) {
-                let aliases;
-                if (aliasmap.has(func)) {
-                    aliases = aliasmap.get(func);
-                } else {
-                    aliases = [];
-                    aliasmap.set(func, aliases);
-                }
-
-                if (aliases.indexOf(sym.name) == -1) {
-                    aliases.push(sym.name);
-                }
-            }
-        }
-
-        len = expfunc.length;
-        for (let i = 0; i < len; i++) {
-            let func = expfunc[i];
-            let obj = {};
-            obj.func = func;
-            obj.name = func[__nsym];
-            obj.flags = 0;
-            obj.nlen = lengthBytesUTF8(obj.name);
-            expfunc[i] = obj;
-            if (aliasmap.has(func)) {
-                obj.aliases = aliasmap.get(func);
-            }
-        }
-
-        // dylib info sub-section
-        let totsz, secsz = 0;
-        {
-            // computing needed size
-            let so_ident = this.so_ident;
-            let nlen = lengthBytesUTF8(so_ident);
-            secsz += lengthULEB128(nlen);
-            secsz += nlen;
-
-            totsz = secsz + 1;
-            totsz += lengthULEB128(secsz);
-
-            // encoding
-            let buf = new Uint8Array(totsz);
-            data = new ByteArray(buf);
-            data.writeUint8(LDAT_DYLIB_INFO_TYPE);
-            data.writeULEB128(secsz);
-
-            nlen = lengthBytesUTF8(so_ident);
-            data.writeULEB128(nlen);
-            data.writeUTF8Bytes(so_ident);
-
-            buffers.push(buf);
-        }
-
-        // reloc globals
-        totsz = 0;
-        secsz = 0;
-        len = reloc_globs.length;
-        for (let i = 0; i < len; i++) {
-            let glob = reloc_globs[i];
-            let nlen = lengthBytesUTF8(glob.module);
-            secsz += lengthULEB128(nlen);
-            secsz += nlen;
-            nlen = lengthBytesUTF8(glob.name);
-            secsz += lengthULEB128(nlen);
-            secsz += nlen;
-        }
-        secsz += lengthULEB128(len);
-        totsz = secsz + 1;
-        totsz += lengthULEB128(secsz);
-
-        let buf = new Uint8Array(totsz);
-        data = new ByteArray(buf);
-        data.writeUint8(LDAT_RLOC_GLB_TYPE);
-        data.writeULEB128(secsz);
-        data.writeULEB128(len);
-        for (let i = 0; i < len; i++) {
-            let glob = reloc_globs[i];
-            let name = glob.module;
-            let nlen = lengthBytesUTF8(name);
-            data.writeULEB128(nlen);
-            data.writeUTF8Bytes(name);
-            name = glob.name;
-            nlen = lengthBytesUTF8(name);
-            data.writeULEB128(nlen);
-            data.writeUTF8Bytes(name);
-        }
-        buffers.push(buf);
-
-        // reloc data-segments
-        totsz = 0;
-        secsz = 0;
-        len = data_section_tbl.length;
-        for (let i = 0; i < len; i++) {
-            let obj = data_section_tbl[i];
-            let nlen = lengthBytesUTF8(obj.name);
-            secsz += lengthULEB128(nlen);
-            secsz += nlen;
-            secsz += lengthULEB128(obj.size);
-
-            let idx = reloc_globs.indexOf(obj.reloc_global);
-            if (idx == -1)
-                throw new ReferenceError("invalid data-structure");
-            secsz += lengthULEB128(idx);
-            secsz += lengthULEB128(obj.reloc_offset);
-            secsz += lengthULEB128(obj.alignment);
-        }
-        secsz += lengthULEB128(len);
-        totsz = secsz + 1;
-        totsz += lengthULEB128(secsz);
-
-        buf = new Uint8Array(totsz);
-        data = new ByteArray(buf);
-        data.writeUint8(LDAT_DATA_SEG_TYPE);
-        data.writeULEB128(secsz);
-        data.writeULEB128(len);
-        for (let i = 0; i < len; i++) {
-            let obj = data_section_tbl[i];
-            let name = obj.name;
-            let nlen = lengthBytesUTF8(name);
-            data.writeULEB128(nlen);
-            data.writeUTF8Bytes(name);
-            data.writeULEB128(obj.size);
-            let idx = reloc_globs.indexOf(obj.reloc_global);
-            data.writeULEB128(idx);
-            data.writeULEB128(obj.reloc_offset);
-            data.writeULEB128(obj.alignment);
-        }
-        buffers.push(buf);
-
-        // data-symbols
-        totsz = 0;
-        secsz = 0;
-        len = data_symbols_tbl.length;
-        for (let i = 0; i < len; i++) {
-            let obj = data_symbols_tbl[i];
-            let nlen = lengthBytesUTF8(obj.name);
-            secsz += lengthULEB128(nlen);
-            secsz += nlen;
-            secsz += lengthULEB128(obj.reloc_offset);
-            secsz += lengthULEB128(obj.size);
-
-            let idx = data_section_tbl.indexOf(obj.segment);
-            if (idx == -1)
-                throw new ReferenceError("invalid data-structure");
-            secsz += lengthULEB128(idx);
-
-            idx = reloc_globs.indexOf(obj.reloc_global);
-            if (idx == -1)
-                throw new ReferenceError("invalid data-structure");
-            secsz += lengthULEB128(idx);
-        }
-        secsz += lengthULEB128(len);
-        totsz = secsz + 1;
-        totsz += lengthULEB128(secsz);
-
-        buf = new Uint8Array(totsz);
-        data = new ByteArray(buf);
-        data.writeUint8(LDAT_DATA_SYM_TYPE);
-        data.writeULEB128(secsz);
-        data.writeULEB128(len);
-        for (let i = 0; i < len; i++) {
-            let obj = data_symbols_tbl[i];
-            let name = obj.name;
-            let nlen = lengthBytesUTF8(name);
-            data.writeULEB128(nlen);
-            data.writeUTF8Bytes(name);
-            data.writeULEB128(obj.reloc_offset);
-            data.writeULEB128(obj.size);
-            let idx = data_section_tbl.indexOf(obj.segment);
-            data.writeULEB128(idx);
-            idx = reloc_globs.indexOf(obj.reloc_global);
-            data.writeULEB128(idx);
-        }
-        buffers.push(buf);
-
-        // func-symbols's types (this is basically encoded exactly the same as wasm)
-        totsz = 0;
-        secsz = 0;
-        len = functypes.length;
-        for (let i = 0; i < len; i++) {
-            let functype = functypes[i];
-            let argc = functype.argc;
-            let retc = functype.retc;
-            secsz += lengthULEB128(argc);
-            secsz += lengthULEB128(retc);
-            secsz += (argc + retc + 1);
-        }
-        secsz += lengthULEB128(len);
-        totsz = secsz + 1;
-        totsz += lengthULEB128(secsz);
-
-        buf = new Uint8Array(totsz);
-        data = new ByteArray(buf);
-        data.writeUint8(LDAT_FUNC_TYP_TYPE);
-        data.writeULEB128(secsz);
-        data.writeULEB128(len);
-        for (let i = 0; i < len; i++) {
-            let functype = functypes[i];
-            let argc = functype.argc;
-            let retc = functype.retc;
-            data.writeUint8(0x60);
-            data.writeULEB128(argc);
-            let argv = functype.argv;
-            for (let x = 0; x < argc; x++) {
-                let type = argv[x];
-                data.writeUint8(type);
-            }
-
-            data.writeULEB128(retc);
-            let retv = functype.retv;
-            for (let x = 0; x < retc; x++) {
-                let type = retv[x];
-                data.writeUint8(type);
-            }
-        }
-        buffers.push(buf);
-
-        // function symbols
-        totsz = 0;
-        secsz = 0;
-        len = expfunc.length;
-        for (let i = 0; i < len; i++) {
-            let symbol = expfunc[i];
-            let func = symbol.func;
-            let symstart = secsz;
-            let nlen = lengthBytesUTF8(symbol.name);
-            secsz += lengthULEB128(nlen);
-            secsz += nlen;
-            let typeidx = functypes.indexOf(func.type);
-            if (typeidx == -1)
-                throw new ReferenceError("invalid data-structure");
-            secsz += lengthULEB128(typeidx);
-
-            secsz += lengthULEB128(symbol.flags);
         
-            if (symbol.aliases && Array.isArray(symbol.aliases)) {
-                let aliases = symbol.aliases;
-                let xlen = aliases.length;
-                for (let x = 0; x < xlen; x++) {
-                    let name = aliases[x];
-                    let nlen = lengthBytesUTF8(name);
-                    secsz += lengthULEB128(nlen);
-                    secsz += nlen;
-                }
-                secsz += lengthULEB128(xlen);
-            } else {
-                secsz += lengthULEB128(0);
-            }
+        let buffers = encodeYLinkerData(this, {});
 
-            if (symbol.element_exports && Array.isArray(symbol.element_exports)) {
-                throw new ReferenceError("element_exports not supported yet");
-            } else {
-                secsz += lengthULEB128(0);
-            }
-            let symsz = secsz - symstart;
-            symbol.symsz = symsz;
-            secsz += lengthULEB128(symsz);
-        }
-        secsz += lengthULEB128(len);
-        totsz = secsz + 1;
-        totsz += lengthULEB128(secsz);
-
-        buf = new Uint8Array(totsz);
-        data = new ByteArray(buf);
-        data.writeUint8(LDAT_FUNC_SYM_TYPE);
-        data.writeULEB128(secsz);
-        data.writeULEB128(len);
-        for (let i = 0; i < len; i++) {
-            let symbol = expfunc[i];
-            let func = symbol.func;
-            let name = symbol.name;
-            let nlen = lengthBytesUTF8(name);
-            data.writeULEB128(symbol.symsz);
-            data.writeULEB128(nlen);
-            data.writeUTF8Bytes(name);
-
-            let typeidx = functypes.indexOf(func.type);
-            data.writeULEB128(typeidx);
-            data.writeULEB128(symbol.flags);
-            
-            // we put aliases here since it eaiser to skip.
-            if (symbol.aliases && Array.isArray(symbol.aliases)) {
-                let aliases = symbol.aliases;
-                let xlen = aliases.length;
-
-                data.writeULEB128(xlen);
-                
-                for (let x = 0; x < xlen; x++) {
-                    let name = aliases[x];
-                    let nlen = lengthBytesUTF8(name);
-                    data.writeULEB128(nlen);
-                    data.writeUTF8Bytes(name);
-                }
-
-            } else {
-                data.writeULEB128(0);
-            }
-
-            // 
-            if (symbol.element_exports && Array.isArray(symbol.element_exports)) {
-                throw new ReferenceError("element_exports not supported yet");
-            } else {
-                data.writeULEB128(0);
-            }
-        }
-        buffers.push(buf);
-
-        totsz = 0;
-        secsz = 0;
-        len = buffers.length;
-        for (let i = 0; i < len; i++) {
-            let buf = buffers[i];
-            secsz += buf.byteLength;
-        }
-        let hdrstart = secsz;
-        secsz += lengthULEB128(YLNK_DATA_VER);
-        totsz = secsz + 1;
-        let nlen = lengthBytesUTF8(YLNK_DATA_NAME);
-        totsz += lengthULEB128(nlen);
-        totsz += nlen;
-        totsz += lengthULEB128(secsz);
-        let hdrsz = totsz - hdrstart;
-
-        buf = new Uint8Array(hdrsz);
-        data = new ByteArray(buf);
-        data.writeUint8(0);           // encodes like a wasm custom section.
-        data.writeULEB128(nlen);
-        data.writeUTF8Bytes(YLNK_DATA_NAME);
-        data.writeULEB128(secsz);
-        data.writeULEB128(YLNK_DATA_VER);
-        buffers.unshift(buf);
-
-        len = buffers.length;
+        let len = buffers.length;
         for (let i = 0; i < len; i++) {
             let buf = buffers[i];
             fs.writeSync(outfd, buf, 0, buf.byteLength);
@@ -3840,6 +3963,8 @@ class GnuStep2Linker {
         tmod.sections.push(new WebAssemblyDataSection(tmod));       // 0x0b
         tmod.sections.push(new WebAssemblyCustomSectionName(tmod)); // 0x00
         */
+
+        this.garbageCollectType();
 
         let wasmModule = this._wasmModule;
         let hasNonImpFunc = false;
@@ -3944,7 +4069,7 @@ class GnuStep2Linker {
 
             } else if (type == SECTION_TYPE_EXPORT) {
 
-                let exported = this.exported;
+                let exported = this.exports;
 
                 if (!Array.isArray(exported) || exported.length == 0) {
                     let idx = sections.indexOf(section);
@@ -4023,6 +4148,8 @@ class GnuStep2Linker {
                     if (!producers || Object.keys(producers).length == 0) {
                         let idx = sections.indexOf(section);
                         sections.splice(idx, 1);
+                    } else {
+                        section.data = producers;
                     }
                 }
 
@@ -4055,6 +4182,82 @@ class GnuStep2Linker {
             let buf = new Uint8Array(buffers[i]);
             fs.writeSync(outfd, buf, 0, buf.byteLength);
         }
+    }
+
+
+    // Garbage Collect (strip what's not needed)
+
+    /**
+     * Removes non needed types in wasmModule.types
+     */
+    garbageCollectType() {
+        let usedTypes = [];
+        let functions = this.functions;
+        let xlen = functions.length;
+        for (let x = 0; x < xlen; x++) {
+            let func = functions[x];
+            let type = func.type;
+            if (!(type instanceof WasmType)) {
+                throw new TypeError("INVALID_TYPE");
+            }
+            if (usedTypes.indexOf(type) == -1) {
+                usedTypes.push(type);
+            }
+
+            if (func instanceof ImportedFunction)
+                continue;
+
+            let opcodes = func.opcodes;
+            let ylen = opcodes.length;
+            for (let y = 0; y < ylen; y++) {
+                let inst = opcodes[y];
+                switch (inst.opcode) {
+                    case 0x02:  // block bt
+                    case 0x03:  // loop bt
+                    case 0x04:  // if bt
+                    case 0x06:  // try bt
+                    case 0x11:  // call_indirect
+                    {
+                        let type = inst.type;
+                        if (type instanceof WasmType && usedTypes.indexOf(type) == -1) {
+                            usedTypes.push(type);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        let tags = this.tags;
+        if (tags) {
+            let len = tags.length;
+            for (let i = 0; i < len; i++) {
+                let tag = tags[i];
+                let type = tag.type;
+                if (type instanceof WasmType && usedTypes.indexOf(type) == -1) {
+                    usedTypes.push(type);
+                }
+            }
+        }
+
+        let stip = [];
+        let types = this.types;
+        xlen = types.length;
+        for (let x = 0; x < xlen; x++) {
+            let type = types[x];
+            if (usedTypes.indexOf(type) == -1) {
+                stip.push(type);
+            }
+        }
+
+        xlen = stip.length;
+        for (let x = 0; x < xlen; x++) {
+            let type = stip[x];
+            let idx = types.indexOf(type);
+            types.splice(idx, 1);
+        }
+
+        return stip.length;
     }
 
     finilize_so() {
@@ -4158,5 +4361,178 @@ function isAtomicMemoryInst(opcode) {
 
     return false;
 }
+
+// Producers Section helpers.
+
+function _mergeProducersData(sourceData, targetData) {
+        
+    function mergeFieldValueArray(src, dst) {
+        let xlen = src.length;
+        let ylen = dst.length;
+        for (let x = 0; x < xlen; x++) {
+            let value = src[x];
+            let isstr = typeof value == "string";
+            let found = false;
+            for (let y = 0; y < ylen; y++) {
+                let other = dst[y];
+                if (isstr) {
+                    if (typeof other == "string" && value == other) {
+                        found = true;
+                        break;
+                    }
+                } else {
+                    if (typeof value == "object" && value !== null && typeof other == "object" && other !== null 
+                        && value.value == other.value && value.version == other.version) {
+                            found = true;
+                            break;
+                        }
+                }
+            }
+
+            if (!found) {
+                if (isstr) {
+                    dst.push(value);
+                } else {
+                    let cpy = Object.assign({}, value);
+                    dst.push(cpy);
+                }
+            }
+        }
+    }
+
+    if (sourceData.language) {
+        if (!targetData.hasOwnProperty("language")) {
+            targetData.language = [];
+        }
+        mergeFieldValueArray(sourceData.language, targetData.language);
+    }
+
+    if (sourceData["processed-by"]) {
+        if (!targetData.hasOwnProperty("processed-by")) {
+            targetData["processed-by"] = [];
+        }
+        mergeFieldValueArray(sourceData["processed-by"], targetData["processed-by"]);
+    }
+
+    if (sourceData.sdk) {
+        if (!targetData.hasOwnProperty("sdk")) {
+            targetData.sdk = [];
+        }
+        mergeFieldValueArray(sourceData.sdk, targetData.sdk);
+    }
+}
+
+function _producersAddLanguage(producersData, value, version) {
+    let field;
+    let hasver = false;
+    if (typeof version == "string" && version.length > 0) {
+        field = {value: value, version: version};
+        hasver = true;
+    } else {
+        field = value;
+    }
+    if (!producersData.hasOwnProperty("language")) {
+        producersData.language = [];
+        producersData.language.push(field);
+        return;
+    }
+    let arr = producersData.language;
+    let found = false;
+    let len = arr.length;
+    for (let i = 0; i < len; i++) {
+        let field = arr[i];
+        if (hasver) {
+            if (typeof field == "object" && field !== null && field.value == value && field.version == version) {
+                found = true;
+                break;
+            }
+        } else {
+            if (typeof field == "string" && field == value) {
+                found = true;
+                break;
+            }
+        }
+    }
+
+    if (!found) {
+        arr.push(field);
+    }
+}
+
+function _producersAddProcessedBy(producersData, value, version) {
+    let field;
+    let hasver = false;
+    if (typeof version == "string" && version.length > 0) {
+        field = {value: value, version: version};
+        hasver = true;
+    } else {
+        field = value;
+    }
+    if (!producersData.hasOwnProperty("processed-by")) {
+        producersData["processed-by"] = [];
+        producersData["processed-by"].push(field);
+        return;
+    }
+    let arr = producersData["processed-by"];
+    let found = false;
+    let len = arr.length;
+    for (let i = 0; i < len; i++) {
+        let field = arr[i];
+        if (hasver) {
+            if (typeof field == "object" && field !== null && field.value == value && field.version == version) {
+                found = true;
+                break;
+            }
+        } else {
+            if (typeof field == "string" && field == value) {
+                found = true;
+                break;
+            }
+        }
+    }
+
+    if (!found) {
+        arr.push(field);
+    }
+}
+
+function _producersAddSDK(producersData, value, version) {
+    let field;
+    let hasver = false;
+    if (typeof version == "string" && version.length > 0) {
+        field = {value: value, version: version};
+        hasver = true;
+    } else {
+        field = value;
+    }
+    if (!producersData.hasOwnProperty("sdk")) {
+        producersData.sdk = [];
+        producersData.sdk.push(field);
+        return;
+    }
+    let arr = producersData.sdk;
+    let found = false;
+    let len = arr.length;
+    for (let i = 0; i < len; i++) {
+        let field = arr[i];
+        if (hasver) {
+            if (typeof field == "object" && field !== null && field.value == value && field.version == version) {
+                found = true;
+                break;
+            }
+        } else {
+            if (typeof field == "string" && field == value) {
+                found = true;
+                break;
+            }
+        }
+    }
+
+    if (!found) {
+        arr.push(field);
+    }   
+}
+
+// export
 
 module.exports = GnuStep2Linker;

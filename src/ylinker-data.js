@@ -1,8 +1,515 @@
 
+// table of memory symbols and their relative location
+// table of visible function symbols
+// - each function can be exports by
+//   - export declartion and/or:
+//     exported to a imported/exported table
+// 
+// table of function symbol aliases.
+// 
+// if table is used as means of exports.
+// - one section must be declared which indicates which table it's exported to.
+// 
+// Rather than re-linking the entire share-object if not required, this file is 
+// read into the linker and linked against.
+// 
+// Structure
+// !YLNKR_D + i32 version
+// - reloc-globals (vector of module + name)
+// - data-segment table (info about .rodata, .data .bss)
+//   - name
+//   - size
+//   - reloc global
+//   - reloc offset
+//   - alignment
+// - data-symbols table
+//   - name
+//   - segment index
+//   - size
+//   - reloc global
+//   - reloc offset
+// - func-tables (tables which func are exported to module + name)
+// - func-types  (same as module.types but only holds the exported/declared funcs)
+// - func-symbols
+//   - name
+//   - wasm-type
+//   - flags
+//   - table-export-count
+//      - table
+//      - reloc global
+//      - reloc index
+//   - alias-count
+//      - name
+// 
+// or nest table-export outeside of func-symbols
+// - func-aliases (array of alternative names)
+//   - index of symbol
+//   - name
 
 
-function encodeYLinkerData(linker) {
+/**
+ * 
+ * @param {GnuStep2Linker} linker
+ * @param {Object} options
+ * @returns {Array<Uint8Array>}
+ */
+function encodeYLinkerData(linker, options) {
 
+	let _dataSections = linker._dataSections;
+	let dataSegments = linker.dataSegments;
+	let symtable = linker._symtable;
+	let buffers = [];
+	//let writefn = typeof options.write_callback == "function" ? options.write_callback : null;
+	//if (!writefn) {
+	//	buffers = [];
+	//}
+
+	let hdrbuf = new Uint8Array(12);
+	let data = new DataView(hdrbuf.buffer);
+	data.setUint32(0, 0x4E4C5921, true);
+	data.setUint32(4, 0x445F524B, true);
+	data.setUint32(8, 0x01, true);          // version
+	buffers.push(hdrbuf);
+
+	const YLNK_DATA_NAME = "ylinker.linking_data";
+	const YLNK_DATA_VER = 1;
+
+	const LDAT_DYLIB_INFO_TYPE = 0x15;
+	const LDAT_RLOC_GLB_TYPE = 0x16;
+	const LDAT_DATA_SEG_TYPE = 0x17;
+	const LDAT_DATA_SYM_TYPE = 0x18;
+	const LDAT_FUNC_TBL_TYPE = 0x19;
+	const LDAT_FUNC_TYP_TYPE = 0x20;
+	const LDAT_FUNC_SYM_TYPE = 0x21;
+
+	let sechdrsz = 0;
+	let reloc_globs = [];
+	let data_section_tbl = [];
+	let data_section_map = new Map();
+	let data_symbols_tbl = [];
+	let func_tbl = [];
+	let type_tbl = [];
+
+	let len = _dataSections.length;
+	for(let i = 0;i < len;i++){
+		let dataSection = _dataSections[i];
+		let glob = dataSection._reloc_glob;
+		if (reloc_globs.indexOf(glob) == -1)
+			reloc_globs.push(glob);
+
+		let obj = {};
+		obj.name = dataSection.name;
+		obj.size = dataSection._size;
+		obj.reloc_global = dataSection._reloc_glob;
+		obj.reloc_offset = dataSection._reloc_start;
+		obj.alignment = dataSection.max_align;
+
+		data_section_map.set(dataSection, obj);
+		data_section_tbl.push(obj);
+	}
+
+	len = symtable.length;
+	for (let i = 0; i < len; i++) {
+		let external, sym = symtable[i];
+		if (sym.kind != 1) {
+			continue;
+		}
+		if (((sym.flags & WASM_SYM_BINDING_LOCAL) != 0) || ((sym.flags & WASM_SYM_UNDEFINED) != 0)) {
+			continue;
+		}
+		external = ((sym.flags & WASM_SYM_EXTERNAL) != 0);
+		if (external)
+			continue;
+		let segment = sym.value;
+		let obj = {};
+		obj.name = sym.name;
+		obj.nlen = lengthBytesUTF8(sym.name);
+		let secobj;
+		if (!segment.dataSection) {
+			throw new ReferenceError("data-segment missing data-section");
+		} else if (!data_section_map.has(segment.dataSection)) {
+			throw new ReferenceError("data-section not defined");
+		} else {
+			secobj = data_section_map.get(segment.dataSection)
+		}
+		obj.segment = secobj;
+		obj.size = 0;
+		obj.reloc_global = segment._reloc_glob;
+		obj.reloc_offset = segment._reloc;
+		data_symbols_tbl.push(obj);
+	}
+
+	let functypes = [];
+	let expfunc = [];
+	let maxexp = 0;
+	let aliasmap = new Map();
+
+	for (let i = 0; i < len; i++) {
+		let external, flags, sym = symtable[i];
+		if (sym.kind != 0) {
+			continue;
+		}
+		flags = sym.flags;
+		if (((flags & WASM_SYM_BINDING_LOCAL) != 0) || ((flags & WASM_SYM_UNDEFINED) != 0)) {
+			continue;
+		}
+		external = ((flags & WASM_SYM_EXTERNAL) != 0);
+		if (external && ((flags & WASM_SYM_EXPORTED) == 0))
+			continue;
+
+		let func = sym.value;
+		let name = func[__nsym];
+		let idx = expfunc.indexOf(func);
+		if (idx === -1) {
+			expfunc.push(func);
+			if (functypes.indexOf(func.type) == -1) {
+				functypes.push(func.type);
+			}
+		}
+
+		idx = type_tbl.indexOf(func.type);
+		if (idx === -1)
+			type_tbl.push(func.type);
+
+		if (sym.name != name) {
+			let aliases;
+			if (aliasmap.has(func)) {
+				aliases = aliasmap.get(func);
+			} else {
+				aliases = [];
+				aliasmap.set(func, aliases);
+			}
+
+			if (aliases.indexOf(sym.name) == -1) {
+				aliases.push(sym.name);
+			}
+		}
+	}
+
+	len = expfunc.length;
+	for (let i = 0; i < len; i++) {
+		let func = expfunc[i];
+		let obj = {};
+		obj.func = func;
+		obj.name = func[__nsym];
+		obj.flags = 0;
+		obj.nlen = lengthBytesUTF8(obj.name);
+		expfunc[i] = obj;
+		if (aliasmap.has(func)) {
+			obj.aliases = aliasmap.get(func);
+		}
+	}
+
+	// dylib info sub-section
+	let totsz, secsz = 0;
+	{
+		// computing needed size
+		let so_ident = linker.so_ident;
+		let nlen = lengthBytesUTF8(so_ident);
+		secsz += lengthULEB128(nlen);
+		secsz += nlen;
+
+		totsz = secsz + 1;
+		totsz += lengthULEB128(secsz);
+
+		// encoding
+		let buf = new Uint8Array(totsz);
+		data = new ByteArray(buf);
+		data.writeUint8(LDAT_DYLIB_INFO_TYPE);
+		data.writeULEB128(secsz);
+
+		nlen = lengthBytesUTF8(so_ident);
+		data.writeULEB128(nlen);
+		data.writeUTF8Bytes(so_ident);
+
+		buffers.push(buf);
+	}
+
+	// reloc globals
+	totsz = 0;
+	secsz = 0;
+	len = reloc_globs.length;
+	for (let i = 0; i < len; i++) {
+		let glob = reloc_globs[i];
+		let nlen = lengthBytesUTF8(glob.module);
+		secsz += lengthULEB128(nlen);
+		secsz += nlen;
+		nlen = lengthBytesUTF8(glob.name);
+		secsz += lengthULEB128(nlen);
+		secsz += nlen;
+	}
+	secsz += lengthULEB128(len);
+	totsz = secsz + 1;
+	totsz += lengthULEB128(secsz);
+
+	let buf = new Uint8Array(totsz);
+	data = new ByteArray(buf);
+	data.writeUint8(LDAT_RLOC_GLB_TYPE);
+	data.writeULEB128(secsz);
+	data.writeULEB128(len);
+	for (let i = 0; i < len; i++) {
+		let glob = reloc_globs[i];
+		let name = glob.module;
+		let nlen = lengthBytesUTF8(name);
+		data.writeULEB128(nlen);
+		data.writeUTF8Bytes(name);
+		name = glob.name;
+		nlen = lengthBytesUTF8(name);
+		data.writeULEB128(nlen);
+		data.writeUTF8Bytes(name);
+	}
+	
+	buffers.push(buf);
+
+	// reloc data-segments
+	totsz = 0;
+	secsz = 0;
+	len = data_section_tbl.length;
+	for (let i = 0; i < len; i++) {
+		let obj = data_section_tbl[i];
+		let nlen = lengthBytesUTF8(obj.name);
+		secsz += lengthULEB128(nlen);
+		secsz += nlen;
+		secsz += lengthULEB128(obj.size);
+
+		let idx = reloc_globs.indexOf(obj.reloc_global);
+		if (idx == -1)
+			throw new ReferenceError("invalid data-structure");
+		secsz += lengthULEB128(idx);
+		secsz += lengthULEB128(obj.reloc_offset);
+		secsz += lengthULEB128(obj.alignment);
+	}
+	secsz += lengthULEB128(len);
+	totsz = secsz + 1;
+	totsz += lengthULEB128(secsz);
+
+	buf = new Uint8Array(totsz);
+	data = new ByteArray(buf);
+	data.writeUint8(LDAT_DATA_SEG_TYPE);
+	data.writeULEB128(secsz);
+	data.writeULEB128(len);
+	for (let i = 0; i < len; i++) {
+		let obj = data_section_tbl[i];
+		let name = obj.name;
+		let nlen = lengthBytesUTF8(name);
+		data.writeULEB128(nlen);
+		data.writeUTF8Bytes(name);
+		data.writeULEB128(obj.size);
+		let idx = reloc_globs.indexOf(obj.reloc_global);
+		data.writeULEB128(idx);
+		data.writeULEB128(obj.reloc_offset);
+		data.writeULEB128(obj.alignment);
+	}
+
+	buffers.push(buf);
+	
+	// data-symbols
+	totsz = 0;
+	secsz = 0;
+	len = data_symbols_tbl.length;
+	for (let i = 0; i < len; i++) {
+		let obj = data_symbols_tbl[i];
+		let nlen = lengthBytesUTF8(obj.name);
+		secsz += lengthULEB128(nlen);
+		secsz += nlen;
+		secsz += lengthULEB128(obj.reloc_offset);
+		secsz += lengthULEB128(obj.size);
+
+		let idx = data_section_tbl.indexOf(obj.segment);
+		if (idx == -1)
+			throw new ReferenceError("invalid data-structure");
+		secsz += lengthULEB128(idx);
+
+		idx = reloc_globs.indexOf(obj.reloc_global);
+		if (idx == -1)
+			throw new ReferenceError("invalid data-structure");
+		secsz += lengthULEB128(idx);
+	}
+	secsz += lengthULEB128(len);
+	totsz = secsz + 1;
+	totsz += lengthULEB128(secsz);
+
+	buf = new Uint8Array(totsz);
+	data = new ByteArray(buf);
+	data.writeUint8(LDAT_DATA_SYM_TYPE);
+	data.writeULEB128(secsz);
+	data.writeULEB128(len);
+	for (let i = 0; i < len; i++) {
+		let obj = data_symbols_tbl[i];
+		let name = obj.name;
+		let nlen = lengthBytesUTF8(name);
+		data.writeULEB128(nlen);
+		data.writeUTF8Bytes(name);
+		data.writeULEB128(obj.reloc_offset);
+		data.writeULEB128(obj.size);
+		let idx = data_section_tbl.indexOf(obj.segment);
+		data.writeULEB128(idx);
+		idx = reloc_globs.indexOf(obj.reloc_global);
+		data.writeULEB128(idx);
+	}
+
+	buffers.push(buf);
+
+	// func-symbols's types (this is basically encoded exactly the same as wasm)
+	totsz = 0;
+	secsz = 0;
+	len = functypes.length;
+	for (let i = 0; i < len; i++) {
+		let functype = functypes[i];
+		let argc = functype.argc;
+		let retc = functype.retc;
+		secsz += lengthULEB128(argc);
+		secsz += lengthULEB128(retc);
+		secsz += (argc + retc + 1);
+	}
+	secsz += lengthULEB128(len);
+	totsz = secsz + 1;
+	totsz += lengthULEB128(secsz);
+
+	buf = new Uint8Array(totsz);
+	data = new ByteArray(buf);
+	data.writeUint8(LDAT_FUNC_TYP_TYPE);
+	data.writeULEB128(secsz);
+	data.writeULEB128(len);
+	for (let i = 0; i < len; i++) {
+		let functype = functypes[i];
+		let argc = functype.argc;
+		let retc = functype.retc;
+		data.writeUint8(0x60);
+		data.writeULEB128(argc);
+		let argv = functype.argv;
+		for (let x = 0; x < argc; x++) {
+			let type = argv[x];
+			data.writeUint8(type);
+		}
+
+		data.writeULEB128(retc);
+		let retv = functype.retv;
+		for (let x = 0; x < retc; x++) {
+			let type = retv[x];
+			data.writeUint8(type);
+		}
+	}
+
+	buffers.push(buf);
+
+	// function symbols
+	totsz = 0;
+	secsz = 0;
+	len = expfunc.length;
+	for (let i = 0; i < len; i++) {
+		let symbol = expfunc[i];
+		let func = symbol.func;
+		let symstart = secsz;
+		let nlen = lengthBytesUTF8(symbol.name);
+		secsz += lengthULEB128(nlen);
+		secsz += nlen;
+		let typeidx = functypes.indexOf(func.type);
+		if (typeidx == -1)
+			throw new ReferenceError("invalid data-structure");
+		secsz += lengthULEB128(typeidx);
+
+		secsz += lengthULEB128(symbol.flags);
+	
+		if (symbol.aliases && Array.isArray(symbol.aliases)) {
+			let aliases = symbol.aliases;
+			let xlen = aliases.length;
+			for (let x = 0; x < xlen; x++) {
+				let name = aliases[x];
+				let nlen = lengthBytesUTF8(name);
+				secsz += lengthULEB128(nlen);
+				secsz += nlen;
+			}
+			secsz += lengthULEB128(xlen);
+		} else {
+			secsz += lengthULEB128(0);
+		}
+
+		if (symbol.element_exports && Array.isArray(symbol.element_exports)) {
+			throw new ReferenceError("element_exports not supported yet");
+		} else {
+			secsz += lengthULEB128(0);
+		}
+		let symsz = secsz - symstart;
+		symbol.symsz = symsz;
+		secsz += lengthULEB128(symsz);
+	}
+	secsz += lengthULEB128(len);
+	totsz = secsz + 1;
+	totsz += lengthULEB128(secsz);
+
+	buf = new Uint8Array(totsz);
+	data = new ByteArray(buf);
+	data.writeUint8(LDAT_FUNC_SYM_TYPE);
+	data.writeULEB128(secsz);
+	data.writeULEB128(len);
+	for (let i = 0; i < len; i++) {
+		let symbol = expfunc[i];
+		let func = symbol.func;
+		let name = symbol.name;
+		let nlen = lengthBytesUTF8(name);
+		data.writeULEB128(symbol.symsz);
+		data.writeULEB128(nlen);
+		data.writeUTF8Bytes(name);
+
+		let typeidx = functypes.indexOf(func.type);
+		data.writeULEB128(typeidx);
+		data.writeULEB128(symbol.flags);
+		
+		// we put aliases here since it eaiser to skip.
+		if (symbol.aliases && Array.isArray(symbol.aliases)) {
+			let aliases = symbol.aliases;
+			let xlen = aliases.length;
+
+			data.writeULEB128(xlen);
+			
+			for (let x = 0; x < xlen; x++) {
+				let name = aliases[x];
+				let nlen = lengthBytesUTF8(name);
+				data.writeULEB128(nlen);
+				data.writeUTF8Bytes(name);
+			}
+
+		} else {
+			data.writeULEB128(0);
+		}
+
+		// 
+		if (symbol.element_exports && Array.isArray(symbol.element_exports)) {
+			throw new ReferenceError("element_exports not supported yet");
+		} else {
+			data.writeULEB128(0);
+		}
+	}
+
+	buffers.push(buf);
+
+	totsz = 0;
+	secsz = 0;
+	len = buffers.length;
+	for (let i = 1; i < len; i++) {
+		let buf = buffers[i];
+		secsz += buf.byteLength;
+	}
+	let hdrstart = secsz;
+	secsz += lengthULEB128(YLNK_DATA_VER);
+	totsz = secsz + 1;
+	let nlen = lengthBytesUTF8(YLNK_DATA_NAME);
+	totsz += lengthULEB128(nlen);
+	totsz += nlen;
+	totsz += lengthULEB128(secsz);
+	let hdrsz = totsz - hdrstart;
+
+	buf = new Uint8Array(hdrsz);
+	data = new ByteArray(buf);
+	data.writeUint8(0);           // encodes like a wasm custom section.
+	data.writeULEB128(nlen);
+	data.writeUTF8Bytes(YLNK_DATA_NAME);
+	data.writeULEB128(secsz);
+	data.writeULEB128(YLNK_DATA_VER);
+	buffers.splice(1, 0, buf);
+
+	return buffers;
 }
 
 

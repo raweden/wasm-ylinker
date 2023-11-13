@@ -14,6 +14,7 @@ class ARLinker {
         this._datasyms = new Map();
         this._bclinker = null;
         this._parseOptions = null;
+        this._wholeArchive = false;
     }
 
     readHeaderAt(pos, reload) {
@@ -119,6 +120,71 @@ class ARLinker {
         }
 
         return loader;
+    }
+
+    loadFullArchive() {
+        this._wholeArchive = true;
+        // TODO: implement this!
+    }
+
+    loadFuncSymbol(name) {
+
+        let symtable = this._symtable;
+        if (symtable.has(name)) {
+            let fd = this._fd;
+            let bclinker, buf, mod, hdr = symtable.get(name);
+            if (!hdr._isloaded) {
+                this.readHeaderAt(hdr.offset - 60);
+                buf = new Uint8Array(hdr.size);
+                fs.readSync(fd, buf, 0, hdr.size, hdr.offset);
+
+                bclinker = this._bclinker;
+                if (!bclinker) {
+                    bclinker = new GnuStep2Linker();
+                    this._bclinker = bclinker;
+                }
+
+                mod = parseWebAssemblyBinary(buf, this._parseOptions);
+                bclinker.prepareLinking(mod);
+                bclinker.mergeWithModule(mod);
+            } else {
+                bclinker = this._bclinker;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    loadDataSymbol(name) {
+
+        let symtable = this._symtable;
+        if (symtable.has(name)) {
+            let fd = this._fd;
+            let bclinker, buf, mod, hdr = symtable.get(name);
+            if (!hdr._isloaded) {
+                this.readHeaderAt(hdr.offset - 60);
+                buf = new Uint8Array(hdr.size);
+                fs.readSync(fd, buf, 0, hdr.size, hdr.offset);
+
+                bclinker = this._bclinker;
+                if (!bclinker) {
+                    bclinker = new GnuStep2Linker();
+                    this._bclinker = bclinker;
+                }
+
+                mod = parseWebAssemblyBinary(buf, this._parseOptions);
+                bclinker.prepareLinking(mod);
+                bclinker.mergeWithModule(mod);
+            } else {
+                bclinker = this._bclinker;
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     resolveFuncSymbol(symbol, functype) {

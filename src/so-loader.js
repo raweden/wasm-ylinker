@@ -90,7 +90,7 @@ class SOSymbolLinker {
         }
 
         let dataSymbol = datamap[symbol];
-        return {reloc_glob: dataSymbol.reloc_global, reloc_offset: dataSymbol.reloc_offset};
+        return {reloc_global: dataSymbol.reloc_global, reloc_offset: dataSymbol.reloc_offset};
     }
 
     resolve(type, symbol, functype) {
@@ -128,7 +128,7 @@ class SOSymbolLinker {
             }
 
             let dataSymbol = datamap[symbol];
-            return {reloc_glob: dataSymbol.reloc_global, reloc_offset: dataSymbol.reloc_offset};
+            return {reloc_global: dataSymbol.reloc_global, reloc_offset: dataSymbol.reloc_offset};
         }
 
         return null;

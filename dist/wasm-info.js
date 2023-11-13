@@ -4910,7 +4910,7 @@ class ImportedTable {
         this.module = undefined;
         this.name = undefined;
         this.min = null;
-        this.max = null;
+        this.max = undefined;
         this._usage = 0;
     }
 };
@@ -4920,8 +4920,8 @@ class ImportedMemory {
     constructor() {
         this.module = undefined;
         this.name = undefined;
-        this.min = null;
-        this.max = null;
+        this.min = undefined;
+        this.max = undefined;
         this.shared = false;
         this._usage = 0;
     }
@@ -4973,6 +4973,9 @@ class WasmTag {
     }
 };
 
+/**
+ * @todo synthetize the .imports array rather than enforcing to maintain it..
+ */
 class WebAssemblyImportSection extends WebAssemblySection {
 
     constructor(module) {
@@ -5011,15 +5014,21 @@ class WebAssemblyImportSection extends WebAssemblySection {
                 cnt++;
             } else if (imp instanceof ImportedMemory) {
                 total += 2; // type, limits
+                
+                if (imp.max !== undefined && imp.max !== null && !Number.isInteger(imp.max))
+                    throw new TypeError("INVALID_LIMIT_MAX");
+                
                 total += lengthULEB128(imp.min, memPadTo);
-                if (imp.max !== null) {
+                if (imp.max !== null && imp.max !== undefined) {
                     total += lengthULEB128(imp.max, memPadTo);
                 }
                 cnt++;
             } else if (imp instanceof ImportedTable) {
                 total += 3; // type, reftype, limits
+                if (imp.max !== undefined && imp.max !== null && !Number.isInteger(imp.max))
+                    throw new TypeError("INVALID_LIMIT_MAX");
                 total += lengthULEB128(imp.min);
-                if (imp.max !== null) {
+                if (imp.max !== null && imp.max !== undefined) {
                     total += lengthULEB128(imp.max);
                 }
                 cnt++;
@@ -5065,7 +5074,7 @@ class WebAssemblyImportSection extends WebAssemblySection {
             } else if (imp instanceof ImportedMemory) {
                 data.writeUint8(0x02);
                 if (imp.shared) {
-                    if (imp.max === null) {
+                    if (imp.max === null || imp.max === undefined) {
                         data.writeUint8(0x02);
                         data.writeULEB128(imp.min, memPadTo);
                     } else {
@@ -5075,7 +5084,7 @@ class WebAssemblyImportSection extends WebAssemblySection {
                     }
 
                 } else {
-                    if (imp.max === null) {
+                    if (imp.max === null || imp.max === undefined) {
                         data.writeUint8(0x00);
                         data.writeULEB128(imp.min, memPadTo);
                     } else {
@@ -5088,10 +5097,14 @@ class WebAssemblyImportSection extends WebAssemblySection {
 
             } else if (imp instanceof ImportedTable) {
                 data.writeUint8(0x01);
-                data.writeUint8(imp.reftype);
-                data.writeULEB128(imp.min);
-                if (imp.max !== null) {
+                data.writeUint8(imp.reftype);                
+                if (imp.max !== null && imp.max !== undefined) {
+                    data.writeUint8(0x01);
+                    data.writeULEB128(imp.min);
                     data.writeULEB128(imp.max);
+                } else {
+                    data.writeUint8(0x00);
+                    data.writeULEB128(imp.min);
                 }
             } else if (imp instanceof ImportedTag) {
                 data.writeUint8(0x04);
@@ -5720,6 +5733,7 @@ class ExportedGlobal {
 /**
  * @todo how to handle reference count for exports?
  * @todo unify .value instead of dedicated property per each?
+ * @todo merge all types to WasmExport and use ._kind internally with integer and .kind getter with string value.
  */
 class WebAssemblyExportSection extends WebAssemblySection {
 
@@ -6495,7 +6509,6 @@ class WebAssemblyDataSection extends WebAssemblySection {
                 segment._buffer = data._u8.slice(data.offset, data.offset + datasz);
                 segments.push(segment);
                 data.offset += datasz;
-                break;
             } else if (kind == 0x02) {
                 // init b*, mode active {memory, offset }
                 let memidx = data.readULEB128();
@@ -6511,7 +6524,6 @@ class WebAssemblyDataSection extends WebAssemblySection {
                 segment._buffer = data._u8.slice(data.offset, data.offset + datasz);
                 segments.push(segment);
                 data.offset += datasz;
-                break;
             } else {
                 console.warn("unsupported data-segment mode!");
                 break;
@@ -6719,19 +6731,21 @@ class WebAssemblyCustomSectionProducers extends WebAssemblyCustomSection {
             count++;
         }
 
+        const SEC_NAME = this.name;
+
         totsz += lengthULEB128(count);
-        let strlen = lengthBytesUTF8("producers");
+        let strlen = lengthBytesUTF8(SEC_NAME);
         totsz += lengthULEB128(strlen);
         secsz = totsz;
         totsz += lengthULEB128(totsz);
 
-            // actual encdong
+        // actual encoding
         let buf = new ArrayBuffer(totsz + 1);
         let data = new ByteArray(buf);
         data.writeUint8(SECTION_TYPE_CUSTOM);
         data.writeULEB128(secsz);
         data.writeULEB128(strlen);
-        data.writeUTF8Bytes("producers");
+        data.writeUTF8Bytes(SEC_NAME);
         data.writeULEB128(count);
 
         len = keys.length;
@@ -6754,6 +6768,7 @@ class WebAssemblyCustomSectionProducers extends WebAssemblyCustomSection {
                     let strlen = lengthBytesUTF8(value);
                     data.writeULEB128(strlen);
                     data.writeUTF8Bytes(value);
+                    data.writeULEB128(0); // value has no version so write 0 in version string length
                 } else if (typeof value == "object" && value !== null) {
                     if (typeof value.value !== "string") {
                         throw TypeError(".value is a required field");
@@ -6765,6 +6780,8 @@ class WebAssemblyCustomSectionProducers extends WebAssemblyCustomSection {
                         let strlen = lengthBytesUTF8(value.version);
                         data.writeULEB128(strlen);
                         data.writeUTF8Bytes(value.version);
+                    } else {
+                        data.writeULEB128(0);
                     }
                 }
             }
@@ -8575,6 +8592,12 @@ class WebAssemblyModule {
     }
 
     getOrCreateType(pullv, pushv) {
+
+        if (pullv === null)
+            pullv = WA_TYPE_VOID;
+
+        if (pushv === null)
+            pushv = WA_TYPE_VOID;
         
         let type = this.typeByPullPush(pullv, pushv);
         if (type)
@@ -9586,13 +9609,22 @@ function parseWebAssemblyBinary(buf, options) {
     // 4. import section
     // then we can actually lookup functions and globals in export/import
     
+    let codesec, datasec;
     let filtered = [];
     let dwarfsec = [];
     let cnt = chunks.length;
     for (let i = 0; i < cnt; i++) {
         let sec = chunks[i];
         sec.index = i;
-        if (sec.type != SECTION_TYPE_CUSTOM) {
+        if (sec.type == SECTION_TYPE_CODE) {
+            codesec = sec;
+            filtered.push(sec);
+            continue;
+        } else if (sec.type == SECTION_TYPE_DATA) {
+            datasec = sec;
+            filtered.push(sec);
+            continue;
+        } else if (sec.type != SECTION_TYPE_CUSTOM) {
             filtered.push(sec);
             continue;
         }
@@ -9605,8 +9637,14 @@ function parseWebAssemblyBinary(buf, options) {
         }
     }
 
-    let impfncnt = 0;
-    let funcvec;
+    // make sure that we process code section after data section.
+    if (codesec && datasec) {
+        let idx = filtered.indexOf(codesec);
+        filtered.splice(idx, 1);
+        idx = filtered.indexOf(datasec);
+        filtered.splice(idx + 1, 0, codesec);
+    }
+
     let mod = new WebAssemblyModule();
     mod._version = version;
     mod.dataSegments = [];
@@ -9637,8 +9675,6 @@ function parseWebAssemblyBinary(buf, options) {
                 let sec = WebAssemblyImportSection.decode(mod, data, size);
                 chunks[chunk.index] = sec;
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
-                //mod.imports = decodeImportSection(data, size, mod);
-                //impfncnt = mod.functions ? mod.functions.length : 0;
                 break;
             }
             case 0x03:  // function
@@ -9646,7 +9682,6 @@ function parseWebAssemblyBinary(buf, options) {
                 let sec = WebAssemblyFunctionSection.decode(mod, data, size);
                 chunks[chunk.index] = sec;
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
-                //decodeFuncSection(data, size, mod);
                 break;
             }
             case 0x04:  // table
@@ -9654,7 +9689,6 @@ function parseWebAssemblyBinary(buf, options) {
                 let sec = WebAssemblyTableSection.decode(mod, data, size);
                 chunks[chunk.index] = sec;
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
-                //decodeTableSection(data, size, mod);
                 break;
             }
             case 0x05:  // memory
@@ -9662,7 +9696,6 @@ function parseWebAssemblyBinary(buf, options) {
                 let sec = WebAssemblyMemorySection.decode(mod, data, size);
                 chunks[chunk.index] = sec;
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
-                //decodeMemorySection(data, size, mod);
                 break;
             }
             case 0x06:  // global
@@ -9670,7 +9703,6 @@ function parseWebAssemblyBinary(buf, options) {
                 let sec = WebAssemblyGlobalSection.decode(mod, data, size);
                 chunks[chunk.index] = sec;
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
-                //decodeGlobalSection(data, size, mod);
                 break;
             }
             case 0x07:  // export
@@ -9678,7 +9710,6 @@ function parseWebAssemblyBinary(buf, options) {
                 let sec = WebAssemblyExportSection.decode(mod, data, size);
                 chunks[chunk.index] = sec;
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
-                //decodeExportSection(data, size, mod);
                 break;
             }
             case 0x08:  // start
@@ -9686,7 +9717,6 @@ function parseWebAssemblyBinary(buf, options) {
                 let sec = WebAssemblyStartSection.decode(mod, data, size);
                 chunks[chunk.index] = sec;
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
-                //decodeStartSection(data, size, mod);
                 break;
             }
             case 0x09:  // element
@@ -9694,7 +9724,6 @@ function parseWebAssemblyBinary(buf, options) {
                 let sec = WebAssemblyElementSection.decode(mod, data, size);
                 chunks[chunk.index] = sec;
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
-                //decodeElementSection(data, size, mod);
                 break;
             }
             case 0x0A:  // code
@@ -9702,13 +9731,11 @@ function parseWebAssemblyBinary(buf, options) {
                 let sec = WebAssemblyCodeSection.decode(mod, data, size, options);
                 chunks[chunk.index] = sec;
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
-                //decodeCodeSection(data, size, mod, impfncnt);
                 break;
             }
             case 0x0B:  // data
             {
                 let sec = WebAssemblyDataSection.decode(mod, data, size);
-                //mod.dataSegments = decodeDataSection(data, size, mod);
                 chunks[chunk.index] = sec;
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                 break;
@@ -9716,7 +9743,6 @@ function parseWebAssemblyBinary(buf, options) {
             case 0x0C:  // data-count
             {
                 let sec = WebAssemblyDataCountSection.decode(mod, data, size);
-                //mod.dataSegments = decodeDataSection(data, size, mod);
                 chunks[chunk.index] = sec;
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                 break;
@@ -9724,7 +9750,6 @@ function parseWebAssemblyBinary(buf, options) {
             case 0x0d:  // data-count
             {
                 let sec = WebAssemblyTagSection.decode(mod, data, size);
-                //mod.dataSegments = decodeDataSection(data, size, mod);
                 chunks[chunk.index] = sec;
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                 break;
