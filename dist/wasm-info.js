@@ -4985,10 +4985,57 @@ class WebAssemblyImportSection extends WebAssemblySection {
 
     encode(options) {
 
-        let imports = this.module.imports;
+        let imports = [];
+        let module = this.module;
+        let functions = module.functions;
+        let globals = module.globals;
+        let memory = module.memory;
+        let tables = module.tables;
+        let tags = module.tags;
+        let ylen = globals.length;
+        for (let i = 0; i < ylen; i++) {
+            let glob = globals[i];
+            if (!(glob instanceof ImportedGlobal))
+                break;
+            imports.push(glob);
+        }
+
+        ylen = memory.length;
+        for (let i = 0; i < ylen; i++) {
+            let mem = memory[i];
+            if (!(mem instanceof ImportedMemory))
+                break;
+            imports.push(mem);
+        }
+
+        ylen = tables.length;
+        for (let i = 0; i < ylen; i++) {
+            let tbl = tables[i];
+            if (!(tbl instanceof ImportedTable))
+                break;
+            imports.push(tbl);
+        }
+
+        ylen = tags.length;
+        for (let i = 0; i < ylen; i++) {
+            let tag = tags[i];
+            if (!(tag instanceof ImportedTag))
+                break;
+            imports.push(tag);
+        }
+
+        ylen = functions.length;
+        for (let i = 0; i < ylen; i++) {
+            let func = functions[i];
+            if (!(func instanceof ImportedFunction))
+                break;
+            imports.push(func);
+        }
+
+
         let types = this.module.types;
         let total = 0;
-        let ylen = imports.length;
+        ylen = imports.length;
         let cnt = 0;
         let memPadTo = 4;
         for (let y = 0; y < ylen; y++) {
@@ -5216,8 +5263,6 @@ class WebAssemblyImportSection extends WebAssemblySection {
         //console.log(results);
         // TODO: map every existing module-name
         let section = new WebAssemblyImportSection(module);
-        section.data = results;
-        module.imports = results;
         return section;
     }
 }
@@ -5422,7 +5467,7 @@ class WebAssemblyTagSection extends WebAssemblySection {
         let start = 0;
         let cnt = 0;
 
-        // get the number of imports in begining.
+        // get the number of imports in the start of the array.
         for (let i = 0; i < len; i++) {
             let tag = tags[i];
             if (!(tag instanceof ImportedTag)) {
@@ -5689,6 +5734,19 @@ class WebAssemblyGlobalSection extends WebAssemblySection {
     }
 }
 
+const WA_EXPORT_KIND_FUNC = 0;
+const WA_EXPORT_KIND_TABLE = 1;
+const WA_EXPORT_KIND_MEMORY = 2;
+const WA_EXPORT_KIND_GLOBAL = 3;
+
+class WasmExport {
+
+    constructor(kind, name, value) {
+        this.kind = kind;
+        this.name = name;
+        this.value = value;
+    }
+}
 
 class ExportedFunction {
 
@@ -6551,6 +6609,8 @@ class WebAssemblyDataCountSection extends WebAssemblySection {
         data.writeUint8(SECTION_TYPE_DATA_COUNT);
         data.writeULEB128(secsz);
         data.writeULEB128(dataSegments.length);
+
+        return buffer;
     }
 
     static decode(module, data, size) {
@@ -7874,7 +7934,6 @@ class WebAssemblyModule {
                 // - ref.func   0xd2
                 // replace in:
                 // functions
-                // imports (replace/remove as needed)
                 // element-segments
             }
 
@@ -7905,7 +7964,6 @@ class WebAssemblyModule {
                 // 
                 // replace in:
                 // memory
-                // imports (replace/remove as needed)
             }
 
             if ((object instanceof ImportedTable) || (object instanceof WasmTable)) {
@@ -7942,7 +8000,6 @@ class WebAssemblyModule {
                 //
                 // replace in:
                 // tables
-                // imports (replace/remove as needed)
             }
 
             if ((object instanceof ImportedGlobal) || (object instanceof WasmGlobal)) {
@@ -7971,7 +8028,6 @@ class WebAssemblyModule {
                 // 
                 // replace in:
                 // globals
-                // imports (replace/remove as needed)
             }
 
             if ((object instanceof ImportedTag) || (object instanceof WasmTag)) {
@@ -8002,7 +8058,6 @@ class WebAssemblyModule {
                 // 
                 // replace in:
                 // tags
-                // imports (replace/remove as needed)
             }
 
         }
@@ -8014,7 +8069,6 @@ class WebAssemblyModule {
             // - ref.func   0xd2
             // replace in:
             // functions
-            // imports (replace/remove as needed)
             // element-segments
 
             let xlen = functions.length;
@@ -8045,7 +8099,6 @@ class WebAssemblyModule {
         // merge wasmModule.functions into this.functions
         if (wasmModule.functions && wasmModule.functions.length > 0) {
 
-            let imports = this.imports;
             let src = wasmModule.functions;
             let len = src.length;
             let dst = this.functions;
@@ -8067,7 +8120,6 @@ class WebAssemblyModule {
                 if (func instanceof ImportedFunction) {
                     dst.splice(first, 0, func);
                     first++;
-                    imports.push(func);
                 } else {
                     dst.push(func);
                 }
@@ -8085,7 +8137,6 @@ class WebAssemblyModule {
             // 
             // replace in:
             // memory
-            // imports (replace/remove as needed)
 
             let xlen = functions.length;
             for (let x = 0; x < xlen; x++) {
@@ -8243,7 +8294,6 @@ class WebAssemblyModule {
             //
             // replace in:
             // tables
-            // imports (replace/remove as needed)
             
             let xlen = functions.length;
             for (let x = 0; x < xlen; x++) {
@@ -8291,7 +8341,6 @@ class WebAssemblyModule {
         // merge wasmModule.tables into this.tables
         if (wasmModule.tables && wasmModule.tables.length > 0) {
 
-            let imports = this.imports;
             let src = wasmModule.tables;
             let len = src.length;
             let dst = this.tables;
@@ -8313,7 +8362,6 @@ class WebAssemblyModule {
                 if (tbl instanceof ImportedTable) {
                     dst.splice(first, 0, tbl);
                     first++;
-                    imports.push(tbl);
                 } else {
                     dst.push(tbl);
                 }
@@ -8330,7 +8378,6 @@ class WebAssemblyModule {
             // 
             // replace in:
             // globals
-            // imports (replace/remove as needed)
             
             let xlen = functions.length;
             for (let x = 0; x < xlen; x++) {
@@ -8404,7 +8451,6 @@ class WebAssemblyModule {
         // merge wasmModule.globals into this.globals
         if (wasmModule.globals && wasmModule.globals.length > 0) {
 
-            let imports = this.imports;
             let src = wasmModule.globals;
             let len = src.length;
             let dst = this.globals;
@@ -8426,7 +8472,6 @@ class WebAssemblyModule {
                 if (glob instanceof ImportedGlobal) {
                     dst.splice(first, 0, glob);
                     first++;
-                    imports.push(glob);
                 } else {
                     dst.push(glob);
                 }
@@ -8441,7 +8486,6 @@ class WebAssemblyModule {
             // 
             // replace in:
             // tags
-            // imports (replace/remove as needed)
             
             let xlen = functions.length;
             for (let x = 0; x < xlen; x++) {
@@ -8471,7 +8515,6 @@ class WebAssemblyModule {
         // merge wasmModule.tags into this.tags
         if (wasmModule.tags && wasmModule.tags.length > 0) {
 
-            let imports = this.imports;
             let src = wasmModule.tags;
             let len = src.length;
             let dst = this.tags;
@@ -8493,7 +8536,6 @@ class WebAssemblyModule {
                 if (tag instanceof ImportedTag) {
                     dst.splice(first, 0, tag);
                     first++;
-                    imports.push(tag);
                 } else {
                     dst.push(tag);
                 }
@@ -8641,21 +8683,112 @@ class WebAssemblyModule {
     }
 
     // imports
+
+    hasImports() {
+
+        let functions = this.functions;
+        let ylen = functions.length;
+        for (let i = 0; i < ylen; i++) {
+            let func = functions[i];
+            if (!(func instanceof ImportedFunction))
+                break;
+            return true;
+        }
+
+        let globals = this.globals;
+        ylen = globals.length;
+        for (let i = 0; i < ylen; i++) {
+            let glob = globals[i];
+            if (!(glob instanceof ImportedGlobal))
+                break;
+            return true;
+        }
+
+        let memory = this.memory;
+        ylen = memory.length;
+        for (let i = 0; i < ylen; i++) {
+            let mem = memory[i];
+            if (!(mem instanceof ImportedMemory))
+                break;
+            return true;
+        }
+
+        let tables = this.tables;
+        ylen = tables.length;
+        for (let i = 0; i < ylen; i++) {
+            let tbl = tables[i];
+            if (!(tbl instanceof ImportedTable))
+                break;
+            return true;
+        }
+
+        let tags = this.tags;
+        ylen = tags.length;
+        for (let i = 0; i < ylen; i++) {
+            let tag = tags[i];
+            if (!(tag instanceof ImportedTag))
+                break;
+            return true;
+        }
+
+        return false;
+    }
+
+    getImports() {
+
+        let imports = [];
+        let functions = this.functions;
+        let globals = this.globals;
+        let memory = this.memory;
+        let tables = this.tables;
+        let tags = this.tags;
+        let ylen = globals.length;
+        for (let i = 0; i < ylen; i++) {
+            let glob = globals[i];
+            if (!(glob instanceof ImportedGlobal))
+                break;
+            imports.push(glob);
+        }
+
+        ylen = memory.length;
+        for (let i = 0; i < ylen; i++) {
+            let mem = memory[i];
+            if (!(mem instanceof ImportedMemory))
+                break;
+            imports.push(mem);
+        }
+
+        ylen = tables.length;
+        for (let i = 0; i < ylen; i++) {
+            let tbl = tables[i];
+            if (!(tbl instanceof ImportedTable))
+                break;
+            imports.push(tbl);
+        }
+
+        ylen = tags.length;
+        for (let i = 0; i < ylen; i++) {
+            let tag = tags[i];
+            if (!(tag instanceof ImportedTag))
+                break;
+            imports.push(tag);
+        }
+
+        ylen = functions.length;
+        for (let i = 0; i < ylen; i++) {
+            let func = functions[i];
+            if (!(func instanceof ImportedFunction))
+                break;
+            imports.push(func);
+        }
+
+        return imports;
+    }
     
     appendImport(imp) {
 
         if (typeof imp.module != "string" || typeof imp.name != "string" || imp.module.length == 0 || imp.module.length == 0)
             throw new TypeError("invalid name");
-
-        // check name or reference conflict
-        let imports = this.imports;
-        let len = imports.length;
-        for (let i = 0; i < len; i++) {
-            let other = imports[i];
-            if (other == imp || (other.module == imp.module && other.name == imp.name)) {
-                throw new ReferenceError("import already exist");
-            }
-        }
 
         if (imp instanceof ImportedFunction) {
 
@@ -8755,8 +8888,6 @@ class WebAssemblyModule {
         } else {
             throw new TypeError("invalid type");
         }
-
-        imports.push(imp);
     }
 
     // globals
@@ -8776,21 +8907,24 @@ class WebAssemblyModule {
         if (typeof name != "string")
             throw new TypeError("name must be string");
 
+
+        let globals = this.globals;
+
         if (typeof module == "string" && module.length > 0) {
-            let imports = this.imports;
-            let len = imports.length;
-            let results = [];
+
+            let len = globals.length;
             for (let i = 0; i < len; i++) {
-                let imp = imports[i];
-                if (imp.name == name && imp.module == module) {
-                    return imp;
+                let glob = globals[i];
+                if (!(glob instanceof ImportedGlobal))
+                    break;
+                if (glob.module == module && glob.name == name) {
+                    return glob;
                 }
             }
 
             return null;
         }
 
-        let globals = this.globals;
         let len = globals.length;
         for (let i = 0; i < len; i++) {
             let glob = globals[i];
@@ -8799,14 +8933,16 @@ class WebAssemblyModule {
             }
         }
 
-        let imports = this.imports;
-        len = imports.length;
+        len = globals.length;
         for (let i = 0; i < len; i++) {
-            let imp = imports[i];
-            if ((imp instanceof ImportedGlobal) && imp.name == name) {
-                return imp;
+            let glob = globals[i];
+            if (!(glob instanceof ImportedGlobal))
+                break;
+            if (glob.name == name) {
+                return glob;
             }
         }
+        
         let exported = this.exports;
         len = exported.length;
         for (let i = 0; i < len; i++) {
@@ -8880,19 +9016,18 @@ class WebAssemblyModule {
         } else {
             throw new TypeError("globals initial value unsupported");
         }
-
+        let functions = this.functions;
         let start = 0;
-        let imports = this.imports;
-        len = imports.length;
-        for (let i = 0; i < len; i++) {
-            let imp = imports[i];
-            if (imp instanceof ImportedFunction) {
-                start++;
-            }
+        let ylen = functions.length;
+        for (let y = start; y < ylen; y++) {
+            let func = functions[y];
+            if (!(func instanceof ImportedFunction))
+                break;
+            
+            start++;
         }
 
-        let functions = this.functions;
-        let ylen = functions.length;
+        ylen = functions.length;
         for (let y = start; y < ylen; y++) {
             let func = functions[y];
             let opcodes = func.opcodes;
@@ -9652,10 +9787,10 @@ function parseWebAssemblyBinary(buf, options) {
     mod.exports = [];
     mod.functions = [];
     mod.globals = [];
-    mod.imports = [];
     mod.memory = [];
     mod.tables = [];
     mod.types = [];
+    mod.tags = [];
     cnt = filtered.length;
     for (let i = 0; i < cnt; i++) {
         let chunk = filtered[i];

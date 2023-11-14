@@ -155,7 +155,6 @@ class GnuStep2Linker {
 	    this.exports = [];
 	    this.functions = [];
 	    this.globals = [];
-	    this.imports = [];
 	    this.memory = [];
 	    this.tables = [];
 	    this.types = [];
@@ -195,9 +194,9 @@ class GnuStep2Linker {
             new WebAssemblyExportSection(this._wasmModule),
             new WebAssemblyStartSection(this._wasmModule),
             new WebAssemblyElementSection(this._wasmModule),
+            // WebAssemblyDataCountSection when used should be placed here.
             new WebAssemblyCodeSection(this._wasmModule),
             new WebAssemblyDataSection(this._wasmModule),
-            new WebAssemblyDataCountSection(this._wasmModule),
             new WebAssemblyCustomSectionName(this._wasmModule),
             new WebAssemblyCustomSectionProducers(this._wasmModule),
         ];
@@ -210,7 +209,6 @@ class GnuStep2Linker {
         mod.memory = this.memory;
         mod.globals = this.globals;
         mod.tags = this.tags;
-        mod.imports = this.imports;
         mod.exports = this.exports;
         mod.sections = this._wasmModuleSections;
         mod.producers = this.producers;
@@ -251,10 +249,6 @@ class GnuStep2Linker {
             } else {
                 functions.splice(zidx, 0, imp);
             }
-
-            let idx = this.imports.indexOf(imp);
-            if (idx == -1)
-                this.imports.push(imp);
             
         } else if (imp instanceof ImportedGlobal) {
             let globals = this.globals;
@@ -274,10 +268,6 @@ class GnuStep2Linker {
                 globals.splice(zidx, 0, imp);
             }
 
-            let idx = this.imports.indexOf(imp);
-            if (idx == -1)
-                this.imports.push(imp);
-
         } else if (imp instanceof ImportedMemory) {
             let memory = this.memory;
             let zlen = memory.length;
@@ -295,10 +285,6 @@ class GnuStep2Linker {
             } else {
                 memory.splice(zidx, 0, imp);
             }
-
-            let idx = this.imports.indexOf(imp);
-            if (idx == -1)
-                this.imports.push(imp);
 
         } else if (imp instanceof ImportedTable) {
             let tables = this.tables;
@@ -318,10 +304,6 @@ class GnuStep2Linker {
                 tables.splice(zidx, 0, imp);
             }
 
-            let idx = this.imports.indexOf(imp);
-            if (idx == -1)
-                this.imports.push(imp);
-
         } else if (imp instanceof ImportedTag) {
             let tags = this.tags;
             let zlen = tags.length;
@@ -339,10 +321,6 @@ class GnuStep2Linker {
             } else {
                 tags.splice(zidx, 0, imp);
             }
-
-            let idx = this.imports.indexOf(imp);
-            if (idx == -1)
-                this.imports.push(imp);
         }
     }
 
@@ -388,7 +366,6 @@ class GnuStep2Linker {
 	    let dst_dataSegments = this.dataSegments;
 	    let dst_functions = this.functions;
 	    let dst_globals = this.globals;
-	    let dst_imports = this.imports;
 	    let dst_memory = this.memory;
 	    let dst_tables = this.tables;
 	    let dst_types = this.types;
@@ -830,9 +807,7 @@ class GnuStep2Linker {
 
                 if (!found) {
                     dst_memory.push(smem);
-                    if (smem instanceof ImportedMemory) {
-                        dst_imports.push(smem);
-                    }
+                    // TODO: handle multiple memory instances of various kinds import vs. non-import
                 }
             }
         }
@@ -1068,25 +1043,21 @@ class GnuStep2Linker {
                 if (oldfunc instanceof ImportedFunction && newfunc instanceof ImportedFunction) {
 
                     let idx1 = dst_functions.indexOf(oldfunc);
-                    let idx2 = dst_imports.indexOf(oldfunc);
-                    if (idx1 == -1 || dst_functions.indexOf(newfunc) != -1 || idx2 == -1 || dst_imports.indexOf(newfunc) != -1) {
+                    if (idx1 == -1 || dst_functions.indexOf(newfunc) != -1) {
                         throw new ReferenceError("INVALID_STATE")
                     }
 
                     dst_functions[idx1] = newfunc;
-                    dst_imports[idx2] = newfunc;
 
                 } else if (oldfunc instanceof ImportedFunction && newfunc instanceof WasmFunction) {
 
                     let idx1 = dst_functions.indexOf(oldfunc);
                     let idx2 = dst_functions.indexOf(newfunc);
-                    let idx3 = dst_imports.indexOf(oldfunc);
-                    if (idx1 === -1 || idx3 === -1) {
+                    if (idx1 === -1) {
                         throw new ReferenceError("INVALID_STATE")
                     }
 
                     dst_functions.splice(idx1, 1);
-                    dst_imports.splice(idx3, 1);
 
                     idx2 = dst_functions.indexOf(newfunc);
                     if (idx2 === -1)
@@ -1095,8 +1066,7 @@ class GnuStep2Linker {
                 } else if (oldfunc instanceof WasmFunction && newfunc instanceof ImportedFunction) {
 
                     let idx1 = dst_functions.indexOf(oldfunc);
-                    let idx2 = dst_imports.indexOf(oldfunc);
-                    if (idx1 == -1 || dst_functions.indexOf(newfunc) != -1 || dst_imports.indexOf(newfunc) != -1) {
+                    if (idx1 == -1 || dst_functions.indexOf(newfunc) != -1) {
                         throw new ReferenceError("INVALID_STATE");
                     }
 
@@ -1116,8 +1086,6 @@ class GnuStep2Linker {
                     } else {
                         dst_functions.splice(impidx, 0, newfunc);
                     }
-
-                    dst_imports.push(newfunc);
                     
                 } else if (oldfunc instanceof WasmFunction && newfunc instanceof WasmFunction) {
                     
@@ -1171,9 +1139,7 @@ class GnuStep2Linker {
                         impidx++;
                     }
                 }
-                idx = dst_imports.indexOf(func);
-                if (idx === -1)
-                    dst_imports.push(func);
+                
             } else {
                 let idx = dst_functions.indexOf(func);
                 if (idx === -1)
@@ -1202,9 +1168,7 @@ class GnuStep2Linker {
                     dst_globals.splice(impidx, 0, glob);
                     impidx++;
                 }
-                let idx = dst_imports.indexOf(glob);
-                if (idx == -1)
-                    dst_imports.push(glob);
+                
             } else {
                 dst_globals.push(glob);
             }
@@ -1231,9 +1195,7 @@ class GnuStep2Linker {
                     dst_tags.splice(impidx, 0, tag);
                     impidx++;
                 }
-                let idx = dst_imports.indexOf(tag);
-                if (idx == -1)
-                    dst_imports.push(tag);
+                
             } else {
                 dst_tags.push(tag);
             }
@@ -1260,9 +1222,7 @@ class GnuStep2Linker {
                     dst_tables.splice(impidx, 0, tbl);
                     impidx++;
                 }
-                let idx = dst_imports.indexOf(tbl);
-                if (idx == -1)
-                    dst_imports.push(tbl);
+                
             } else {
                 dst_tables.push(tbl);
             }
@@ -2215,32 +2175,27 @@ class GnuStep2Linker {
         if (dst_funcmap.size > 0) {
 
             let dst_functions = this.functions;
-            let dst_imports = this.imports;
 
             for (const [oldfunc, newfunc] of dst_funcmap) {
 
                 if (oldfunc instanceof ImportedFunction && newfunc instanceof ImportedFunction) {
 
                     let idx1 = dst_functions.indexOf(oldfunc);
-                    let idx2 = dst_imports.indexOf(oldfunc);
-                    if (idx1 == -1 || dst_functions.indexOf(newfunc) !== -1 || idx2 == -1 || dst_imports.indexOf(newfunc) != -1) {
+                    if (idx1 == -1 || dst_functions.indexOf(newfunc) !== -1) {
                         throw new ReferenceError("INVALID_STATE")
                     }
 
                     dst_functions[idx1] = newfunc;
-                    dst_imports[idx2] = newfunc;
 
                 } else if (oldfunc instanceof ImportedFunction && newfunc instanceof WasmFunction) {
 
                     let idx1 = dst_functions.indexOf(oldfunc);
                     let idx2 = dst_functions.indexOf(newfunc);
-                    let idx3 = dst_imports.indexOf(oldfunc);
-                    if (idx1 === -1 || idx2 === undefined || idx3 === -1) {
+                    if (idx1 === -1 || idx2 === undefined) {
                         throw new ReferenceError("INVALID_STATE")
                     }
 
                     dst_functions.splice(idx1, 1);
-                    dst_imports.splice(idx3, 1);
 
                     if (idx2 === -1)
                         dst_functions.push(newfunc);
@@ -2248,7 +2203,7 @@ class GnuStep2Linker {
                 } else if (oldfunc instanceof WasmFunction && newfunc instanceof ImportedFunction) {
 
                     let idx1 = dst_functions.indexOf(oldfunc);
-                    if (idx1 == -1 || dst_functions.indexOf(newfunc) != -1 || dst_imports.indexOf(newfunc) != -1) {
+                    if (idx1 == -1 || dst_functions.indexOf(newfunc) != -1) {
                         throw new ReferenceError("INVALID_STATE");
                     }
 
@@ -2268,8 +2223,6 @@ class GnuStep2Linker {
                     } else {
                         dst_functions.splice(impidx, 0, newfunc);
                     }
-
-                    dst_imports.push(newfunc);
                     
                 } else if (oldfunc instanceof WasmFunction && newfunc instanceof WasmFunction) {
                     
@@ -2294,7 +2247,6 @@ class GnuStep2Linker {
         }
 
         let impidx = -1;
-        let _imports = this.imports;
         let _functions = this.functions;
         len = _functions.length;
         for (let i = 0; i < len; i++) {
@@ -2317,9 +2269,6 @@ class GnuStep2Linker {
                     _functions.splice(impidx, 0, func);
                     impidx++;
                 }
-                let idx = _imports.indexOf(func);
-                if (idx == -1)
-                    _imports.push(func);
             } else {
                 _functions.push(func);
             }
@@ -2347,9 +2296,7 @@ class GnuStep2Linker {
                     _globals.splice(impidx, 0, glob);
                     impidx++;
                 }
-                let idx = _imports.indexOf(glob);
-                if (idx == -1)
-                    _imports.push(glob);
+                
             } else {
                 _globals.push(glob);
             }
@@ -2376,9 +2323,7 @@ class GnuStep2Linker {
                     _tags.splice(impidx, 0, tag);
                     impidx++;
                 }
-                let idx = _imports.indexOf(tag);
-                if (idx == -1)
-                    _imports.push(tag);
+                
             } else {
                 _tags.push(tag);
             }
@@ -2405,9 +2350,7 @@ class GnuStep2Linker {
                     _tables.splice(impidx, 0, tbl);
                     impidx++;
                 }
-                let idx = _imports.indexOf(tbl);
-                if (idx == -1)
-                    _imports.push(tbl);
+                
             } else {
                 _tables.push(tbl);
             }
@@ -2675,7 +2618,6 @@ class GnuStep2Linker {
         let _datamap = this.datamap;
         let _dataSegments = this.dataSegments;
         let _functions = this.functions;
-        let _imports = this.imports;
         let _symtable = this._symtable;
         let _code_relocs = this._code_relocs;
         let _data_relocs = this._data_relocs;
@@ -2735,17 +2677,12 @@ class GnuStep2Linker {
             // - ref.func   0xd2
             // replace in:
             // functions
-            // imports (replace/remove as needed)
             // element-segments
             
             for (const [oldfunc, newfunc] of dst_funcmap) {
 
                 let idx = _functions.indexOf(oldfunc);
                 _functions.splice(idx, 1);
-                if (oldfunc instanceof ImportedFunction) {
-                    idx = _imports.indexOf(oldfunc);
-                    _imports.splice(idx, 1);
-                }
                 
                 if (newfunc instanceof ImportedFunction) {
 
@@ -2767,10 +2704,6 @@ class GnuStep2Linker {
                             _functions.splice(idx, 0, newfunc);
                         }
                     }
-
-                    idx = _imports.indexOf(newfunc);
-                    if (idx == -1)
-                        _imports.push(newfunc);
                     
                 } else {
                     idx = _functions.indexOf(newfunc);
@@ -2939,7 +2872,6 @@ class GnuStep2Linker {
             // - ref.func   0xd2
             // replace in:
             // functions
-            // imports (replace/remove as needed)
             // element-segments (not generated yet)
             
             for (const [oldfunc, newfunc] of dst_funcmap) {
@@ -2948,17 +2880,8 @@ class GnuStep2Linker {
                     debugger;
 
                 if (oldfunc instanceof ImportedFunction && newfunc instanceof ImportedFunction) {
-                    let idx1 = _imports.indexOf(oldfunc);
-                    let idx2 = _imports.indexOf(newfunc);
-                    if (idx1 === -1)
-                        throw new Error("SCENARIO NOT HANDLED");
-                    if (idx2 === -1) {
-                        _imports[idx1] = newfunc;
-                    } else {
-                        _imports.splice(idx1, 1);
-                    }
-                    idx1 = _functions.indexOf(oldfunc);
-                    idx2 = _functions.indexOf(newfunc);
+                    let idx1 = _functions.indexOf(oldfunc);
+                    let idx2 = _functions.indexOf(newfunc);
                     if (idx1 === -1)
                         throw new Error("SCENARIO NOT HANDLED");
                     if (idx2 === -1) {
@@ -2970,11 +2893,9 @@ class GnuStep2Linker {
                 } else if (oldfunc instanceof ImportedFunction) {
                     // newfunc must be WasmFunction
                     let idx1 = _functions.indexOf(oldfunc);
-                    let idx2 = _imports.indexOf(oldfunc);
-                    if (idx1 === -1 || idx2 === -1)
+                    if (idx1 === -1)
                         throw new Error("SCENARIO NOT HANDLED");
                     _functions.splice(idx1, 1);
-                    _imports.splice(idx2, 1);
 
                     idx1 = _functions.indexOf(newfunc);
                     if (idx == -1) {
@@ -3099,7 +3020,6 @@ class GnuStep2Linker {
             throw err;
         }
 
-        // TODO: what about all the imports in libc? these seams to be weak aliases?
         // build data-segments
         let reloc_globals = [];
         let so_ident = this.so_ident;
@@ -3653,12 +3573,10 @@ class GnuStep2Linker {
 
 
         if (so_tbl_objc_reloc._usage > 0) {
-            this.imports.unshift(so_tbl_objc_reloc);
             this.globals.unshift(so_tbl_objc_reloc);
         }
 
         if (so_tbl_reloc._usage > 0) {
-            this.imports.unshift(so_tbl_reloc);
             this.globals.unshift(so_tbl_reloc);
         }
 
@@ -3666,7 +3584,6 @@ class GnuStep2Linker {
 
             for (let i = so_data_reloc.length - 1; i >= 0; i--) {
                 let glob = so_data_reloc[i];
-                this.imports.unshift(glob);
                 this.globals.unshift(glob);
             }
         }
@@ -3675,7 +3592,6 @@ class GnuStep2Linker {
 
             let impidx = -1;
             let notfound = true;
-            let _imports = this.imports;
             let _globals = this.globals;
             let len = _globals.length;
             for (let i = 0; i < len; i++) {
@@ -3700,7 +3616,6 @@ class GnuStep2Linker {
                 } else {
                     _globals.splice(impidx, 0, glob);
                 }
-                _imports.push(glob);
             }
         }
 
@@ -3793,6 +3708,15 @@ class GnuStep2Linker {
             ops.push({opcode: 0x0b});   // end
 
             _functions.push(ctor_dylib_tbl);
+        }
+
+        {
+            let secIdx, codeSec = this._wasmModule.findSection(SECTION_TYPE_CODE);
+            if (!codeSec)
+                throw ReferenceError("INVALID_STATE");
+            secIdx = this._wasmModuleSections.indexOf(codeSec);
+            let dataCntSec = new WebAssemblyDataCountSection(this._wasmModule);
+            this._wasmModuleSections.splice(secIdx, 0, dataCntSec);
         }
 
         _producersAddProcessedBy(this.producers, "wasm-ylinker", "0.1 (https://github.com/raweden/wasm-ylinker)")
@@ -3982,7 +3906,7 @@ class GnuStep2Linker {
                 }
             } else if (type == SECTION_TYPE_IMPORT) {
 
-                if (this.imports.length === 0) {
+                if (wasmModule.hasImports() === false) {
                     let idx = sections.indexOf(section);
                     sections.splice(idx, 1);
                 }
