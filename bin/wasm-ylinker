@@ -244,7 +244,7 @@ function main() {
             let filesize = fs.fstatSync(infd).size;
             let linker = SOSymbolLinker.fromSymbolFile(infd, filesize);
             linker.filepath = file;
-            bclinker.linkTo(linker, 'dylib');
+            bclinker.linkTo(linker, 'dylink');
             continue;
         }
 
@@ -279,6 +279,7 @@ function main() {
 
     bclinker.performLinking();
 
+    /*
     let logout = outfile + ".symbol-log";
     try {
         outfd = fs.openSync(logout, 'w+', 438); // truncated if exists mode: 0666
@@ -289,7 +290,7 @@ function main() {
         console.error(err);
         fs.closeSync(outfd);
         //throw err;
-    }
+    }*/
 
     let lnkout = outfile + LNK_DATA_SUFFIX;
     try {
@@ -309,16 +310,19 @@ function main() {
     }
 
     outfd = -1;
+    let outfiletmp = outfile + ".tmp";
     try {
-        //outfd = fs.openSync(outfile, 'w+', 438); // truncated if exists mode: 0666
-        throw new Error("DO NOT WRITE UNTIL WE ARE TESTING BINARY");
-        //bclinker.writeModule(outfd);
-        //fs.closeSync(outfd);
+        outfd = fs.openSync(outfiletmp, 'w+', 438); // truncated if exists mode: 0666
+        //throw new Error("DO NOT WRITE UNTIL WE ARE TESTING BINARY");
+        bclinker.writeModule(outfd);
+        fs.closeSync(outfd);
+        outfd = -1;
+        fs.renameSync(outfiletmp, outfile);
     } catch (err) {
-        console.error("cannot read/write %s", outfile);
+        console.error("cannot read/write %s", outfiletmp);
         if (outfd !== -1)
             fs.closeSync(outfd);
-        //throw err
+        throw err
     }
 
 }
