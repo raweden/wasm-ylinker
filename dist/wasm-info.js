@@ -86,7 +86,7 @@ function u8_memcpy(src, sidx, slen, dst, didx) {
 }
 
 // from emscripten.
-var UTF8Decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf8') : undefined;
+let UTF8Decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf8') : undefined;
 
 function UTF8ArrayToString(heap, idx, maxBytesToRead) {
     var endIdx = idx + maxBytesToRead;
@@ -186,7 +186,6 @@ class WebAssemblyCustomSection extends WebAssemblySection {
         this.name = name;
     }
 }
-
 
 function inst_name(opcode) {
 
@@ -1441,10 +1440,13 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
                         break;
                     case  8: // memory.init
                     {
-                        let dataidx = mod.dataSegments.indexOf(inst.dataSegment);
+                        let memidx, dataidx = mod.dataSegments.indexOf(inst.dataSegment);
                         if (dataidx === -1)
                             throw new ReferenceError("dataidx not found");
-                        sz += 1;
+                        memidx = mod.memory.indexOf(inst.memory);
+                        if (memidx === -1)
+                            throw new ReferenceError("memidx not found");
+                        sz += 2; // low-bytecode + memidx
                         sz += lengthULEB128(b2);
                         sz += lengthULEB128(dataidx);
                         break;
@@ -1460,7 +1462,7 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
                         break;
                     }
                     case 10: // memory.copy 0x00 0x00
-                        sz += 3; // b1 + 2 8-byte reserved (from/to memidx)
+                        sz += 3; // b1 + 2x 8-byte reserved (from/to memidx)
                         sz += lengthULEB128(b2);
                         break;
                     case 11: // memory.fill 0x00
@@ -1476,9 +1478,8 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
                         elemidx = mod.elementSegments.indexOf(inst.elem);
                         if (elemidx === -1)
                             throw new ReferenceError("elemidx not found");
-                        sz += 1;
+                        sz += 2; // low-opcode + tblidx
                         sz += lengthULEB128(b2);
-                        sz += lengthULEB128(tblidx);
                         sz += lengthULEB128(elemidx);
                         break;
                     }
@@ -2444,11 +2445,15 @@ function decodeByteCode(data, mod, locals, reloc) {
                         break;
                     case  8: // memory.init             [i32 i32 i32] -> []
                     {
+                        let mem, memidx;
                         let dataSegment, dataidx = data.readULEB128();
                         if (dataidx < 0 || dataidx >= mod.dataSegments.length)
                             throw new RangeError("dataidx out of range");
-                        dataSegment = mod.dataSegments[dataidx];
-                        opcodes.push({opcode: (op_code << 8) | sub, dataSegment: dataSegment});
+                        memidx = data.readUint8();
+                        if (memidx < 0 || memidx >= mod.memory.length)
+                            throw new RangeError("memidx out of range");
+                        mem = mod.memory[memidx];
+                        opcodes.push({opcode: (op_code << 8) | sub, dataSegment: dataSegment, memory: mem});
                         break;
                     }
                     case  9: // data.drop               [] -> []
@@ -2474,14 +2479,13 @@ function decodeByteCode(data, mod, locals, reloc) {
                     case 12: // table.init              [i32 i32 i32] -> []
                     {
                         let tbl, elem, idx = data.readULEB128();
-                        if (idx < 0 || idx >= tables.length)
-                            throw new RangeError("tableidx out of range");
-                        tbl = tables[idx];
-                        idx = data.readULEB128();
                         if (idx < 0 || idx >= mod.elementSegments.length)
                             throw new RangeError("elemidx out of range");
                         elem = mod.elementSegments[idx];
-
+                        idx = data.readUint8();
+                        if (idx < 0 || idx >= tables.length)
+                            throw new RangeError("tableidx out of range");
+                        tbl = tables[idx];
                         opcodes.push({opcode: (op_code << 8) | sub, table: tbl, elem: elem});
                         break;
                     }
@@ -3421,12 +3425,17 @@ function encodeByteCode(mod, opcodes, locals, data) {
                         break;
                     case  8: // memory.init
                     {
+                        let memidx;
                         let dataidx = mod.dataSegments.indexOf(inst.dataSegment);
                         if (dataidx === -1)
                             throw new ReferenceError("dataidx not found");
+                        memidx = mod.memory.indexOf(inst.memory);
+                        if (memidx === -1)
+                            throw new ReferenceError("memidx not found");
                         data.writeUint8(b1);
                         data.writeULEB128(b2);
                         data.writeULEB128(dataidx);
+                        data.writeUint8(memidx);
                         break;
                     }
                     case  9: // data.drop
@@ -3464,8 +3473,8 @@ function encodeByteCode(mod, opcodes, locals, data) {
                             throw new ReferenceError("elemidx not found");
                         data.writeUint8(b1);
                         data.writeULEB128(b2);
-                        data.writeULEB128(tblidx);
                         data.writeULEB128(elemidx);
+                        data.writeUint8(tblidx);
                         break;
                     }
                     case 13: // elem.drop
@@ -6796,6 +6805,7 @@ class WebAssemblyCustomSectionProducers extends WebAssemblyCustomSection {
         totsz += lengthULEB128(count);
         let strlen = lengthBytesUTF8(SEC_NAME);
         totsz += lengthULEB128(strlen);
+        totsz += strlen;
         secsz = totsz;
         totsz += lengthULEB128(totsz);
 
@@ -9566,6 +9576,44 @@ class WebAssemblyModule {
         }
 
         return null;
+    }
+
+    findFuncUses(name) {
+        let match;
+        let functions = this.functions;
+        let ylen = functions.length;
+        for (let y = 0; y < ylen; y++) {
+            let func = functions[y];
+            if (func instanceof ImportedFunction) {
+                if (func.name == name) {
+                    match = func;
+                    break;
+                }
+            } else if (func[__nsym] == name) {
+                match = func;
+                break;
+            }
+        }
+    
+        let uses = [];
+        ylen = functions.length;
+        for (let y = 0; y < ylen; y++) {
+            let func = functions[y];
+            if (func instanceof ImportedFunction) {
+                continue;
+            }
+            let opcodes = func.opcodes;
+            let xlen = opcodes.length;
+            for (let x = 0; x < xlen; x++) {
+                let inst = opcodes[x];
+                if (inst.opcode == 0x10 && inst.func == match) {
+                    uses.push(func);
+                    break;
+                }
+            }
+        }
+
+        return uses;
     }
 
     // Table utilities

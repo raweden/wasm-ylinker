@@ -517,6 +517,8 @@ class GnuStep2Linker {
 
                     //if (sym.value && (((sym.value instanceof WasmFunction) && sym.value[__nsym] == "__sysconf") || ((sym.value instanceof ImportedFunction) && sym.value.name == "__sysconf")))
                     //    debugger;
+                    if (sym.name == "_tr_stored_block")
+                        debugger;
 
                     // just merge local symbols.
                     if ((sym.flags & WASM_SYM_BINDING_LOCAL) != 0) {
@@ -529,26 +531,12 @@ class GnuStep2Linker {
 
                     // Objective-C methods are declared as local, these does not appear here.
                     
-                    if (sym.name == "__paritysi2")
-                        debugger;
-
                     let name = sym.name;
                     if (dst_funcsym.hasOwnProperty(name)) {
                         let dstsym = dst_funcsym[name];
-                        if ((dstsym.flags & WASM_SYM_BINDING_WEAK) != 0 && (dstsym.flags & WASM_SYM_BINDING_WEAK) != 0) {
-                            // if both symbols are weak, keep the one in self.
-                            src_funcmap.set(sym.value, dstsym.value);
-                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
-                        } else if ((dstsym.flags & WASM_SYM_VISIBILITY_HIDDEN) != 0 && (dstsym.flags & WASM_SYM_VISIBILITY_HIDDEN) != 0) {
-                            // if both symbols are weak, keep the one in self.
-                            src_funcmap.set(sym.value, dstsym.value);
-                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
-                        } else if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0 && (sym.flags & WASM_SYM_UNDEFINED) != 0) {
-                            // if both are undefined; keep self
-                            src_funcmap.set(sym.value, dstsym.value);
-                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
-                        } else if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0) {
-                            // keep extneral (linker arg)
+
+                        if (((dstsym.flags & WASM_SYM_UNDEFINED) != 0) && ((sym.flags & WASM_SYM_UNDEFINED) == 0)) {
+                            // if symbol within self is marked undefined, replace with extneral (linker arg)
                             dst_funcmap.set(dstsym.value, sym.value);
                             _replaceRelocByRef(dst_code_reloc, dst_data_reloc, dstsym, sym);
                             let idx = dst_symtable.indexOf(dstsym);
@@ -556,8 +544,8 @@ class GnuStep2Linker {
                                 throw new ReferenceError("symbol not in table");
                             dst_symtable[idx] = sym;
                             dst_funcsym[name] = sym;
-                        } else if ((sym.flags & WASM_SYM_UNDEFINED) != 0) {
-                            // external symbol is undefined; keep self
+                        } else {
+                            // if both symbols are weak, keep the one in self.
                             src_funcmap.set(sym.value, dstsym.value);
                             _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
                         }
@@ -591,21 +579,8 @@ class GnuStep2Linker {
                         if (sym == dstsym)
                             continue;
 
-                        if ((dstsym.flags & WASM_SYM_BINDING_WEAK) != 0 && (dstsym.flags & WASM_SYM_BINDING_WEAK) != 0) {
-                            // if both symbols are weak, keep the one in self.
-                            src_datamap.set(sym.value, dstsym.value);
-                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
-                        } else if ((dstsym.flags & WASM_SYM_VISIBILITY_HIDDEN) != 0 && (dstsym.flags & WASM_SYM_VISIBILITY_HIDDEN) != 0) {
-                            // if both symbols are weak, keep the one in self.
-                            src_datamap.set(sym.value, dstsym.value);
-                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
-                        } else if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0 && (sym.flags & WASM_SYM_UNDEFINED) != 0) {
-                            // if both are undefined; keep self
-                            if (sym.value && dstsym.value)
-                                src_datamap.set(sym.value, dstsym.value);
-                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
-                        } else if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0) {
-                            // keep extneral (linker arg)
+                        if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0 && (sym.flags & WASM_SYM_UNDEFINED) == 0) {
+                            // if internal symbol is undefined use external symbol.
                             if (sym.value && dstsym.value) {
                                 throw ReferenceError("old data should never have reference");
                             }
@@ -618,13 +593,8 @@ class GnuStep2Linker {
                             if (sym.value && new_data.indexOf(sym.value) === -1) {
                                 new_data.push(sym.value);
                             }
-                        } else if ((sym.flags & WASM_SYM_UNDEFINED) != 0) {
-                            // external symbol is undefined; keep self
-                            if (sym.value && dstsym.value)
-                                src_datamap.set(sym.value, dstsym.value);
-                            _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
                         } else {
-                            // else re-map to symbol within self.
+                            // if both symbols are weak, keep the one in self.
                             if (sym.value && dstsym.value)
                                 src_datamap.set(sym.value, dstsym.value);
                             _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
@@ -891,6 +861,16 @@ class GnuStep2Linker {
                             break;
                         }
                         case 0xfc08:  // memory.init
+                        {
+                            if (src_memmap.has(inst.memory)) {
+                                inst.dataSegment = src_memmap.get(inst.memory);
+                            }
+                            let dataSegment = inst.dataSegment;
+                            if (src_datamap.has(dataSegment)) {
+                                inst.dataSegment = src_datamap.get(dataSegment);
+                            }
+                            break;
+                        }
                         case 0xfc09:  // data.drop
                         {
                             let dataSegment = inst.dataSegment;
@@ -1686,6 +1666,10 @@ class GnuStep2Linker {
             sym.flags |= WASM_SYM_EXTERNAL;
             kind = sym.kind;
             if (kind == 0x00) { // functions
+
+                if (sym.name == "_tr_stored_block")
+                    debugger;
+
                 // just merge local symbols.
                 if ((sym.flags & WASM_SYM_BINDING_LOCAL) != 0) {
                     dst_symtable.push(sym);
@@ -1698,20 +1682,16 @@ class GnuStep2Linker {
                 let name = sym.name;
                 if (dst_funcsym.hasOwnProperty(name)) {
                     let dstsym = dst_funcsym[name];
-                    if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0 && (sym.flags & WASM_SYM_UNDEFINED) != 0) {
-                        // if both are undefined; keep self
-                        src_funcmap.set(sym.value, dstsym.value);
-                        _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
-                    } else if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0) {
-                        // keep extneral (linker arg)
+                    if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0 && (sym.flags & WASM_SYM_UNDEFINED) == 0) {
+                        // if internal symbol is undefined but external symbol is not, use external.
                         dst_funcmap.set(dstsym.value, sym.value);
                         _replaceRelocByRef(dst_code_reloc, dst_data_reloc, dstsym, sym);
                         let idx = dst_symtable.indexOf(dstsym);
                         if (idx == -1)
                             throw new ReferenceError("symbol not in table");
-                        dst_symtable[idx] = sym;
-                    } else if ((sym.flags & WASM_SYM_UNDEFINED) != 0) {
-                        // external symbol is undefined; keep self
+                        dst_symtable[idx] = sym;                        
+                    } else {
+                        // keep self
                         src_funcmap.set(sym.value, dstsym.value);
                         _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
                     }
@@ -1748,13 +1728,8 @@ class GnuStep2Linker {
                     if (sym == dstsym)
                         continue;
 
-                    if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0 && (sym.flags & WASM_SYM_UNDEFINED) != 0) {
-                        // if both are undefined; keep self
-                        if (sym.value && dstsym.value)
-                            src_datamap.set(sym.value, dstsym.value);
-                        _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
-                    } else if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0) {
-                        // keep extneral (linker arg)
+                    if ((dstsym.flags & WASM_SYM_UNDEFINED) != 0 && (sym.flags & WASM_SYM_UNDEFINED) == 0) {
+                        // if internal symbol is undefined, but external is not use external.
                         if (sym.value && dstsym.value)
                             dst_datamap.set(dstsym.value, sym.value);
                         _replaceRelocByRef(dst_code_reloc, dst_data_reloc, dstsym, sym);
@@ -1765,8 +1740,9 @@ class GnuStep2Linker {
                         if (sym.value) {
                             new_data.push(sym.value);
                         }
-                    } else if ((sym.flags & WASM_SYM_UNDEFINED) != 0) {
-                        // external symbol is undefined; keep self
+
+                    } else {
+                        // keep self
                         if (sym.value && dstsym.value)
                             src_datamap.set(sym.value, dstsym.value);
                         _replaceRelocByRef(src_code_reloc, src_data_reloc, sym, dstsym);
@@ -2025,6 +2001,16 @@ class GnuStep2Linker {
                         }
 
                         case 0xfc08:  // memory.init
+                        {
+                            let dataSegment = inst.dataSegment;
+                            if (src_datamap.has(dataSegment)) {
+                                inst.dataSegment = src_datamap.get(dataSegment);
+                            }
+                            if (src_memmap.has(inst.memory)) {
+                                inst.memory = src_memmap.get(inst.memory);
+                            }
+                            break;
+                        }
                         case 0xfc09:  // data.drop
                         {
                             let dataSegment = inst.dataSegment;
@@ -2467,7 +2453,12 @@ class GnuStep2Linker {
                 if (symbol.kind == 0x00) {
                     let func = symbol.value;
                     if (func instanceof WasmFunction) {
-                        func[__nsym] = symbol.name;
+                        // allow any symbol to give initial name, but only allow strong symbols in the same *.bc file to overwrite a name.
+                        if (func[__nsym] === undefined) {
+                            func[__nsym] = symbol.name;
+                        } else if ((symbol.flags & WASM_SYM_BINDING_WEAK) == 0){
+                            func[__nsym] = symbol.name;
+                        }
                     }
                     if (typeof symbol.name != "string" && func instanceof ImportedFunction && func.module == "env") {
                         symbol.name = func.name;
@@ -2795,6 +2786,50 @@ class GnuStep2Linker {
             }
         }
 
+        // letting AR loaders try to load undefined symbols against other AR loaders.
+        xlen = arloaders.length;
+        for (let i = 0; i < xlen; i++) {
+            let arloader = arloaders[i];
+            if (!arloader._bclinker)
+                continue;
+
+            let symtable = arloader._bclinker._symtable;
+            let ylen = symtable.length;
+            for (let y = 0; y < ylen; y++) {
+                let sym = symtable[y];
+                if ((sym.flags & WASM_SYM_UNDEFINED) == 0)
+                    continue;
+
+                let kind = sym.kind;
+                if (kind == 0) {
+                    let func = sym.value;
+                    for (let x = 0; x < xlen; x++) {
+                        if (i == x)
+                            continue;
+                        let loader = arloaders[x];
+                        let ret = loader.loadFuncSymbol(func.name, func.type);
+                        if (ret) {
+                            break;
+                        }
+                    }
+                } else if (kind == 1) {
+                    let name = sym.name;
+                    if (name.startsWith("__start_") || name.startsWith("__stop_")) {
+                        continue;
+                    }
+                    for (let x = 0; x < xlen; x++) {
+                        if (i == x)
+                            continue;
+                        let loader = arloaders[x];
+                        let ret = loader.loadDataSymbol(name);
+                        if (ret) {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         for (let x = 0; x < xlen; x++) {
             let loader = arloaders[x];
             let bclinker = loader._bclinker;
@@ -3081,9 +3116,12 @@ class GnuStep2Linker {
 
         // add .rodata, .data and .bss at their respective placement.
         let outputSegments = customDataSections.slice();
-        outputSegments.unshift(_section_data);      // secound
-        outputSegments.unshift(_section_rodata);    // first
-        outputSegments.push(_section_bss);          // last
+        if (_section_data.dataSegments.length > 0)
+            outputSegments.unshift(_section_data);      // pos #2
+        if (_section_rodata.dataSegments.length > 0)
+            outputSegments.unshift(_section_rodata);    // pos #1
+        if (_section_bss.dataSegments.length > 0)
+            outputSegments.push(_section_bss);          // last
 
 
 
@@ -3108,7 +3146,7 @@ class GnuStep2Linker {
                 // ensure that we do not pad the first object.
                 if (lastDataSection) {
                     let max_align = dataSection.max_align;
-                    let rem = (off % max_align);
+                    let rem = max_align != 0 ? (off % max_align) : 0;
                     if (rem !== 0) {
                         let pad = (max_align - rem);
                         padt += pad;
@@ -3349,10 +3387,6 @@ class GnuStep2Linker {
                     throw ReferenceError("inst-idx not found");
                 }
 
-                if (func[__nsym] == "_citrus_LC_CTYPE___setlocale50" && instidx == 196) {
-                    debugger;
-                }
-
                 if (opcode == 0x41) { // i32.const
                     continue;
                 } else if (isLoadInst(opcode)) {
@@ -3571,12 +3605,13 @@ class GnuStep2Linker {
         this._reloc_groups = reloc_groups;
         this._wasmModuleSections.unshift(section);
 
-
-        if (so_tbl_objc_reloc._usage > 0) {
+        // if one or more usage of element declare global.
+        if (indirect_tbl_objc_vec.length > 0) {
             this.globals.unshift(so_tbl_objc_reloc);
         }
 
-        if (so_tbl_reloc._usage > 0) {
+        // if one or more usage of element declare global.
+        if (indirect_tbl_vec.length > 0) {
             this.globals.unshift(so_tbl_reloc);
         }
 
@@ -3642,85 +3677,6 @@ class GnuStep2Linker {
             indirect_tbl_objc_elem = elem;
         }
 
-        // TODO: generate dylib ctor functions.
-        let wmod = this._wasmModule;
-        let voidt = wmod.getOrCreateType(null, null)
-        let ops, ctor_dylib_mem = new WasmFunction();
-        ctor_dylib_mem[__nsym] = "__wasm_ctor_dylib_mem";
-        ctor_dylib_mem.type = voidt;
-        ctor_dylib_mem.locals = undefined;
-        ctor_dylib_mem.opcodes = [];
-        ops = ctor_dylib_mem.opcodes;
-
-        len = outputSegments.length;
-        for (let i = 0; i < len; i++) {
-            let dataSection = outputSegments[i];
-            let dataSegment = dataSection.dataSegment;
-            let relocOffset, relocGlobal = dataSection._reloc_glob;
-
-            ops.push({opcode: 0x41, value: 0});                             // i32.const    (src)
-            ops.push({opcode: 0x41, value: dataSegment.size});              // i32.const    (len)
-            if (singleDataReloc) {
-                ops.push({opcode: 0x23, global: relocGlobal});              // global.get
-                ops.push({opcode: 0x41, value: dataSection._reloc_start});  // i32.const
-                ops.push({opcode: 0x6a});                                   // i32.add      (dst)
-            } else {
-                ops.push({opcode: 0x23, global: relocGlobal});              // global.get   (dst)
-            }
-            ops.push({opcode: 0xfc08, dataSegment: dataSegment}); // memory.init
-
-        }
-
-        for (let i = 0; i < len; i++) {
-            let dataSection = outputSegments[i];
-            let dataSegment = dataSection.dataSegment;
-            ops.push({opcode: 0xfc09, dataSegment: dataSegment});           // data.drop
-
-        }
-
-        ops.push({opcode: 0x0b});   // end
-
-        _functions.push(ctor_dylib_mem);
-
-        if (indirect_tbl_elem || indirect_tbl_objc_elem) {
-
-            let ctor_dylib_tbl = new WasmFunction();
-            ctor_dylib_tbl.type = voidt;
-            ctor_dylib_tbl[__nsym] = "__wasm_ctor_dylib_tbl";
-            ctor_dylib_tbl.opcodes = [];
-            ops = ctor_dylib_tbl.opcodes;
-
-            // TODO: this should be dynamic!
-            if (indirect_tbl_elem) {
-                ops.push({opcode: 0x41, value: 0});                                                 // i32.const    (src)
-                ops.push({opcode: 0x41, value: indirect_tbl_vec.length});                           // i32.const    (len)
-                ops.push({opcode: 0x23, global: so_tbl_reloc});                                     // global.get   (dst)
-                ops.push({opcode: 0xfc12, table: indirect_tbl, elem: indirect_tbl_elem});           // table.init  
-            }
-
-            if (indirect_tbl_objc_elem) {
-                ops.push({opcode: 0x41, value: 0});                                                 // i32.const    (src)
-                ops.push({opcode: 0x41, value: indirect_tbl_objc_vec.length});                      // i32.const    (len)
-                ops.push({opcode: 0x23, global: so_tbl_objc_reloc});                                // global.get   (dst)
-                ops.push({opcode: 0xfc12, table: indirect_tbl_objc, elem: indirect_tbl_objc_elem}); // table.init
-            }
-
-            ops.push({opcode: 0x0b});   // end
-
-            _functions.push(ctor_dylib_tbl);
-        }
-
-        {
-            let secIdx, codeSec = this._wasmModule.findSection(SECTION_TYPE_CODE);
-            if (!codeSec)
-                throw ReferenceError("INVALID_STATE");
-            secIdx = this._wasmModuleSections.indexOf(codeSec);
-            let dataCntSec = new WebAssemblyDataCountSection(this._wasmModule);
-            this._wasmModuleSections.splice(secIdx, 0, dataCntSec);
-        }
-
-        _producersAddProcessedBy(this.producers, "wasm-ylinker", "0.1 (https://github.com/raweden/wasm-ylinker)")
-
         // export visiable symbols.
         let dst_exports = this.exports;
         let export_list = [];
@@ -3759,6 +3715,97 @@ class GnuStep2Linker {
             exp.function = func;
             dst_exports.push(exp);
         }
+
+
+        // TODO: generate dylib ctor functions.
+        let dmem = this.memory[0];
+        let wmod = this._wasmModule;
+        let voidt = wmod.getOrCreateType(null, null)
+        let ops, ctor_dylib_mem = new WasmFunction();
+        ctor_dylib_mem[__nsym] = "__wasm_ctor_dylib_mem";
+        ctor_dylib_mem.type = voidt;
+        ctor_dylib_mem.locals = undefined;
+        ctor_dylib_mem.opcodes = [];
+        ops = ctor_dylib_mem.opcodes;
+
+        len = outputSegments.length;
+        for (let i = 0; i < len; i++) {
+            let dataSection = outputSegments[i];
+            let dataSegment = dataSection.dataSegment;
+            let relocOffset, relocGlobal = dataSection._reloc_glob;
+
+            if (singleDataReloc) {
+                ops.push({opcode: 0x23, global: relocGlobal});                  // global.get
+                ops.push({opcode: 0x41, value: dataSection._reloc_start});      // i32.const
+                ops.push({opcode: 0x6a});                                       // i32.add      (dst)
+            } else {
+                ops.push({opcode: 0x23, global: relocGlobal});                  // global.get   (dst)
+            }
+            ops.push({opcode: 0x41, value: 0});                                 // i32.const    (src)
+            ops.push({opcode: 0x41, value: dataSegment.size});                  // i32.const    (len)
+            ops.push({opcode: 0xfc08, dataSegment: dataSegment, memory: dmem}); // memory.init
+
+        }
+
+        for (let i = 0; i < len; i++) {
+            let dataSection = outputSegments[i];
+            let dataSegment = dataSection.dataSegment;
+            ops.push({opcode: 0xfc09, dataSegment: dataSegment});           // data.drop
+
+        }
+
+        ops.push({opcode: 0x0b});   // end
+
+        _functions.push(ctor_dylib_mem);
+
+        let texp = new ExportedFunction();
+        texp.name = ctor_dylib_mem[__nsym];
+        texp.function = ctor_dylib_mem;
+        dst_exports.push(texp);
+
+        if (indirect_tbl_elem || indirect_tbl_objc_elem) {
+
+            let ctor_dylib_tbl = new WasmFunction();
+            ctor_dylib_tbl.type = voidt;
+            ctor_dylib_tbl[__nsym] = "__wasm_ctor_dylib_tbl";
+            ctor_dylib_tbl.opcodes = [];
+            ops = ctor_dylib_tbl.opcodes;
+
+            // TODO: this should be dynamic!
+            if (indirect_tbl_elem) {
+                ops.push({opcode: 0x23, global: so_tbl_reloc});                                     // global.get   (dst)
+                ops.push({opcode: 0x41, value: 0});                                                 // i32.const    (src)
+                ops.push({opcode: 0x41, value: indirect_tbl_vec.length});                           // i32.const    (len)
+                ops.push({opcode: 0xfc0c, table: indirect_tbl, elem: indirect_tbl_elem});           // table.init  
+            }
+
+            if (indirect_tbl_objc_elem) {
+                ops.push({opcode: 0x23, global: so_tbl_objc_reloc});                                // global.get   (dst)
+                ops.push({opcode: 0x41, value: 0});                                                 // i32.const    (src)
+                ops.push({opcode: 0x41, value: indirect_tbl_objc_vec.length});                      // i32.const    (len)
+                ops.push({opcode: 0xfc0c, table: indirect_tbl_objc, elem: indirect_tbl_objc_elem}); // table.init
+            }
+            
+            ops.push({opcode: 0x0b});   // end
+
+            _functions.push(ctor_dylib_tbl);
+
+            let texp = new ExportedFunction();
+            texp.name = ctor_dylib_tbl[__nsym];
+            texp.function = ctor_dylib_tbl;
+            dst_exports.push(texp);
+        }
+
+        {
+            let secIdx, codeSec = this._wasmModule.findSection(SECTION_TYPE_CODE);
+            if (!codeSec)
+                throw ReferenceError("INVALID_STATE");
+            secIdx = this._wasmModuleSections.indexOf(codeSec);
+            let dataCntSec = new WebAssemblyDataCountSection(this._wasmModule);
+            this._wasmModuleSections.splice(secIdx, 0, dataCntSec);
+        }
+
+        _producersAddProcessedBy(this.producers, "wasm-ylinker", "0.1 (https://github.com/raweden/wasm-ylinker)")
 
         // convert memory parameters if needed.
         {

@@ -65,6 +65,7 @@ class WebAssemblyCustomRelocCMD extends WebAssemblyCustomSection {
         totsz += lengthULEB128(len);
         let strlen = lengthBytesUTF8(SECTION_NAME);
         totsz += lengthULEB128(strlen);
+		totsz += strlen;
         secsz = totsz;
         totsz += lengthULEB128(totsz);
 
@@ -139,7 +140,7 @@ class WebAssemblyCustomSectionNetBSDDylink extends WebAssemblyCustomSection {
 
 	static decode(module, data, size) {
 
-        let dlen = data.readULEB128(dlen);
+        let dlen = data.readULEB128();
 		let jsonData = data.readUTF8Bytes(dlen);
 		jsonData = JSON.parse(jsonData);
 
@@ -165,6 +166,7 @@ class WebAssemblyCustomSectionNetBSDDylink extends WebAssemblyCustomSection {
 
         let strlen = lengthBytesUTF8(SECTION_NAME);
         totsz += lengthULEB128(strlen);
+		totsz += strlen;
         secsz = totsz;
         totsz += lengthULEB128(totsz);
 
@@ -188,8 +190,8 @@ class WebAssemblyCustomSectionNetBSDDylink extends WebAssemblyCustomSection {
  * Validates certain aspect of the module structure.
  * This is used during test phase and development to ensure that changes does output a valid module.
  * 
- * - That all imports also appear in .imports
  * - That a reference to a function only appear once in .functions
+ * @todo ensure and list imports that appear out of sequence.
  * 
  * Upon invalid entry found this function throws.
  * 
@@ -204,19 +206,13 @@ function validateWasmModule(wasmModule) {
 	let memory = wasmModule.memory;
 	let tables = wasmModule.tables;
 	let tags = wasmModule.tags;
-	let imports = wasmModule.imports;
+	let exports = wasmModule.exports;
 	let errors = [];
 	let dupmap = new Map();
 
 	let len = functions.length;
 	for (let i = 0; i < len; i++) {
 		let func = functions[i];
-		if (func instanceof ImportedFunction) {
-			let idx = imports.indexOf(func);
-			if (idx === -1) {
-				errors.push({text: "UNDECLARED_IMPORT", value: func, index: i});
-			}
-		}
 		let next = functions.indexOf(func, i + 1);
 		if (next !== -1) {
 			let err;
@@ -236,12 +232,6 @@ function validateWasmModule(wasmModule) {
 	len = globals.length;
 	for (let i = 0; i < len; i++) {
 		let glob = globals[i];
-		if (glob instanceof ImportedGlobal) {
-			let idx = imports.indexOf(glob);
-			if (idx === -1) {
-				errors.push({text: "UNDECLARED_IMPORT", value: glob, index: i});
-			}
-		}
 		let next = globals.indexOf(glob, i + 1);
 		if (next !== -1) {
 			let err;
@@ -261,12 +251,6 @@ function validateWasmModule(wasmModule) {
 	len = tables.length;
 	for (let i = 0; i < len; i++) {
 		let table = tables[i];
-		if (table instanceof ImportedTable) {
-			let idx = imports.indexOf(table);
-			if (idx === -1) {
-				errors.push({text: "UNDECLARED_IMPORT", value: table, index: i});
-			}
-		}
 		let next = tables.indexOf(table, i + 1);
 		if (next !== -1) {
 			let err;
@@ -286,12 +270,6 @@ function validateWasmModule(wasmModule) {
 	len = memory.length;
 	for (let i = 0; i < len; i++) {
 		let mem = memory[i];
-		if (mem instanceof ImportedMemory) {
-			let idx = imports.indexOf(mem);
-			if (idx === -1) {
-				errors.push({text: "UNDECLARED_IMPORT", value: mem, index: i});
-			}
-		}
 		let next = memory.indexOf(mem, i + 1);
 		if (next !== -1) {
 			let err;
@@ -311,12 +289,6 @@ function validateWasmModule(wasmModule) {
 	len = tags.length;
 	for (let i = 0; i < len; i++) {
 		let tag = tags[i];
-		if (tag instanceof ImportedTag) {
-			let idx = imports.indexOf(tag);
-			if (idx === -1) {
-				errors.push({text: "UNDECLARED_IMPORT", value: tag, index: i});
-			}
-		}
 		let next = tags.indexOf(tag, i + 1);
 		if (next !== -1) {
 			let err;
@@ -348,6 +320,20 @@ function validateWasmModule(wasmModule) {
 				errors.push(err);
 				dupmap.set(dataSegment, err);
 			}
+		}
+	}
+
+	// checking exports 
+	let namelist = [];
+	len = exports.length;
+	for (let i = 0; i < len; i++) {
+		let exp = exports[i];
+		let name = exp.name;
+		if (namelist.indexOf(name) !== -1) {
+			let err = {text: "DUPLICATE_EXPORT_NAME", name: name};
+			errors.push(err);
+		} else {
+			namelist.push(name);
 		}
 	}
 
