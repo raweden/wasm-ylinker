@@ -210,7 +210,6 @@ function convertMemoryAction(ctx, mod, options) {
 					mem.min = org.min;
 					mem.max = org.max;
 					mem.shared = org.shared;
-					mod.imports.push(mem);
 					mod.memory[idx] = mem;
 
 					let inexp = false;
@@ -306,7 +305,6 @@ function convertToImportedGlobalAction(ctx, mod, options) {
 	newglob.type = oldglob.type;
 
 	mod.replaceGlobal(oldglob, newglob, true);
-	mod.imports.push(newglob);
 	mod.removeExportFor(oldglob);
 
 	let sec = mod.findSection(SECTION_TYPE_IMPORT);
@@ -850,6 +848,8 @@ function removeExportFor(mod, obj) {
 		}
 	}
 }
+
+const REPLACE_CALL_SKIP_FUNC = Symbol("@skip-func");
 
 // mapping of placeholder atomic operations to dedicated wasm instructions.
 const atomic_op_replace_map = [
@@ -1594,15 +1594,17 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 						handler = handlers;
 					}
 					//handler.count++;
-					let res = handler.replace(op, x, opcodes, func, call);
+					let res = handler.replace(op, x, opcodes, func, call, mod);
 					if (res === false && zlen > 1) {
 						let z = 1;
 						while (res === false && z < zlen) {
 							handler = handlers[z++];
-							res = handler.replace(op, x, opcodes, func, call);
+							res = handler.replace(op, x, opcodes, func, call, mod);
 						}
 					}
-					if (res === op) {
+					if (res === REPLACE_CALL_SKIP_FUNC) {
+						break;
+					} else if (res === op) {
 						// do nothing
 						if (op.func !== call) { // if the function referenced has been changed, decrement ref count.
 							func._opcodeDirty = true;
@@ -1636,12 +1638,6 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 		}
 
 		let idx;
-		if (calle instanceof ImportedFunction) {
-			idx = mod.imports.indexOf(calle);
-			if (idx !== -1)
-				mod.imports.splice(idx, 1);
-		}
-
 		idx = mod.functions.indexOf(calle);
 		if (idx !== -1)
 			mod.functions.splice(idx, 1);
@@ -1795,12 +1791,13 @@ function convertToImportedGlobal(mod, oldGlobal, newGlobal) {
 	}
 
 	let start = 0;
-	let imports = mod.imports;
-	len = imports.length;
-	for (let i = 0; i < len; i++) {
-		let imp = imports[i];
-		if (imp instanceof ImportedFunction) {
-			start++;
+	functions = mod.functions;
+	ylen = functions.length;
+	for (let y = start; y < ylen; y++) {
+		let func = functions[y];
+		if (!(func instanceof ImportedFunction)) {
+			start = i - 1;
+			break;
 		}
 	}
 

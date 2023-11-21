@@ -196,6 +196,7 @@ function generateNetbsdWebAssembly(ctx, mod) {
 	netbsd_wakern_info.lwp0 = getValueByName("lwp0");
 	netbsd_wakern_info.lwp0_stackp = getValueByName("__stack_pointer");
 	netbsd_wakern_info.__wasmkern_envp = getValueByName("__wasmkern_envp");
+	netbsd_wakern_info.__shared_vmtotal = getValueByName("wasm_shared_vmtotal")
 	netbsd_wakern_info.addresses = [
 		{
 			name: "__global_base",
@@ -267,7 +268,8 @@ function generateNetbsdWebAssembly(ctx, mod) {
 		avail_end: "avail_end",
 		l2_addr: "PDPpaddr",
 		bootinfo: "bootinfo",
-		__wasm_meminfo: "__wasm_meminfo"
+		__wasm_meminfo: "__wasm_meminfo",
+		__builtin_iosurfaceAddr: "__builtin_iosurfaceReqMem",
 	};
 
 	for (let p in rump_variant) {
@@ -326,7 +328,6 @@ function generateNetbsdWebAssembly(ctx, mod) {
 	g2.type = g1.type;
 	g2.mutable = g1.mutable;
 	mod.replaceGlobal(g1, g2, true);
-	mod.imports.unshift(g2);
 	mod.removeExportByRef(g1);
 
 	g1 = mod.getGlobalByName("wasm_curlwp");
@@ -336,7 +337,6 @@ function generateNetbsdWebAssembly(ctx, mod) {
 	g2.type = g1.type;
 	g2.mutable = g1.mutable;
 	mod.replaceGlobal(g1, g2, true);
-	mod.imports.push(g2);
 	mod.removeExportByRef(g1);
 
 	function replace_x86curlwp(inst, index, arr) {
@@ -411,8 +411,8 @@ let _netbsdKernMainWorkflow = {
 				type: "import", 	// no value leaves the type as is.
 				memidx: 0,
 				// min: 			// no value leaves the min as is.
-				min: 1954,
-				max: 1954,
+				min: 2000,
+				max: 2000,
 				shared: true,
 			}
 		}, {
@@ -434,7 +434,7 @@ let _netbsdKernMainWorkflow = {
 		}, {
 			action: "filterModuleExports",
 			options: {
-				names: ["__wasm_call_ctors", "__indirect_function_table", "global_start", "syscall", "syscall_trap"]
+				names: ["__wasm_call_ctors", "__indirect_function_table", "global_start", "syscall", "syscall_trap", "syscall_trap_handler", "lwp_trampoline", "uvm_total", "wasm_update_vmtotal_stats"]
 			}
 		}, {
 			action: "output",
@@ -479,7 +479,13 @@ let _netbsdUserBinaryForkWorkflow = {
 		},/*{
 			action: "addToExports",
 			options: {exports: ["__stack_pointer"]},
-		},*/ {
+		},*/ 
+		{
+			action: "filterModuleExports",
+			options: {
+				names: ["__wasm_call_ctors", "main", "start", "__indirect_function_table"]
+			}
+		}, {
 			action: "output",
 			options: {
 				exclude: [{type: 0x00, name: ".debug_info"},
