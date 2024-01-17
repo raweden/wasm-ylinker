@@ -4647,6 +4647,7 @@ class WasmGlobal {
         this.type = type;
         this.mutable = mutable === true;
         this.init = typeof expr == "object" ? expr : null;
+        this._usage = 0;
     }
 
     static createGlobalInt32(value, mutable) {
@@ -6957,7 +6958,7 @@ class WebAssemblyCustomSectionName extends WebAssemblyCustomSection {
         if (typeof mod[__nsym] == "string") {
             let name = mod[__nsym];
             let secsz, strsz = lengthBytesUTF8(name);
-            secsz = strsz;
+            secsz = strsz + lengthULEB128(strsz);
             //secsz += lengthBytesUTF8(strsz);
             subsections.push({id: 0x00, name: name, strsz: strsz, size: secsz});
         }
@@ -9771,7 +9772,7 @@ function parseWebAssemblyBinary(buf, options) {
                 break;
             }
             let tmp = data.offset;
-            let nlen = data.readUint8();
+            let nlen = data.readULEB128();
             chunk.name = data.readUTF8Bytes(nlen);
             chunk.dataOffset = data.offset;
             chunk.size = chunk.size - (data.offset - tmp);
