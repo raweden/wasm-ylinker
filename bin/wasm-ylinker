@@ -3,9 +3,9 @@
 const fs = require("fs");
 const vm = require("vm");
 const path = require("path");
-const GnuStep2Linker = require("../src/gs2linker.js");
+const ByteCodeLinker = require("../src/bclinker.js");
 const ARLinker = require("../src/ar-loader.js");
-const SOSymbolLinker = require("../src/so-loader.js");
+const DylibSymbolLinker = require("../src/dylib-loader.js");
 
 // 
 // TODO (Next-up):
@@ -33,12 +33,12 @@ function loadYLinkerScripts() {
     watScript.runInThisContext();
 
     script = fs.readFileSync(path.join(__dirname, "../src/wasm-custom.js"), {encoding: 'utf8'});
-    let gs2linkerScript = new vm.Script(script, {filename: "./src/wasm-custom.js"});
-    gs2linkerScript.runInThisContext();
+    let bclinkerScript = new vm.Script(script, {filename: "./src/wasm-custom.js"});
+    bclinkerScript.runInThisContext();
 
-    //script = fs.readFileSync(path.join(__dirname, "../src/gs2linker.js"), {encoding: 'utf8'});
-    //let gs2linkerScript = new vm.Script(script, {filename: "./src/gs2linker.js"});
-    //gs2linkerScript.runInThisContext();
+    //script = fs.readFileSync(path.join(__dirname, "../src/bclinker.js"), {encoding: 'utf8'});
+    //let bclinkerScript = new vm.Script(script, {filename: "./src/bclinker.js"});
+    //bclinkerScript.runInThisContext();
 
     script = fs.readFileSync(path.join(__dirname, "../src/fixup-builtin.js"), {encoding: 'utf8'});
     let fixupScript = new vm.Script(script, {filename: "fixup-builtin.js"});
@@ -60,6 +60,8 @@ function main() {
     console.log(process.cwd());
     //console.log(process.env);
     
+    let bopts = [];
+    let moduleName;
     let outfile, rspfile;
     let files = [];
     let flags = {};
@@ -179,6 +181,13 @@ function main() {
                         let name = arg.substring(9);
                         if (exported.indexOf(name) == -1)
                             exported.push(name);
+                    } else if (arg.startsWith("--module-name=")) {
+                        moduleName = arg.substring(14);
+                        if (moduleName.startsWith("\"") && moduleName.endsWith("\"")) {
+                            moduleName = moduleName.substring(1, moduleName.length - 1);
+                        }
+                    } else if (arg.startsWith("--dylink-profiles-dirpath=")) {
+                        opts.dylink_profiles_dirpath = arg.substring(26);
                     } else if (arg.startsWith("-L")) {
                         // library search path
                         console.log("library search path '-L' not implemented");
@@ -205,7 +214,7 @@ function main() {
             str = "";
         }
 
-        console.log(args);
+        //console.log(args);
     }
 
     loadYLinkerScripts();
@@ -214,7 +223,8 @@ function main() {
 
     let emptymap = new Map();
     let len = files.length;
-    let bclinker = new GnuStep2Linker();
+    let bclinker = new ByteCodeLinker();
+    bclinker.options = opts;
     //len = Math.min(4, len);
     let signbuf = new Uint8Array(8);
     let data = new DataView(signbuf.buffer);
@@ -224,6 +234,10 @@ function main() {
     } else {
         bclinker.so_ident = generateSOIdent(outfile);
     }
+
+    if (moduleName) {
+        bclinker.moduleName = moduleName;
+    }
     
     // pre-group files based on file extentions (works in some cases..)
     for (let i = 0; i < len; i++) {
@@ -232,17 +246,17 @@ function main() {
 
         if (file.endsWith(".so.wasm") || file.endsWith(".dylib.wasm")) {
             console.log("should read %s as dynamic / shared object", file);
-            let lnkfile;
+            let dlnk_file;
             try {
-                lnkfile = findLinkerDataFile(file);
+                dlnk_file = findDylinkedFile(null, file);
             } catch {
-                console.error("missing %s linker file for %s", file + LNK_DATA_SUFFIX, file);
+                console.error("missing %s linker file for %s", file);
                 continue;
             }
 
-            let infd = fs.openSync(lnkfile, 'r');
+            let infd = fs.openSync(dlnk_file, 'r');
             let filesize = fs.fstatSync(infd).size;
-            let linker = SOSymbolLinker.fromSymbolFile(infd, filesize);
+            let linker = DylibSymbolLinker.fromSymbolFile(infd, filesize);
             linker.filepath = file;
             bclinker.linkTo(linker, 'dylink');
             continue;
@@ -277,6 +291,8 @@ function main() {
         }
     }
 
+    bclinker.is_main_exec = outfile.endsWith(".so.wasm") == false;
+
     bclinker.performLinking();
 
     /*
@@ -292,22 +308,6 @@ function main() {
         //throw err;
     }*/
 
-    let lnkout = outfile + LNK_DATA_SUFFIX;
-    try {
-        outfd = fs.openSync(lnkout, 'w+', 438); // truncated if exists mode: 0666
-    } catch (err) {
-        console.error("cannot read/write %s", lnkout);
-        throw err;
-    }
-
-    try {
-        bclinker.writeSymbolFile(outfd);
-        fs.closeSync(outfd);
-    } catch (err) {
-        console.error(err);
-        fs.closeSync(outfd);
-        throw err;
-    }
 
     outfd = -1;
     let outfiletmp = outfile + ".tmp";
@@ -341,7 +341,37 @@ function generateSOIdent(filepath) {
         parts = parts.substring(0, end);
     }
 
-    return parts.replace(/[\s\.\-]/gm, '_');
+    return parts.replace(/[\s\.]/gm, '_');
+}
+
+function findDylinkedFile(paths, filename) {
+    let found = false;
+    let names = [filename];
+    let testname = filename;
+    if (filename.endsWith(".so.wasm")) {
+        let name = filename.substring(0, filename.length - 8);
+        names.push(name + ".wasm");
+        names.push(name + ".dylib");
+        names.push(name + ".so");
+    } else if (filename.endsWith(".wasm")) {
+        let name = filename.substring(0, filename.length - 5);
+        names.push(name + ".wasm");
+        names.push(name + ".dylib");
+        names.push(name + ".so");
+    }
+
+    let len = names.length;
+    for (let i = 0; i < len; i++) {
+        let name = names[i];
+        try {
+            fs.accessSync(name, fs.constants.R_OK);
+            return name;
+        } catch (err) {
+            // do nothing
+        }
+    }
+
+    throw new ReferenceError("LINKER_FILE_NOT_FOUND");
 }
 
 function findLinkerDataFile(filename) {

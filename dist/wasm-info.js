@@ -6,9 +6,6 @@
 // https://webassembly.github.io/spec/core/appendix/index-instructions.html
 // https://github.com/WebAssembly/tool-conventions/issues/59
 
-// nexts steps:
-// 1. manipulate globals; requires globals to be objectified rather than index referenced in instructions etc.
-// 2. refactor into class based approach sectionclass.decode/encode etc each with section based logics such as insert/remove objects.
 
 const __nsym = Symbol("@custom-name");
 const sectionnames = {
@@ -26,6 +23,8 @@ const sectionnames = {
     '11': "data",
     '12': "data count"
 };
+
+const RELOC_PAD = 5; // padding applied to leb128 when encoding relocatable value
 
 const SECTION_TYPE_FUNCTYPE = 1;
 const SECTION_TYPE_IMPORT = 2;
@@ -988,8 +987,9 @@ function isValidValueType(type) {
     return type == 0x7F || type == 0x7E || type == 0x7D || type == 0x7C || type == 0x7B  || type == 0x70 || type == 0x6F;
 }
 
-function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
-    genloc = genloc === true;
+function byteCodeComputeByteLength(mod, opcodes, locals, genloc, relocatable) {
+    genloc = (genloc === true);
+    relocatable = (relocatable === true);
     let sz = 0;
 
 
@@ -997,6 +997,7 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
     let globals = mod.globals;
     let tables = mod.tables;
     let types = mod.types;
+    let padTo = relocatable = relocatable ? RELOC_PAD : 0;
 
     let len = opcodes.length;
     for (let i = 0; i < len; i++) {
@@ -1141,11 +1142,11 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
             // return_call_indirect 0x13    [t3* t1* i32] -> [t4*]
             case 0x41: // i32.const
                 sz += 1;
-                sz += lengthSLEB128(inst.value);
+                sz += lengthSLEB128(inst.value, inst.reloc ? padTo : 0);
                 break;
             case 0x42: // i64.const
                 sz += 1;
-                sz += lengthSLEB128(inst.value);
+                sz += lengthSLEB128(inst.value, inst.reloc ? padTo : 0);
                 break;
             case 0x43: // f32.const
                 sz += 5;
@@ -1250,7 +1251,7 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
             {
                 sz += 1;
                 sz += lengthULEB128(inst.align);
-                sz += lengthULEB128(inst.offset);
+                sz += lengthULEB128(inst.offset, inst.reloc ? padTo : 0);
                 break;
             }
             case 0x3f: // memory.size 0x00
@@ -1919,7 +1920,7 @@ function byteCodeComputeByteLength(mod, opcodes, locals, genloc) {
                         sz += 1;
                         sz += lengthULEB128(b2);
                         sz += lengthULEB128(inst.align);
-                        sz += lengthULEB128(inst.offset);
+                        sz += lengthULEB128(inst.offset, inst.reloc ? padTo : 0);
                         break;
                     }
                     default:
@@ -2965,12 +2966,16 @@ function decodeByteCode(data, mod, locals, reloc) {
     return {start: start, end: data.offset, opcodes: topInsts};
 }
 
-function encodeByteCode(mod, opcodes, locals, data) {
+function encodeByteCode(mod, opcodes, locals, data, reloc_offset) {
 
     let functions = mod.functions;
     let globals = mod.globals;
     let tables = mod.tables;
     let types = mod.types;
+    let reloc = false;
+    if (Number.isInteger(reloc_offset)) {
+        reloc = true;
+    }
     
     let dstart = data.offset;
     let len = opcodes.length;
@@ -3118,11 +3123,22 @@ function encodeByteCode(mod, opcodes, locals, data) {
             // return_call_indirect 0x13    [t3* t1* i32] -> [t4*]
             case 0x41: // i32.const
                 data.writeUint8(b1);
-                data.writeSLEB128(inst.value);
+                if (reloc && inst.reloc === true) {
+                    inst._roff = data.offset + reloc_offset;
+                    data.writeSLEB128(inst.value, RELOC_PAD);
+                } else {
+                    data.writeSLEB128(inst.value);
+                }
+                
                 break;
             case 0x42: // i64.const
                 data.writeUint8(b1);
-                data.writeSLEB128(inst.value);
+                if (reloc && inst.reloc === true) {
+                    inst._roff = data.offset + reloc_offset;
+                    data.writeSLEB128(inst.value, RELOC_PAD);
+                } else {
+                    data.writeSLEB128(inst.value);   
+                }
                 break;
             case 0x43: // f32.const
                 data.writeUint8(b1);
@@ -3235,7 +3251,12 @@ function encodeByteCode(mod, opcodes, locals, data) {
             {
                 data.writeUint8(b1);
                 data.writeULEB128(inst.align);
-                data.writeULEB128(inst.offset);
+                if (reloc && inst.reloc === true) {
+                    inst._roff = data.offset + reloc_offset;
+                    data.writeULEB128(inst.offset, RELOC_PAD);
+                } else {
+                    data.writeULEB128(inst.offset);   
+                }
                 break;
             }
             case 0x3f: // memory.size 0x00
@@ -3916,7 +3937,12 @@ function encodeByteCode(mod, opcodes, locals, data) {
                         data.writeUint8(b1);
                         data.writeULEB128(b2);
                         data.writeULEB128(inst.align);
-                        data.writeULEB128(inst.offset);
+                        if (reloc && inst.reloc === true) {
+                            inst._roff = data.offset + reloc_offset;
+                            data.writeULEB128(inst.offset, RELOC_PAD);
+                        } else {
+                            data.writeULEB128(inst.offset);
+                        }
                         break;
                     }
                     default:
@@ -4831,6 +4857,7 @@ class WebAssemblyFuncTypeSection extends WebAssemblySection {
         let data = new ByteArray(buf);
         data.writeUint8(SECTION_TYPE_FUNCTYPE);
         data.writeULEB128(secsz);
+        this._dylink0_hdroff = data.offset; // store bytes used for top of header, to make reloc work without the need to read.
         data.writeULEB128(len);
 
         
@@ -5003,6 +5030,11 @@ class WebAssemblyImportSection extends WebAssemblySection {
         let tables = module.tables;
         let tags = module.tags;
         let ylen = globals.length;
+        let memPadTo = 0;
+        if (options.mempad === true) {
+            memPadTo = RELOC_PAD;
+        }
+
         for (let i = 0; i < ylen; i++) {
             let glob = globals[i];
             if (!(glob instanceof ImportedGlobal))
@@ -5047,7 +5079,6 @@ class WebAssemblyImportSection extends WebAssemblySection {
         let total = 0;
         ylen = imports.length;
         let cnt = 0;
-        let memPadTo = 4;
         for (let y = 0; y < ylen; y++) {
             let imp = imports[y];
             let len = lengthBytesUTF8(imp.module);
@@ -5108,6 +5139,7 @@ class WebAssemblyImportSection extends WebAssemblySection {
         let data = new ByteArray(buf);
         data.writeUint8(SECTION_TYPE_IMPORT);
         data.writeULEB128(total);
+        this._dylink0_hdroff = data.offset;
         data.writeULEB128(cnt);
         ylen = imports.length;
         for (let y = 0; y < ylen; y++) {
@@ -5325,6 +5357,7 @@ class WebAssemblyFunctionSection extends WebAssemblySection {
         let data = new ByteArray(buf);
         data.writeUint8(SECTION_TYPE_FUNC);
         data.writeULEB128(secsz);
+        this._dylink0_hdroff = data.offset;
         data.writeULEB128(cnt);
 
         for (let i = start; i < len; i++) {
@@ -5417,6 +5450,7 @@ class WebAssemblyTableSection extends WebAssemblySection {
         let data = new ByteArray(buf);
         data.writeUint8(SECTION_TYPE_TABLE);
         data.writeULEB128(secsz);
+        this._dylink0_hdroff = data.offset;
         data.writeULEB128(cnt);
 
         for (let i = start; i < len; i++) {
@@ -5504,11 +5538,12 @@ class WebAssemblyTagSection extends WebAssemblySection {
         secsz = totsz;
         totsz += lengthULEB128(secsz);
 
-        // actual encdong
+        // actual encoding
         let buf = new ArrayBuffer(totsz + 1);
         let data = new ByteArray(buf);
         data.writeUint8(SECTION_TYPE_TAG);
         data.writeULEB128(secsz);
+        this._dylink0_hdroff = data.offset;
         data.writeULEB128(cnt);
 
         for (let i = start; i < len; i++) {
@@ -5560,7 +5595,10 @@ class WebAssemblyMemorySection extends WebAssemblySection {
         let vector = mod.memory;
         let len = vector.length;
         let cnt = 0;
-        let memPadTo = 4;
+        let memPadTo = 0;
+        if (options.mempad === true) {
+            memPadTo = RELOC_PAD;
+        }
 
         for (let i = 0; i < len; i++) {
             let mem = vector[i];
@@ -5602,6 +5640,7 @@ class WebAssemblyMemorySection extends WebAssemblySection {
         let data = new ByteArray(buf);
         data.writeUint8(SECTION_TYPE_MEMORY);
         data.writeULEB128(secsz);
+        this._dylink0_hdroff = data.offset;
         data.writeULEB128(cnt);
 
         for (let i = 0; i < len; i++) {
@@ -5709,6 +5748,7 @@ class WebAssemblyGlobalSection extends WebAssemblySection {
         let data = new ByteArray(buf);
         data.writeUint8(SECTION_TYPE_GLOBAL);
         data.writeULEB128(secsz);
+        this._dylink0_hdroff = data.offset;
         data.writeULEB128(vector.length);
         for (let i = 0; i < len; i++) {
             let glob = vector[i];
@@ -5848,6 +5888,7 @@ class WebAssemblyExportSection extends WebAssemblySection {
         let data = new ByteArray(buf);
         data.writeUint8(SECTION_TYPE_EXPORT);
         data.writeULEB128(secsz);
+        this._dylink0_hdroff = data.offset;
         data.writeULEB128(len);
 
         for (let i = 0; i < len; i++) {
@@ -5946,6 +5987,7 @@ class WebAssemblyStartSection extends WebAssemblySection {
         let data = new ByteArray(buf);
         data.writeUint8(SECTION_TYPE_START);
         data.writeULEB128(secsz);
+        this._dylink0_hdroff = data.offset;
         data.writeULEB128(funcidx);
 
         return buf;
@@ -6034,6 +6076,7 @@ class WebAssemblyElementSection extends WebAssemblySection {
         let data = new ByteArray(buf);
         data.writeUint8(SECTION_TYPE_ELEMENT);
         data.writeULEB128(secsz);
+        this._dylink0_hdroff = data.offset;
         data.writeULEB128(ylen);
 
         for (let y = 0; y < ylen; y++) {
@@ -6197,8 +6240,12 @@ class WebAssemblyCodeSection extends WebAssemblySection {
         let sec_sz = 0;
         let buffers = [];
         let modcnt = 0;
+        let relocatable = options.relocatable === true;
         let wcb = options.write_callback;
         let has_wcb = typeof wcb == "function";
+
+        let cnt = funcvec.length - start;
+        let cntsz = lengthULEB128(cnt); // put this here to be able to do data relative offsets.
 
         for (let i = start; i < len; i++) {
             let func = funcvec[i];
@@ -6248,7 +6295,7 @@ class WebAssemblyCodeSection extends WebAssemblySection {
                 subsz += lengthULEB128(0);
             }
 
-            let opcodesz = byteCodeComputeByteLength(mod, func.opcodes, func.locals);
+            let opcodesz = byteCodeComputeByteLength(mod, func.opcodes, func.locals, false, relocatable);
             let totsz = subsz + opcodesz;
             totsz += lengthULEB128(subsz + opcodesz);
             let buf = new ArrayBuffer(totsz);
@@ -6265,7 +6312,7 @@ class WebAssemblyCodeSection extends WebAssemblySection {
                 }
             }
             let tmp = data.offset;
-            encodeByteCode(mod, func.opcodes, func.locals, data);
+            encodeByteCode(mod, func.opcodes, func.locals, data, relocatable ? (sec_sz + cntsz) : undefined);
             if (data.offset - tmp != opcodesz) {
                 console.error("[%d] generated opcodes %d !== %d (real vs. computed)", i, data.offset - tmp, opcodesz);
             }
@@ -6278,14 +6325,13 @@ class WebAssemblyCodeSection extends WebAssemblySection {
             // 4. push opcode into buffers.
         }
 
-        let cnt = funcvec.length - start;
-        let cntsz = lengthULEB128(cnt);
         let headsz = 1 + lengthULEB128(sec_sz + cntsz); // section-type + section-length;
         headsz += cntsz;
         let header = new ArrayBuffer(headsz);
         let data = new ByteArray(header);
         data.writeUint8(SECTION_TYPE_CODE);
         data.writeULEB128(sec_sz + cntsz);
+        this._dylink0_hdroff = data.offset;
         data.writeULEB128(cnt);
         buffers.unshift(header);
 
@@ -6299,7 +6345,7 @@ class WebAssemblyCodeSection extends WebAssemblySection {
         let idx = 0;
         let functions = module.functions;
         let start = 0;
-        let reloc = options.linking === true;
+        let reloc = options && options.linking === true ? true : false;
 
         // first lets find where the our first non-import appears.
         for (let i = 0; i < functions.length; i++) {
@@ -6363,7 +6409,7 @@ class WebAssemblyCodeSection extends WebAssemblySection {
     }
 }
 
-
+// FIXME: is this even used anywhere now?
 function prepareModuleEncode(mod) {
     let vector = mod.types;
     let len = vector.length;
@@ -6441,6 +6487,7 @@ class WebAssemblyDataSection extends WebAssemblySection {
 
     encode(options) {
         let mod = this.module;
+        let hdroff;
         let segments;
         if (options.dataSegments) {
             segments = options.dataSegments;
@@ -6484,6 +6531,8 @@ class WebAssemblyDataSection extends WebAssemblySection {
         let data = new ByteArray(buffer);
         data.writeUint8(SECTION_TYPE_DATA);
         data.writeULEB128(secsz);
+        hdroff = data.offset;
+        this._dylink0_hdroff = hdroff;
         data.writeULEB128(len);
         for (let i = 0; i < len; i++) {
             let seg = segments[i];
@@ -6494,9 +6543,11 @@ class WebAssemblyDataSection extends WebAssemblySection {
                 data.writeULEB128(seg.size);
                 if (seg._mutableDataBuffer) {
                     let off = seg._mutableDataOffset;
+                    seg._dylink0_loc = (data.offset - hdroff); // store encoded offset to allow this to be encoded in dylink.0 section
                     u8_memcpy(seg._mutableDataBuffer, off, seg.size, buffer, data.offset);
                     data.offset += seg.size;
                 } else {
+                    seg._dylink0_loc = (data.offset - hdroff); 
                     u8_memcpy(seg._buffer, 0, seg.size, buffer, data.offset);
                     data.offset += seg.size;
                 }
@@ -6505,9 +6556,11 @@ class WebAssemblyDataSection extends WebAssemblySection {
                 data.writeULEB128(seg.size);
                 if (seg._mutableDataBuffer) {
                     let off = seg._mutableDataOffset;
+                    seg._dylink0_loc = (data.offset - hdroff); 
                     u8_memcpy(seg._mutableDataBuffer, off, seg.size, buffer, data.offset);
                     data.offset += seg.size;
                 } else {
+                    seg._dylink0_loc = (data.offset - hdroff); 
                     u8_memcpy(seg._buffer, 0, seg.size, buffer, data.offset);
                     data.offset += seg.size;
                 }
@@ -6519,9 +6572,11 @@ class WebAssemblyDataSection extends WebAssemblySection {
                 data.writeULEB128(seg.size);
                 if (seg._mutableDataBuffer) {
                     let off = seg._mutableDataOffset;
+                    seg._dylink0_loc = (data.offset - hdroff); 
                     u8_memcpy(seg._mutableDataBuffer, off, seg.size, buffer, data.offset);
                     data.offset += seg.size;
                 } else {
+                    seg._dylink0_loc = (data.offset - hdroff); 
                     u8_memcpy(seg._buffer, 0, seg.size, buffer, data.offset);
                     data.offset += seg.size;
                 }
@@ -6531,9 +6586,10 @@ class WebAssemblyDataSection extends WebAssemblySection {
         return buffer;
     }
 
-    static decode(module, data, size) {
+    static decode(module, data, size, name, options) {
 
         let cnt = data.readULEB128();
+        let noCopy = options && options.noCopy != undefined ? options.noCopy : false;
         let segments;
         if (!module.dataSegments) {
             segments = [];
@@ -6562,7 +6618,8 @@ class WebAssemblyDataSection extends WebAssemblySection {
                 segment.inst = inst;
                 segment.offset = data.offset;
                 segment.size = datasz;
-                segment._buffer = data._u8.slice(data.offset, data.offset + datasz);
+                if (!noCopy)
+                    segment._buffer = data._u8.slice(data.offset, data.offset + datasz);
                 segments.push(segment);
                 data.offset += datasz;
             } else if (kind == 0x01) {
@@ -6574,7 +6631,8 @@ class WebAssemblyDataSection extends WebAssemblySection {
                 segment.inst = undefined;
                 segment.offset = data.offset;
                 segment.size = datasz;
-                segment._buffer = data._u8.slice(data.offset, data.offset + datasz);
+                if (!noCopy)
+                    segment._buffer = data._u8.slice(data.offset, data.offset + datasz);
                 segments.push(segment);
                 data.offset += datasz;
             } else if (kind == 0x02) {
@@ -6589,7 +6647,8 @@ class WebAssemblyDataSection extends WebAssemblySection {
                 segment.inst = inst;
                 segment.offset = data.offset;
                 segment.size = datasz;
-                segment._buffer = data._u8.slice(data.offset, data.offset + datasz);
+                if (!noCopy)
+                    segment._buffer = data._u8.slice(data.offset, data.offset + datasz);
                 segments.push(segment);
                 data.offset += datasz;
             } else {
@@ -6618,6 +6677,7 @@ class WebAssemblyDataCountSection extends WebAssemblySection {
         let data = new ByteArray(buffer);
         data.writeUint8(SECTION_TYPE_DATA_COUNT);
         data.writeULEB128(secsz);
+        this._dylink0_hdroff = data.offset;
         data.writeULEB128(dataSegments.length);
 
         return buffer;
@@ -7474,6 +7534,7 @@ const WASM_SYM_NO_STRIP = 0x80;
 const WASM_SYM_TLS = 0x100;
 const WASM_SYM_ABSOLUTE = 0x200;
 const WASM_SYM_EXTERNAL = 0x400;                // not standard.
+const WASM_SYM_EXTERNAL_DLSYM = 0x2000;         // not standard. Used internally in dylinker to indicate that symbol is external but should a table index rather than a import, converts direct calls to indirect calls and adds a relocation.
 const WASM_SYM_WEAK_EXTERNAL = 0x400;           // not standard. use external dylib symbol over internal if found,
 const WASM_SYM_INTERNAL = 0x800;                // not standard.
 const WASM_SYM_LINKTIME_CONSTRUCT = 0x1000;     // not standard.
@@ -7507,7 +7568,8 @@ class WebAssemblyCustomSectionLinker extends WebAssemblyCustomSection {
 
         let end = data.offset + size;
         let version = data.readULEB128();
-        console.log("version: %d", version);
+        if (version != 2)
+            throw new RangeError("UNSUPPORTED_VERSION");
         let subsections = [];
         while (data.offset < end) {
             let type = data.readUint8();
@@ -7534,7 +7596,10 @@ class WebAssemblyCustomSectionLinker extends WebAssemblyCustomSection {
                 for (let i = 0; i < count; i++) {
                     let priority = data.readULEB128();
                     let symbol_index = data.readULEB128();
-                    ctors.push({priority: priority, symbol_index: symbol_index});
+                    if (symbol_index >= symtable.length)
+                        throw new RangeError("symbol_index is out of range");
+                    let symbol = symtable[symbol_index];
+                    ctors.push({priority: priority, symbol: symbol});
                 }
                 //console.log("linker %d WASM_INIT_FUNCS size: %d %o", type, payload_len, ctors);
             } else if (type == 0x07) {
@@ -7766,6 +7831,7 @@ class WebAssemblyModule {
 
     constructor() {
         this._version = undefined;
+        this._explicitExported = []; // exports added trough module.appendExport
     }
 
     /**
@@ -9151,6 +9217,7 @@ class WebAssemblyModule {
             exp.name = name;
             exp.global = value;
             items.push(exp);
+            this._explicitExported.push(exp);
 
         } else if (value instanceof WasmFunction) {
 
@@ -9174,6 +9241,7 @@ class WebAssemblyModule {
             exp.name = name;
             exp.function = value;
             items.push(exp);
+            this._explicitExported.push(exp);
 
         } else if (value instanceof WasmMemory) {
 
@@ -9197,6 +9265,7 @@ class WebAssemblyModule {
             exp.name = name;
             exp.memory = value;
             items.push(exp);
+            this._explicitExported.push(exp);
 
         } else if (value instanceof ExportedTable) {
 
@@ -9210,6 +9279,12 @@ class WebAssemblyModule {
                     throw new ReferenceError("value already exported");
                 }
             }
+
+            let exp = new ExportedTable();
+            exp.name = name;
+            exp.table = value;
+            items.push(exp);
+            this._explicitExported.push(exp);
 
         } 
 
@@ -9238,7 +9313,18 @@ class WebAssemblyModule {
             // removes in reverse..
             for (let i = matched.length - 1; i >= 0; i--) {
                 let idx = matched[i];
+                matched = exported[idx];
                 exported.splice(idx, 1);
+            }
+
+            let explicit = this._explicitExported;
+            len = matched.length;
+            for (let i = 0; i < len; i++) {
+                let exp = matched[i];
+                let idx = explicit.indexOf(exp);
+                if (idx !== -1) {
+                    explicit.splice(idx, 1);
+                }
             }
 
             return matched.length;
@@ -9260,7 +9346,18 @@ class WebAssemblyModule {
             // removes in reverse..
             for (let i = matched.length - 1; i >= 0; i--) {
                 let idx = matched[i];
+                matched = exported[idx];
                 exported.splice(idx, 1);
+            }
+
+            let explicit = this._explicitExported;
+            len = matched.length;
+            for (let i = 0; i < len; i++) {
+                let exp = matched[i];
+                let idx = explicit.indexOf(exp);
+                if (idx !== -1) {
+                    explicit.splice(idx, 1);
+                }
             }
 
             return matched.length;
@@ -9282,7 +9379,18 @@ class WebAssemblyModule {
             // removes in reverse..
             for (let i = matched.length - 1; i >= 0; i--) {
                 let idx = matched[i];
+                matched = exported[idx];
                 exported.splice(idx, 1);
+            }
+
+            let explicit = this._explicitExported;
+            len = matched.length;
+            for (let i = 0; i < len; i++) {
+                let exp = matched[i];
+                let idx = explicit.indexOf(exp);
+                if (idx !== -1) {
+                    explicit.splice(idx, 1);
+                }
             }
 
             return matched.length;
@@ -9304,7 +9412,18 @@ class WebAssemblyModule {
             // removes in reverse..
             for (let i = matched.length - 1; i >= 0; i--) {
                 let idx = matched[i];
+                matched = exported[idx];
                 exported.splice(idx, 1);
+            }
+
+            let explicit = this._explicitExported;
+            len = matched.length;
+            for (let i = 0; i < len; i++) {
+                let exp = matched[i];
+                let idx = explicit.indexOf(exp);
+                if (idx !== -1) {
+                    explicit.splice(idx, 1);
+                }
             }
 
             return matched.length;
@@ -9674,11 +9793,32 @@ class WebAssemblyModule {
             }
         }
 
+        let finalizing_callbacks = [];
+        let off = 0;
+        let fcb = null;
+
+        if (!(typeof options == "object" && options !== null)) {
+            options = {};
+        }
+
+        options.add_finalizing_callback = function(cb) {
+            if (fcb)
+                throw new Error("add_callback already called!");
+            let obj = {};
+            obj.start = -1;
+            obj.end = -1;
+            obj.buf = null;
+            obj.fn = cb;
+            finalizing_callbacks.push(obj);
+            fcb = obj;
+        }
+
         let header = new Uint8Array(8);
         buffers.push(header.buffer);
         header = new DataView(header.buffer);
         header.setUint32(0, 0x6D736100, true);
         header.setUint32(4, this._version, true);
+        off = 8;
 
         prepareModuleEncode(this);
 
@@ -9695,18 +9835,58 @@ class WebAssemblyModule {
                     buf[1] = 1;
                     buf[2] = 0;
                     buffers.push(buf.buffer);
+                    off += 3;
                 } else {
                     continue;
                 }
             } else if (section instanceof WebAssemblySection) {
-                let sub = section.encode({});
+                let sec_cb, sub = section.encode(options);
+                section._byteOffset = off;
+                if (fcb) {
+                    sec_cb = fcb;
+                    fcb = null;
+                    sec_cb.start = off;
+                }
                 if (Array.isArray(sub)) {
-                    let xlen = sub.length;
-                    for (let x = 0; x < xlen; x++) {
-                        buffers.push(sub[x]);
+                    
+                    if (sec_cb) {
+                        let buf, boff = 0;
+                        let blen = 0;
+                        let xlen = sub.length;
+                        for (let x = 0; x < xlen; x++) {
+                            blen += sub[x].byteLength;
+                        }
+                        buf = new Uint8Array(blen);
+                        for (let x = 0; x < xlen; x++) {
+                            let sbuf = sub[x];
+                            buf.set(sbuf, boff);
+                            boff += sbuf.byteLength;
+                        }
+                        section._byteLength = blen;
+                        off += blen;
+                        sec_cb.buf = buf;
+                        sec_cb.end = off;
+                        buffers.push(buf);
+                    } else {
+                        let blen = 0;
+                        let xlen = sub.length;
+                        for (let x = 0; x < xlen; x++) {
+                            let buf = sub[x];
+                            buffers.push(buf);
+                            blen += buf.byteLength;
+                        }
+                        section._byteLength = blen;
+                        off += blen;
                     }
+                    
                 } else {
                     buffers.push(sub);
+                    off += sub.byteLength;
+                    section._byteLength = sub.byteLength;
+                    if (sec_cb) {
+                        sec_cb.buf = sub;
+                        sec_cb.end = off;
+                    }
                 }
             } else {
                 console.log("section %o not handled!", section);
@@ -9716,6 +9896,14 @@ class WebAssemblyModule {
             }
         }
 
+        if (finalizing_callbacks.length > 0) {
+            let len = finalizing_callbacks.length;
+            for (let i = 0;i < len;i++) {
+                let obj = finalizing_callbacks[i];
+                let fn = obj.fn;
+                fn(this, obj.buf);
+            }
+        }
 
         return buffers;
     }
@@ -9777,7 +9965,7 @@ function parseWebAssemblyBinary(buf, options) {
             chunk.dataOffset = data.offset;
             chunk.size = chunk.size - (data.offset - tmp);
             data.offset = tmp;
-        } else if (type > 0x0B) {
+        } else if (type > 0x0C) {
             console.warn("section type: %d (%s) not handled", type, sectionnames[type]);
         }
 
@@ -9984,6 +10172,21 @@ function parseWebAssemblyBinary(buf, options) {
                         sec.name = name;
                         chunks[chunk.index] = sec;
                         mod.features = sec.data;
+                        chunk.data = sec.data;
+                        sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                        break;
+                    // custom netbsd
+                    case 'netbsd.dylink.0':
+                        sec = WebAssemblyCustomSectionNetBSDDylinkV2.decode(mod, data, size, name);
+                        chunks[chunk.index] = sec;
+                        mod._dl_data = sec.data;
+                        chunk.data = sec.data;
+                        sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                        break;
+                    case 'netbsd.exec-hdr':
+                        sec = WebAssemblyCustomSectionNetBSDExecHeader.decode(mod, data, size, name);
+                        chunks[chunk.index] = sec;
+                        mod._exechdr = sec.data;
                         chunk.data = sec.data;
                         sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                         break;

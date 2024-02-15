@@ -1,4 +1,5 @@
 #!/bin/env -S node --experimental-vm-modules
+//#!/bin/node 
 //
 // 
 // a node.js variant with command line interface of the ui based workflow optimization.
@@ -24,13 +25,14 @@ node script-shell.js --input-file=../test/abc.wasm --workflow-name=nb10-usr-bin 
  */
 
 const _workflowNameMap = {
-	'nb10-usr-bin': {script: "../dist/ext-netbsd.js", id: "netbsd_10.user-binary+emul-fork"},
+	'nb10-usrbin': {script: "../dist/ext-netbsd.js", id: "netbsd_10.user-binary+emul-fork"},
+	'nb10-dynld': {script: "../dist/ext-netbsd.js", id: "netbsd_10.dynld-binary"},
 	//'nb10-usr-bin': {script: "../dist/flows/netbsd-usrbin-flow.js"},
 	'nb10-kmain': {script: "../dist/ext-netbsd.js", id: "netbsd_10.kern-main-binary"}
 }
 
 function main() {
-	console.log(process.argv);
+	//console.log(process.argv);
 
 	let _cwd = process.cwd();
 	let params = {};
@@ -38,8 +40,10 @@ function main() {
 	let workflowPath;
 	let defaultInputFile;
 	let defaultOutputFile;
+	let inputcnt = 0;
 	let namedInputFile = {};
 	let namedOutputFile = {};
+	let moduleName;
 	let args = process.argv;
 	let argc = args.length;
 	for (let i = 2; i < argc; i++) {
@@ -51,6 +55,7 @@ function main() {
 				filepath = path.join(_cwd, filepath);
 			}
 			defaultInputFile = createFileSystemHandle(filepath);
+			inputcnt++;
 		} else if (arg.startsWith("--input-")) {
 			let org, end = arg.indexOf('=', 8);
 			if (end == -1) {
@@ -65,9 +70,16 @@ function main() {
 			file = createFileSystemHandle(filepath);
 			namedInputFile[name] = file;
 			params[name] = file;
+			inputcnt++;
 		} else if (arg.startsWith("--workflow-name=")) {
 			let value = arg.substring(16);
 			workflowId = value;
+		} else if (arg.startsWith("--module-name=")) {
+			let value = arg.substring(14);
+			if (value.startsWith("\"") && value.endsWith("\"")) {
+				value = value.substring(1, value.length - 1);
+			}
+			moduleName = value;
 		} else if (arg.startsWith("--workflow-file=")) {
 			let value = arg.substring(16);
 			workflowPath = value;
@@ -116,6 +128,14 @@ function main() {
 		}
 	}
 
+	if (inputcnt == 0) {
+		console.error("no input file");
+		process.exit(1);
+	} else {
+		console.log(params);
+	}
+
+	/*
 	console.log("__dirname: ", __dirname);
 	console.log("process.cwd: ", process.cwd());
 	console.log("workflow-id: %s", workflowId);
@@ -125,6 +145,7 @@ function main() {
 	console.log("named-inputs: %o", namedInputFile);
 	console.log("named-outputs: %o", namedOutputFile);
 	console.log("params: %o", params);
+	*/
 
 	if (workflowPath) {
 		console.error("no such workflow = %s", workflowPath);
@@ -146,6 +167,7 @@ function main() {
 			defaultOutputFile: defaultOutputFile,
 			namedInputFile: namedInputFile,
 			namedOutputFile: namedOutputFile,
+			moduleName: moduleName,
 			parameters: params
 		}).then(function(mod) {
 			console.log(mod);
@@ -781,6 +803,9 @@ async function loadWorkflowScript_mjs(scriptPath, flowId, params) {
 	let _output = params.defaultOutputFile;
 	let wasmModule = ctx.parseWebAssemblyBinary(srcbuf);
 	wasmModule._buffer = srcbuf;
+	if (typeof params.moduleName == "string") {
+		wasmModule[ctxobj.__nsym] = params.moduleName;
+	}
 	let _vars = Object.assign({}, params.parameters);
 	let workflowCtx = {
 		id: flowId,

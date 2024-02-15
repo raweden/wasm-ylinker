@@ -1,6 +1,6 @@
 
 const fs = require("fs");
-const GnuStep2Linker = require("./gs2linker.js");
+const ByteCodeLinker = require("./bclinker.js");
 
 const ar_hdrbuf = new Uint8Array(60);
 
@@ -140,7 +140,7 @@ class ARLinker {
 
                 bclinker = this._bclinker;
                 if (!bclinker) {
-                    bclinker = new GnuStep2Linker();
+                    bclinker = new ByteCodeLinker();
                     this._bclinker = bclinker;
                 }
 
@@ -170,7 +170,7 @@ class ARLinker {
 
                 bclinker = this._bclinker;
                 if (!bclinker) {
-                    bclinker = new GnuStep2Linker();
+                    bclinker = new ByteCodeLinker();
                     this._bclinker = bclinker;
                 }
 
@@ -200,7 +200,7 @@ class ARLinker {
 
                 bclinker = this._bclinker;
                 if (!bclinker) {
-                    bclinker = new GnuStep2Linker();
+                    bclinker = new ByteCodeLinker();
                     this._bclinker = bclinker;
                 }
 
@@ -235,7 +235,7 @@ class ARLinker {
 
                 bclinker = this._bclinker;
                 if (!bclinker) {
-                    bclinker = new GnuStep2Linker();
+                    bclinker = new ByteCodeLinker();
                     this._bclinker = bclinker;
                 }
 
