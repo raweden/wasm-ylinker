@@ -531,15 +531,109 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 
 	// other builtins
 	
-	/*{
+	{
 		module: MODULE_BUILT_IN,
 		name: "alloca",
 		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
-		replace: function(inst, index, arr, scope, calle) {
-			arr[index] = {opcode: 0x99};
-			return true;
+		replace: function(inst, index, opcodes, pfunc, cfunc, pmodule) {
+			let inst_enter, inst_exit, sp, glob, globs = pmodule.globals;
+			let alloca = cfunc;
+			let local_sp_enter, local_alloca_sz, local_alloca_ret;
+			let enter_isset = false;
+			let stack_use = false;
+			let len;
+
+			inst_enter = inst;
+			local_sp_enter = new WasmLocal(WA_TYPE_I32);
+			local_alloca_sz = new WasmLocal(WA_TYPE_I32);
+			local_alloca_ret = new WasmLocal(WA_TYPE_I32);
+			pfunc.locals.push(local_sp_enter);
+			pfunc.locals.push(local_alloca_sz);
+			pfunc.locals.push(local_alloca_ret);
+			//local_sp_enter[__nsym] = "$sp_enter";
+			//local_alloca_sz[__nsym] = "$alloca_sz";
+			//local_alloca_ret[__nsym] = "$alloca_ret";
+
+			// finding env.__stack_pointer
+			len = globs.length;
+			for (let i = 0; i < len; i++) {
+				let glob = globs[i];
+				if (!(glob instanceof ImportedGlobal))
+					break;
+				if (glob.module == "env" && glob.name == "__stack_pointer") {
+					sp = glob;
+					break;
+				}
+			}
+
+			// don't try to optimize the length value
+			for (let i = 0; i < opcodes.length; i++) {
+				let inst = opcodes[i];
+				let op = inst.opcode;
+				if (op == 0x24) { // global.set
+					
+					// local.get
+					// i32.const
+					// i32.add
+					// global.set $sp
+					if (inst.global == sp && opcodes[i - 1].opcode == 0x6A && opcodes[i - 2].opcode == 0x41 && opcodes[i - 3].opcode == 0x20) {
+						let i1, i2;
+						i1 = {opcode: 0x20, local: local_sp_enter};		// local.get
+						i2 = inst;										// global.set
+						opcodes.splice(i - 3, 4, i1, i2);
+						i = opcodes.indexOf(i2);
+						stack_use = true;
+					}
+
+				} else if (op == 0x23) { // global.get
+
+					// global.get
+					// i32.const
+					// i32.sub
+					if (enter_isset == false && inst.global == sp && opcodes[i + 1].opcode == 0x41 && opcodes[i + 2].opcode == 0x6B) {
+						let i1 = {opcode: 0x22, local: local_sp_enter};	// local.tee
+						enter_isset = true;
+						stack_use = true;
+						opcodes.splice(i + 1, 0, i1);
+						i = opcodes.indexOf(i1);
+					}
+
+				} else if (op == 0x10) {
+					if (inst.func == alloca) {
+						let i1, i2, i3, i4, i5, i6, i7;
+
+						if (!stack_use) {
+							i1 = {opcode: 0x23, global: sp};			// global.get
+							i2 = {opcode: 0x21, local: local_sp_enter};	// local.set
+							opcodes.unshift(i1, i2);
+							i = opcodes.indexOf(inst);
+						}
+
+						i1 = {opcode: 0x21, local: local_alloca_sz};	// local.set
+						i2 = {opcode: 0x23, global: sp};				// global.get
+						i3 = {opcode: 0x20, local: local_alloca_sz};	// local.get
+						i4 = {opcode: 0x6B};							// i32.sub
+						i5 = {opcode: 0x22, local: local_alloca_ret};	// local.tee
+						i6 = {opcode: 0x24, global: sp};				// global.set
+						i7 = {opcode: 0x20, local: local_alloca_ret};	// local.get
+						opcodes.splice(i, 1, i1, i2, i3, i4, i5, i6, i7);
+						i = opcodes.indexOf(i7);
+						if (!inst_exit && inst == inst_enter) {
+							inst_exit = i7;
+						}
+						
+						// decrement refcount
+						alloca._usage--;
+					}
+				}
+			}
+
+			if (!inst_exit)
+				throw new ReferenceError("inst_exit not set");
+
+			return inst_exit; // tell the replace interatior to continue from at the next instuction after the original location.
 		}
-	}, */{
+	}, {
 		module: MODULE_BUILT_IN,
 		name: "memory_copy",
 		type: WasmType.create(null, [WA_TYPE_I32]),
