@@ -1,15 +1,37 @@
 
+import "../dist/wasm-info.js";
 
 const REPLACE_CALL_SKIP_FUNC = Symbol("@skip-func");
 const MODULE_BUILT_IN = "__builtin";
 
+/**
+ * 
+ * @callback InstReplaceCallback
+ * @param {WasmInstruction} inst
+ * @param {integer} index
+ * @param {WasmInstruction[]} instructions
+ * @param {WasmFunction} insideFunc
+ * @param {WasmFunction|ImportedFunction} calledFunc
+ * @param {WebAssemblyModule} mod
+ * @returns {boolean|WasmInstruction}
+ * 
+ * @typedef {ylinker.ReplaceCallInstParams}
+ * @type {Object}
+ * @property {string} module
+ * @property {string} name
+ * @property {WasmType} type
+ * @property {InstReplaceCallback} replace
+ */
+
+/** @type {ylinker.ReplaceCallInstParams[]} */
 const builtin_op_replace_map = [ // every function is ImportedFunction and in module __builtin
 	// 
 	{ 	// atomic operations.
 		module: MODULE_BUILT_IN,
 		name: "memory_atomic_notify",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
-		replace: function(inst, index, arr, scope, calle) {
+		/** @type {InstReplaceCallback} */
+		replace: function(inst, index, arr, scope, calle, mod) {
 			arr[index] = new AtomicInst(0xFE00, 2, 0);
 			calle._usage--;
 			return true;
@@ -18,6 +40,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "memory_atomic_wait32",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE01, 2, 0);
 			calle._usage--;
@@ -27,6 +50,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "atomic_fence",
 		type: WasmType.create(null, null),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0xFE03, memidx: 0};
 			calle._usage--;
@@ -36,6 +60,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_load8_u",
 		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE12, 0, 0);
 			calle._usage--;
@@ -45,6 +70,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_store8",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], null),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE19, 0, 0);
 			calle._usage--;
@@ -54,6 +80,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw8_add_u",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE20, 0, 0);
 			calle._usage--;
@@ -63,6 +90,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw8_sub_u",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE27, 0, 0);
 			calle._usage--;
@@ -72,6 +100,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw8_and_u",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE2E, 0, 0);
 			calle._usage--;
@@ -81,6 +110,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw8_or_u",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE35, 0, 0);
 			calle._usage--;
@@ -90,6 +120,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw8_xor_u",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE3C, 0, 0);
 			calle._usage--;
@@ -99,6 +130,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw8_xchg_u",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE43, 0, 0);
 			calle._usage--;
@@ -108,6 +140,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw8_cmpxchg_u",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE4A, 0, 0);
 			calle._usage--;
@@ -117,6 +150,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_load16_u",
 		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE13, 1, 0);
 			calle._usage--;
@@ -126,6 +160,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_store16",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], null),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE1A, 1, 0);
 			calle._usage--;
@@ -135,6 +170,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw16_add_u",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE21, 1, 0);
 			calle._usage--;
@@ -144,6 +180,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw16_sub_u",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE28, 1, 0);
 			calle._usage--;
@@ -153,6 +190,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw16_and_u",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE2F, 1, 0);
 			calle._usage--;
@@ -162,6 +200,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw16_or_u",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE36, 1, 0);
 			calle._usage--;
@@ -171,6 +210,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw16_xor_u",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE3D, 1, 0);
 			calle._usage--;
@@ -180,6 +220,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw16_xchg_u",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE44, 1, 0);
 			calle._usage--;
@@ -189,6 +230,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw16_cmpxchg_u",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE4B, 0, 0);
 			calle._usage--;
@@ -198,6 +240,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_load",
 		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE10, 1, 0);
 			calle._usage--;
@@ -207,6 +250,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_store",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], null),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE17, 2, 0);
 			calle._usage--;
@@ -216,6 +260,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw_add",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE1E, 2, 0);
 			calle._usage--;
@@ -225,6 +270,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw_sub",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE25, 2, 0);
 			calle._usage--;
@@ -234,6 +280,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw_and",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE2C, 2, 0);
 			calle._usage--;
@@ -243,6 +290,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw_or",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE33, 2, 0);
 			calle._usage--;
@@ -252,6 +300,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw_xor",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE3A, 2, 0);
 			calle._usage--;
@@ -261,6 +310,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw_xchg",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE41, 2, 0);
 			calle._usage--;
@@ -270,6 +320,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i32_atomic_rmw_cmpxchg",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE48, 2, 0);
 			calle._usage--;
@@ -279,6 +330,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "memory_atomic_wait64",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64, WA_TYPE_I64], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE02, 3, 0);
 			calle._usage--;
@@ -288,6 +340,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i64_atomic_load",
 		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I64]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE11, 3, 0);
 			calle._usage--;
@@ -297,6 +350,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i64_atomic_store",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], null),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE18, 3, 0);
 			calle._usage--;
@@ -306,6 +360,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i64_atomic_rmw_add",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE1F, 3, 0);
 			return true;
@@ -314,6 +369,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i64_atomic_rmw_sub",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE26, 3, 0);
 			calle._usage--;
@@ -323,6 +379,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i64_atomic_rmw_and",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE2D, 3, 0);
 			calle._usage--;
@@ -332,6 +389,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i64_atomic_rmw_or",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE34, 3, 0);
 			calle._usage--;
@@ -341,6 +399,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i64_atomic_rmw_xor",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE3B, 3, 0);
 			calle._usage--;
@@ -350,6 +409,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i64_atomic_rmw_xchg",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64], [WA_TYPE_I64]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE42, 3, 0);
 			calle._usage--;
@@ -359,6 +419,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "i64_atomic_rmw_cmpxchg",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64, WA_TYPE_I64], [WA_TYPE_I64]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE49, 3, 0);
 			calle._usage--;
@@ -370,6 +431,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "f64_ceil",
 		type: WasmType.create([WA_TYPE_F64], [WA_TYPE_F64]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0x9b};
 			calle._usage--;
@@ -379,6 +441,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "f64_floor",
 		type: WasmType.create([WA_TYPE_F64], [WA_TYPE_F64]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0x9c};
 			calle._usage--;
@@ -388,6 +451,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "f64_abs",
 		type: WasmType.create([WA_TYPE_F64], [WA_TYPE_F64]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0x99};
 			calle._usage--;
@@ -397,6 +461,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "f64_nearest",
 		type: WasmType.create([WA_TYPE_F64], [WA_TYPE_F64]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0x9e};
 			calle._usage--;
@@ -406,6 +471,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "f64_trunc",
 		type: WasmType.create([WA_TYPE_F64], [WA_TYPE_F64]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0x9d};
 			calle._usage--;
@@ -418,6 +484,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		// call instruction to:
 		// f64.const value=Infinity
 		// f64.eq
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			let i1, i2;
 			i1 = {opcode: 0x44, value: Infinity};	// f64.const
@@ -433,6 +500,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		// call instruction to:
 		// f64.const value=NaN
 		// f64.eq
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			let i1, i2;
 			i1 = {opcode: 0x44, value: NaN};	// f64.const
@@ -445,6 +513,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "f64_copysign",
 		type: WasmType.create([WA_TYPE_F64, WA_TYPE_F64], [WA_TYPE_F64]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0xA6};
 			calle._usage--;
@@ -456,6 +525,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "f32_ceil",
 		type: WasmType.create([WA_TYPE_F32], [WA_TYPE_F32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0x8d};
 			calle._usage--;
@@ -465,6 +535,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "f32_floor",
 		type: WasmType.create([WA_TYPE_F32], [WA_TYPE_F32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0x8e};
 			calle._usage--;
@@ -474,6 +545,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "f32_nearest",
 		type: WasmType.create([WA_TYPE_F32], [WA_TYPE_F32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0x90};
 			calle._usage--;
@@ -483,6 +555,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "f32_abs",
 		type: WasmType.create([WA_TYPE_F32], [WA_TYPE_F32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0x8B};
 			calle._usage--;
@@ -495,6 +568,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		// call instruction to:
 		// f32.const value=Infinity
 		// f32.eq
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			let i1, i2;
 			i1 = {opcode: 0x43, value: Infinity};	// f32.const
@@ -510,6 +584,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		// call instruction to:
 		// f32.const value=NaN
 		// f32.eq
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			let i1, i2;
 			i1 = {opcode: 0x43, value: NaN};	// f32.const
@@ -522,6 +597,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "f32_copysign",
 		type: WasmType.create([WA_TYPE_F32, WA_TYPE_F32], [WA_TYPE_F32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0x98};
 			calle._usage--;
@@ -535,6 +611,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "alloca",
 		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, opcodes, pfunc, cfunc, pmodule) {
 			let inst_enter, inst_exit, sp, glob, globs = pmodule.globals;
 			let alloca = cfunc;
@@ -637,6 +714,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "memory_copy",
 		type: WasmType.create(null, [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0xfc0a, memidx1: 0, memidx2: 0};
 			calle._usage--;
@@ -646,6 +724,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "memory_size",
 		type: WasmType.create(null, [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0x3f, memidx: 0};
 			calle._usage--;
@@ -655,6 +734,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "memory_grow",
 		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0x40, memidx: 0};
 			calle._usage--;
@@ -664,12 +744,51 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		module: MODULE_BUILT_IN,
 		name: "memory_fill",
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], null),
+		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = {opcode: 0xfc0b, memidx: 0};
 			calle._usage--;
 			return true;
 		}
-	}
+	}, {
+		module: MODULE_BUILT_IN,
+		name: "table_size",
+		type: WasmType.create(null, [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
+		replace: function(inst, index, arr, scope, calle, mod) {
+			arr[index] = {opcode: 0xfc10, table: mod.tables[0]};
+			calle._usage--;
+			return true;
+		}
+	}, {
+		module: MODULE_BUILT_IN,
+		name: "table_grow",
+		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
+		replace: function(inst, index, arr, scope, calle, mod) {
+			let tmp = arr[index - 1];		 // arg0
+			arr[index - 1] = {opcode: 0xd0}; // ref.null
+			let i1 = tmp;	
+			let i2 = {opcode: 0xfc0f, table: mod.tables[0]};
+			arr.splice(index, 1, i1, i2);
+			calle._usage--;
+			return i2;
+		}
+	},  {
+		module: MODULE_BUILT_IN,
+		name: "table_zerofill",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
+		/** @type {InstReplaceCallback} */
+		replace: function(inst, index, arr, scope, calle, mod) {
+			let tmp = arr[index - 1];			// arg1
+			arr[index - 1] = {opcode: 0xd0}; 	// ref.null
+			let i1 = tmp;						// now arg2
+			let i2 = {opcode: 0xfc0f, table: mod.tables[0]};
+			arr.splice(index, 1, i1, i2);
+			calle._usage--;
+			return i2;
+		}
+	}, 
 
 ];
 
@@ -690,7 +809,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
  * 
  * @param  {Object} ctx         
  * @param  {WebAssemblyModule} mod          
- * @param  {Array} functions A optional selection of functions in which to replace the matching call-sites. If not specified the replace happens on all function in the specified module.
+ * @param  {Array.<WasmFunction|ImportedFunction>} functions A optional selection of functions in which to replace the matching call-sites. If not specified the replace happens on all function in the specified module.
  * @param  {Array} inst_replace A array of objects in the format described above.
  * @return {void}              
  */
@@ -698,12 +817,15 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 
 	let opsopt = [];
 	
+	/** @type {ReplaceCallInstParams[]} */
 	let impfnarr = [];
 	let namemap = new Map();
+	/** @type {Map.<WasmFunction|ImportedFunction, ReplaceCallInstParams>} */
 	let funcmap = new Map();
 	let names = [];
 	let ylen = inst_replace.length;
 	for (let y = 0; y < ylen; y++) {
+		/** @type {ReplaceCallInstParams} */
 		let handler = inst_replace[y];
 		let name = handler.name;
 		if (typeof name == "string") {
@@ -797,6 +919,7 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 		opcodes = func.opcodes;
 		// NOTE: don't try to optimize the opcodes.length, handlers might alter instructions around them.
 		for (let x = 0; x < opcodes.length; x++) {
+			/** @type {WasmInstruction} */
 			let op = opcodes[x];
 			if (op.opcode == 0x10) {
 				if (funcmap.has(op.func)) {

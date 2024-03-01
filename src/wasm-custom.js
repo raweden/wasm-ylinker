@@ -55,6 +55,13 @@ class WebAssemblyCustomSectionNetBSDExecHeader extends WebAssemblyCustomSection 
         this._data = undefined;
     }
 
+	/**
+	 * 
+	 * @param {WebAssemblyModule} module 
+	 * @param {ByteArray} data 
+	 * @param {integer} size 
+	 * @returns {WebAssemblyCustomSectionNetBSDExecHeader}
+	 */
 	static decode(module, data, size) {
 
 		let vers;
@@ -119,6 +126,11 @@ class WebAssemblyCustomSectionNetBSDExecHeader extends WebAssemblyCustomSection 
 		return sec;
     }
 
+	/**
+	 * 
+	 * @param {object} options 
+	 * @returns {Uint8Array}
+	 */
     encode(options) {
 
 		// For now we simply use JSON, as the ABI for this are likley to change during development.
@@ -329,7 +341,8 @@ const _RTLD_SEGMENT_ZERO_FILL = 1 << 3;
  * 
  * @todo Consider to add fields like elf into sub-section #1 (support: search-path, )
  * @todo Consider to make NBDL_SUBSEC_MODULES fixed ontop header, and to implement a jump offset table at top.
- * @todo try to reference the data-segment of dylink.0 explicity, this might solve the issue plus we cannot use the native anyways when .bss is not written,
+ * @todo try to bundle the binary without actully exporting the .bss data-segment, this implementation should allow for it.
+ * @todo add fast-track information about memory(s) (section-type, location relative to section, reloc-flag)
  */
 class WebAssemblyCustomSectionNetBSDDylinkV2 extends WebAssemblyCustomSection {
 
@@ -1544,7 +1557,7 @@ function validateWasmModule(wasmModule) {
  * 
  * Upon invalid entry found this function throws.
  * 
- * @param {Array<WasmDataSegment>} dataSegments
+ * @param {Array.<WasmDataSegment>} dataSegments
  * @returns {void}
  */
 function validateWasmModuleDataSegments(dataSegments) {

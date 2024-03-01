@@ -6,7 +6,9 @@
 // https://webassembly.github.io/spec/core/appendix/index-instructions.html
 // https://github.com/WebAssembly/tool-conventions/issues/59
 
-
+/**
+ * Used for setting names on WebAssembly object that is provided to the VM by the custom name section.
+ */
 const __nsym = Symbol("@custom-name");
 const sectionnames = {
     '0': "custom",
@@ -41,6 +43,10 @@ const SECTION_TYPE_DATA_COUNT = 0x0C;
 const SECTION_TYPE_TAG = 0x0D;
 const SECTION_TYPE_CUSTOM = 0x00;
 
+/**
+ * @param {integer} type
+ * @return {string}
+ */
 function type_name(type) {
     switch(type) {
         case 0x7F:
@@ -65,6 +71,14 @@ function type_name(type) {
     }
 }
 
+/**
+ * 
+ * @param {Uint8Array} src 
+ * @param {integer} sidx 
+ * @param {integer} slen 
+ * @param {Uint8Array} dst 
+ * @param {integer} didx 
+ */
 function u8_memcpy(src, sidx, slen, dst, didx) {
     // TODO: remove this assert at later time. (should be a debug)
     if (!(src instanceof Uint8Array) && (dst instanceof Uint8Array)) {
@@ -87,6 +101,13 @@ function u8_memcpy(src, sidx, slen, dst, didx) {
 // from emscripten.
 let UTF8Decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf8') : undefined;
 
+/**
+ * 
+ * @param {Uint8Array} heap 
+ * @param {integer} idx 
+ * @param {integer} maxBytesToRead 
+ * @returns {string}
+ */
 function UTF8ArrayToString(heap, idx, maxBytesToRead) {
     var endIdx = idx + maxBytesToRead;
     var endPtr = idx;
@@ -128,6 +149,13 @@ function UTF8ArrayToString(heap, idx, maxBytesToRead) {
     return str;
 }
 
+/**
+ * 
+ * @param {Uint8Array} buf 
+ * @param {integer} off 
+ * @param {integer} maxBytesToRead 
+ * @returns {string}
+ */
 function ASCIIArrayToString(buf, off, maxBytesToRead) {
     let str = "";
     let end = off + maxBytesToRead;
@@ -139,6 +167,12 @@ function ASCIIArrayToString(buf, off, maxBytesToRead) {
     return str;
 }
 
+/**
+ * 
+ * @param {Uint8Array} buf 
+ * @param {integer} off 
+ * @returns 
+ */
 function ASCIICStringToString(buf, off) {
     let str = "";
     while(true) {
@@ -155,17 +189,31 @@ function ASCIICStringToString(buf, off) {
 
 class WebAssemblySection {
 
+    /**
+     * 
+     * @param {integer} type 
+     * @param {WebAssemblyModule} module 
+     */
     constructor(type, module) {
         this.type = type;
         this.module = module;
         this._cache = undefined;
     }
 
+    /**
+     * Do not use the instance method, Declare a static decode on class level instead.
+     * @param {Uint8Array} data 
+     */
     decode(data) {
         throw new Error("subclasses of this class must override this method");
     }
 
-    encode(data) {
+    /**
+     * 
+     * @param {Object} options
+     * @returns {Uint8Array|Uint8Array[]} 
+     */
+    encode(options) {
         throw new Error("subclasses of this class must override this method");
     }
 
@@ -180,6 +228,11 @@ class WebAssemblySection {
 
 class WebAssemblyCustomSection extends WebAssemblySection {
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {string} name 
+     */
     constructor(module, name) {
         super(SECTION_TYPE_CUSTOM, module);
         this.name = name;
@@ -190,7 +243,12 @@ function inst_name(opcode) {
 
 }
 
-
+/**
+ * Returns the instruction name given the two bytes that of it, not all instruction use two bytes.
+ * @param {integer} opt1 
+ * @param {integer} opt2 
+ * @returns {string}
+ */
 function instname(opt1, opt2) {
 
     switch(opt1) {
@@ -543,6 +601,41 @@ function instname(opt1, opt2) {
     }
 }
 
+/**
+ * This defintion describes all the possible properties that could be present on a instruction.
+ * @typedef WasmInstruction
+ * @type {Object}
+ * @property {integer} opcode Present on every instruction.
+ * @property {integer|number} value Present `i32.const`, `i64.const`, `f32.const`, `f64.const` 
+ * @property {integer} offset Present on all *.load and *.store instruction
+ * @property {integer} align Present on all *.load and *.store instruction
+ * @property {integer} _loc
+ * @property {integer} _roff Present on certain instruction when relocation is enabled.
+ * @property {WasmLocal} local Present on local.tee local.get local.set
+ * @property {WasmGlobal|ImportedGlobal} global Present on global.set global.get
+ * @property {WasmType} type Present on `block`, `loop`, `if`, `try`, `indirect_call`, 
+ * @property {WasmFunction|ImportedFunction} func Present on `call` and `ref.func`
+ * @property {WasmTable|ImportedTable} table Present on `indirect_call`, `table.get`, `table.set`, `table.grow`, `table.size`, `table.fill`
+ * @property {WasmTag|ImportedTag} tag Present on `catch`, `throw`
+ * @property {integer} relative_depth Present on `delegate`, `rethrow`
+ * @property {integer} labelidx Present on `br`, `br_if`, 
+ * @property {integer} default_br Present on `br_table`
+ * @property {integer} memidx Present on memory.size, memory.grow, memory.fill, atomic.fence (Will be renamed and type will change)
+ * @property {integer} reftype Present on `ref.null`
+ * @property {WasmDataSegment} dataSegment Present on memory.init, data.drop
+ * @property {integer} memidx1 Present on `memory.copy` (Will be renamed and type will change)
+ * @property {integer} memidx2 Present on `memory.copy` (Will be renamed and type will change)
+ * @property {WasmTable|ImportedTable} table1 Present on `memory.copy`
+ * @property {WasmTable|ImportedTable} table2 Present on `memory.copy`
+ */
+
+/**
+ * @typedef InstructionRange
+ * @type {Object}
+ * @property {WasmInstruction} start
+ * @property {WasmInstruction} end
+ */
+
 class InstList {
 
     constructor(opcode) {
@@ -550,6 +643,9 @@ class InstList {
     }
 };
 
+/**
+ * @extends WasmInstruction
+ */
 class Inst {
 
     constructor(opcode) {
@@ -648,7 +744,9 @@ class AtomicInst extends Inst {
 
     constructor(opcode, align, offset) {
         super(opcode);
+        /** @type {integer} */
         this.offset = offset;
+        /** @type {integer} */
         this.align = align;
     }
 }
@@ -681,7 +779,9 @@ class IndirectCallInst extends Inst {
 
     constructor(opcode, table, type) {
         super(opcode);
+        /** @type {WasmTable|ImportedTable} */
         this.table = table;
+        /** @type {WasmType} */
         this.type = type;
     }
 }
@@ -738,6 +838,8 @@ class TryInst extends Inst {
 
     constructor(opcode) {
         super(opcode);
+        /** @type {WasmType} */
+        this.type = undefined;
     }
 }
 
@@ -745,6 +847,8 @@ class CatchInst extends Inst {
 
     constructor(opcode) {
         super(opcode);
+        /** @type {WasmTag|ImportedTag} */
+        this.tag = undefined;
     }
 }
 
@@ -759,6 +863,8 @@ class DelegateInst extends Inst {
 
     constructor(opcode) {
         super(opcode);
+        /** @type {integer} */
+        this.relative_depth = undefined;
     }
 }
 
@@ -766,6 +872,8 @@ class ThrowInst extends Inst {
 
     constructor(opcode) {
         super(opcode);
+        /** @type {WasmTag|ImportedTag} */
+        this.tag = undefined;
     }
 }
 
@@ -773,10 +881,19 @@ class ReThrowInst extends Inst {
 
     constructor(opcode) {
         super(opcode);
+        /** @type {integer} */
+        this.relative_depth = undefined;
     }
 }
+
 /**
- * Returns the index range of opcodes that make up the given pull-index.
+ * Returns the index range of opcodes that make up the given pull-index (indicating the "argument" position for a instruction or function call ).
+ * 
+ * @param {WasmFunction} fn The function scope in which the index carculation should be made.
+ * @param {*} instructions  
+ * @param {integer} fromIndex
+ * @param {*} pullIndex
+ * @returns {InstructionRange}
  */
 function rangeAtPullIndex(fn, instructions, fromIndex, pullIndex) {
     let pullcnt = pullIndex;
@@ -983,10 +1100,26 @@ function InstToArray(opcodes) {
     }
 }
 
+/**
+ * Determines whether the given WebAssembly value type (the binary representation for i32, i64, f32, f64 etc.) is a valid type value.
+ * @param {integer} type The wasm value type integer provided.
+ * @returns {boolean}
+ */
 function isValidValueType(type) {
     return type == 0x7F || type == 0x7E || type == 0x7D || type == 0x7C || type == 0x7B  || type == 0x70 || type == 0x6F;
 }
 
+/**
+ * Runs trough every instruction to compute the number of bytes needed to encode it, it also validates that a reference to
+ * objectified value exists within the corresponding structure in module.
+ * 
+ * @param {WebAssemblyModule} mod 
+ * @param {WasmInstruction[]} opcodes 
+ * @param {WasmLocal[]} locals 
+ * @param {boolean} genloc A boolean that determines if the offset of every instruction should be noted on the instruction itself, this is set to the `_loc` property.
+ * @param {boolean} relocatable A boolean value that determines whether certain instruction should be encoded as relocatable (adding extra padding to the leb128 so that the value could be changed.)
+ * @returns {integer} 
+ */
 function byteCodeComputeByteLength(mod, opcodes, locals, genloc, relocatable) {
     genloc = (genloc === true);
     relocatable = (relocatable === true);
@@ -1945,12 +2078,29 @@ class WebAssemblyInstructionSet {
 
 }
 
+/**
+ * @typedef WebAssemblyDecodeByteCodeResult
+ * @type
+ * @property {integer} start
+ * @property {integer} end
+ * @property {WasmInstruction[]} opcodes
+ */
+
 // https://webassembly.github.io/spec/core/binary/instructions.html#binary-expr
 // https://webassembly.github.io/spec/core/appendix/index-instructions.html
+/**
+ * 
+ * @param {ByteArray} data 
+ * @param {WebAssemblyModule} mod 
+ * @param {WasmLocal[]} locals 
+ * @param {boolean} reloc 
+ * @returns 
+ */
 function decodeByteCode(data, mod, locals, reloc) {
     
     let start = data.offset;
     let brk = false;
+    /** @type {WasmInstruction[]} */
     let topInsts = [];
     let opcodes = topInsts;
     let blkstack = [{opcodes: topInsts}]; // holds the nesting for block, loop and if/else
@@ -2966,6 +3116,15 @@ function decodeByteCode(data, mod, locals, reloc) {
     return {start: start, end: data.offset, opcodes: topInsts};
 }
 
+/**
+ * 
+ * @param {WebAssemblyModule} mod 
+ * @param {WasmInstruction[]} opcodes 
+ * @param {WasmLocal[]} locals 
+ * @param {ByteArray} data 
+ * @param {integer} reloc_offset 
+ * @returns {boolean}
+ */
 function encodeByteCode(mod, opcodes, locals, data, reloc_offset) {
 
     let functions = mod.functions;
@@ -3963,8 +4122,14 @@ function encodeByteCode(mod, opcodes, locals, data, reloc_offset) {
 // LEB128 is based on psudeo code from the wikipedia page as well as other sources
 // https://en.wikipedia.org/wiki/LEB128
 // https://gitlab.com/mjbecze/leb128/-/blob/master/unsigned.js
+/**
+ */
 class ByteArray {
 
+    /**
+     * 
+     * @param {Uint8Array|DataView|ArrayBuffer|TypedArray} buffer 
+     */
     constructor(buffer) {
         this._data = null;
         this._u8 = null;
@@ -3995,6 +4160,9 @@ class ByteArray {
         }
     }
 
+    /**
+     * @type {integer}
+     */
     get offset() {
         return this._offset;
     }
@@ -4008,16 +4176,26 @@ class ByteArray {
         this._offset = value;
     }
 
+    /**
+     * @type {integer}
+     */
     get endian() {
 
     }
 
+    /**
+     * @type {integer}
+     */
     get length() {
         return this._u8.byteLength;
     }
 
     // reading
 
+    /**
+     * 
+     * @returns {BigInt}
+     */
     readBigInt64() {
         let off = this._offset;
         let ret = this._data.getBigInt64(off, this._littleEndian);
@@ -4025,6 +4203,10 @@ class ByteArray {
         return ret;
     }
 
+    /**
+     * 
+     * @returns {BigInt}
+     */
     readBigUint64() {
         let off = this._offset;
         let ret = this._data.getBigUint64(off, this._littleEndian);
@@ -4032,6 +4214,10 @@ class ByteArray {
         return ret;
     }
 
+    /**
+     * 
+     * @returns {number}
+     */
     readFloat32() {
         let off = this._offset;
         let ret = this._data.getFloat32(off, this._littleEndian);
@@ -4039,6 +4225,10 @@ class ByteArray {
         return ret;
     }
 
+    /**
+     * 
+     * @returns {number}
+     */
     readFloat64() {
         let off = this._offset;
         let ret = this._data.getFloat64(off, this._littleEndian);
@@ -4046,6 +4236,10 @@ class ByteArray {
         return ret;
     }
 
+    /**
+     * 
+     * @returns {integer}
+     */
     readInt16() {
         let off = this._offset;
         let ret = this._data.getInt16(off, this._littleEndian);
@@ -4053,6 +4247,10 @@ class ByteArray {
         return ret;
     }
 
+    /**
+     * 
+     * @returns {integer}
+     */
     readInt32() {
         let off = this._offset;
         let ret = this._data.getInt32(off, this._littleEndian);
@@ -4060,10 +4258,18 @@ class ByteArray {
         return ret;
     }
 
+    /**
+     * 
+     * @returns {integer}
+     */
     readInt8() {
         return this._data.getInt8(this._offset++);
     }
 
+    /**
+     * 
+     * @returns {integer}
+     */
     readUint16() {
         let off = this._offset;
         let ret = this._data.getUint16(off, this._littleEndian);
@@ -4071,6 +4277,10 @@ class ByteArray {
         return ret;
     }
 
+    /**
+     * 
+     * @returns {integer}
+     */
     readUint32() {
         let off = this._offset;
         let ret = this._data.getUint32(off, this._littleEndian);
@@ -4078,10 +4288,18 @@ class ByteArray {
         return ret;
     }
 
+    /**
+     * 
+     * @returns {integer}
+     */
     readUint8() {
         return this._data.getUint8(this._offset++);
     }
 
+    /**
+     * 
+     * @returns {integer|BigInt}
+     */
     readULEB128(as64) {
         // consumes an unsigned LEB128 integer starting at `off`.
         // changes `off` to immediately after the integer
@@ -4110,7 +4328,7 @@ class ByteArray {
      * Utility function to decode a SLEB128 value.
      *
      * @param {Number}          asIntN
-     * @return {BigInt|Number}
+     * @return {BigInt|integer}
      */
     readSLEB128(asIntN) {
 
@@ -4189,6 +4407,11 @@ class ByteArray {
         }
     }
 
+    /**
+     * 
+     * @param {integer} length 
+     * @returns {string}
+     */
     readUTF8Bytes(length) {
         let u8 = this._u8;
         let off = this._offset;
@@ -4241,58 +4464,98 @@ class ByteArray {
 
     // writting
 
+    /**
+     * 
+     * @param {BigInt} value
+     */
     writeBigInt64(value) {
         let off = this._offset;
         this._data.setBigInt64(off, value, this._littleEndian);
         this._offset = off + 8;
     }
 
+    /**
+     * 
+     * @param {BigInt} value
+     */
     writeBigUint64(value) {
         let off = this._offset;
         this._data.setBigUint64(off, value, this._littleEndian);
         this._offset = off + 8;
     }
 
+    /**
+     * 
+     * @param {number} value
+     */
     writeFloat32(value) {
         let off = this._offset;
         this._data.setFloat32(off, value, this._littleEndian);
         this._offset = off + 4;
     }
 
+    /**
+     * 
+     * @param {number} value
+     */
     writeFloat64(value) {
         let off = this._offset;
         this._data.setFloat64(off, value, this._littleEndian);
         this._offset = off + 8;
     }
 
+    /**
+     * 
+     * @param {integer} value
+     */
     writeInt16(value) {
         let off = this._offset;
         this._data.setInt16(off, value, this._littleEndian);
         this._offset = off + 2;
     }
 
+    /**
+     * 
+     * @param {integer} value
+     */
     writeInt32(value) {
         let off = this._offset;
         this._data.setInt32(off, value, this._littleEndian);
         this._offset = off + 4;
     }
 
+    /**
+     * 
+     * @param {integer} value
+     */
     writeInt8(value) {
         this._data.setInt8(this._offset++, value);
     }
 
+    /**
+     * 
+     * @param {integer} value
+     */
     writeUint16(value) {
         let off = this._offset;
         this._data.setUint16(off, value, this._littleEndian);
         this._offset = off + 2;
     }
 
+    /**
+     * 
+     * @param {integer} value
+     */
     writeUint32(value) {
         let off = this._offset;
         this._data.setUint32(off, value, this._littleEndian);
         this._offset = off + 4;
     }
 
+    /**
+     * 
+     * @param {integer} value
+     */
     writeUint8(value) {
         this._data.setUint8(this._offset++, value);
     }
@@ -4300,9 +4563,9 @@ class ByteArray {
     /**
      * Utility function to encode a ULEB128 value to a buffer. Returns the length in bytes of the encoded value.
      * 
-     * @param  {BigInt|Number} value         [description]
-     * @param  {Number} padTo         [description]
-     * @return {Number}          [description]
+     * @param  {BigInt|integer} value         [description]
+     * @param  {integer} padTo         [description]
+     * @return {integer}          [description]
      */
     writeULEB128(value, padTo) {
         if (!Number.isInteger(padTo))
@@ -4374,9 +4637,9 @@ class ByteArray {
 
     /**
      * Utility function to encode a SLEB128 value to a buffer. Returns the length in bytes of the encoded value.
-     * @param  {BigInt|Number}  value         [description]
-     * @param  {Number}         padTo         [description]
-     * @return {[type]}          [description]
+     * @param  {BigInt|integer}  value 
+     * @param  {integer}         padTo 
+     * @return {integer}
      */
     writeSLEB128(value, padTo) {
         
@@ -4445,6 +4708,11 @@ class ByteArray {
         }
     }
 
+    /**
+     * 
+     * @param {string} value
+     * @returns {integer} the number of bytes written.
+     */
     writeUTF8Bytes(value) {
         let u8 = this._u8;
         let off = this._offset;
@@ -4495,7 +4763,11 @@ class ByteArray {
 
 };
 
-// Returns the number of bytes the given Javascript string takes if encoded as a UTF8 byte array, EXCLUDING the null terminator byte.
+/**
+ * Returns the number of bytes the given Javascript string takes if encoded as a UTF8 byte array, EXCLUDING the null terminator byte.
+ * @param {string} str 
+ * @returns {integer} 
+ */
 function lengthBytesUTF8(str) {
     let len = 0;
     for (let i = 0; i < str.length; ++i) {
@@ -4517,6 +4789,12 @@ function lengthBytesUTF8(str) {
     return len;
 }
 
+/**
+ * Returns the number of bytes needed to encode the value as a unsigned leb128
+ * @param {BigInt|integer} value
+ * @param {integer} padTo 
+ * @returns {integer}
+ */
 function lengthULEB128(value, padTo) {
     if (!Number.isInteger(padTo))
         padTo = 0;
@@ -4562,9 +4840,9 @@ function lengthULEB128(value, padTo) {
 
 /**
  * Utility function to compute the bytes needed to encode a SLEB128 value to a buffer.
- * @param  {BigInt|Number}  value         [description]
- * @param  {Number}         padTo         [description]
- * @return {[type]}         Returns the number of bytes needed.
+ * @param  {BigInt|integer} value 
+ * @param  {Number}         padTo 
+ * @return {integer}         Returns the number of bytes needed.
  */
 function lengthSLEB128(value, padTo) {
     
@@ -4667,12 +4945,25 @@ function lengthSLEB128(value, padTo) {
     }*/
 }
 
+/**
+ * The object class that represent a WebAssembly.Global in module and bytecode context.
+ */
 class WasmGlobal {
 
+    /**
+     * 
+     * @param {integer} type 
+     * @param {boolean} mutable 
+     * @param {WasmInstruction[]} expr 
+     */
     constructor(type, mutable, expr) {
+        /** @type {integer} */
         this.type = type;
+        /** @type {boolean} */
         this.mutable = mutable === true;
+        /** @type {WasmInstruction[]} */
         this.init = typeof expr == "object" ? expr : null;
+        /** @type {integer} */
         this._usage = 0;
     }
 
@@ -4701,28 +4992,56 @@ class WasmGlobal {
     }
 };
 
+/**
+ */
 class WasmTable {
 
     constructor() {
+        /** @type {integer} */
         this.reftype = undefined;
+        /** @type {integer} */
         this.min = undefined;
+        /** @type {integer} */
         this.max = undefined;
     }
 }
 
+/**
+ * @property {WasmType} type
+ * @property {WasmLocal[]} locals
+ * @property {WasmInstruction[]} opcodes
+ * @property {integer} narg Stores the original number of arguments declared by the type.
+ * @property {integer} _usage Reference count, to keep track of if the object could be dropped, since it might not be used after mutation of the module.
+ */
 class WasmFunction {
 
     constructor() {
+        /** @type {WasmType} */
+        this.type = undefined;
+        /** @type {WasmLocal[]} */
+        this.locals = undefined;
+        /** @type {WasmInstruction[]} */
+        this.opcodes = undefined;
+        /** @type {integer} */
+        this.narg = 0;
+        /** @type {integer} */
         this._usage = 0;
     }
 };
 
+/**
+ * TODO: use Object.freeze() to prevent mutation after creation.
+ */
 class WasmType {
 
     constructor() {
+        /** @type {integer[]} */
         this.argv = null;
+        /** @type {integer} */
         this.argc = 0;
+        /** @type {integer[]} */
         this.retv = null;
+        /** @type {integer} */
         this.retc = 0;
     }
 
@@ -4884,6 +5203,13 @@ class WebAssemblyFuncTypeSection extends WebAssemblySection {
         return buf;
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyFuncTypeSection}
+     */
     static decode(module, data, size) {
 
         let types;
@@ -4934,9 +5260,13 @@ class WebAssemblyFuncTypeSection extends WebAssemblySection {
 class ImportedFunction {
 
     constructor() {
+        /** @type {string} */
         this.module = undefined;
+        /** @type {string} */
         this.name = undefined;
+        /** @type {WasmType} */
         this.type = undefined;
+        /** @type {integer} */
         this._usage = 0;
     }
 };
@@ -4944,10 +5274,15 @@ class ImportedFunction {
 class ImportedTable {
 
     constructor() {
+        /** @type {string} */
         this.module = undefined;
+        /** @type {string} */
         this.name = undefined;
+        /** @type {integer} */
         this.min = null;
+        /** @type {integer} */
         this.max = undefined;
+        /** @type {integer} */
         this._usage = 0;
     }
 };
@@ -4955,11 +5290,17 @@ class ImportedTable {
 class ImportedMemory {
 
     constructor() {
+        /** @type {string} */
         this.module = undefined;
+        /** @type {string} */
         this.name = undefined;
+        /** @type {integer} */
         this.min = undefined;
+        /** @type {integer} */
         this.max = undefined;
+        /** @type {boolean} */
         this.shared = false;
+        /** @type {integer} */
         this._usage = 0;
     }
 };
@@ -4967,10 +5308,15 @@ class ImportedMemory {
 class ImportedGlobal {
 
     constructor() {
+        /** @type {string} */
         this.module = undefined;
+        /** @type {string} */
         this.name = undefined;
+        /** @type {integer} */
         this.type = undefined;
+        /** @type {boolean} */
         this.mutable = false;
+        /** @type {integer} */
         this._usage = 0;
     }
 
@@ -4987,9 +5333,13 @@ class ImportedGlobal {
 class ImportedTag {
 
     constructor() {
+        /** @type {string} */
         this.module = undefined;
+        /** @type {string} */
         this.name = undefined;
+        /** @type {WasmType} */
         this.type = undefined;
+        /** @type {integer} */
         this._usage = 0;
     }
 };
@@ -4997,8 +5347,11 @@ class ImportedTag {
 class WasmMemory {
 
     constructor() {
+        /** @type {integer} */
         this.min = null;
+        /** @type {integer} */
         this.max = null;
+        /** @type {boolean} */
         this.shared = false;
     }
 };
@@ -5006,6 +5359,7 @@ class WasmMemory {
 class WasmTag {
 
     constructor() {
+        /** @type {WasmType} */
         this.type = false;
     }
 };
@@ -5209,6 +5563,13 @@ class WebAssemblyImportSection extends WebAssemblySection {
         return buf;
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyImportSection}
+     */
     static decode(module, data, size) {
 
         let cnt = data.readULEB128();
@@ -5369,6 +5730,13 @@ class WebAssemblyFunctionSection extends WebAssemblySection {
         return buf;
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyFunctionSection}
+     */
     static decode(module, data, size) {
         
         let cnt = data.readULEB128();
@@ -5469,6 +5837,13 @@ class WebAssemblyTableSection extends WebAssemblySection {
         return buf;
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyTableSection}
+     */
     static decode(module, data, size) {
         
         let cnt = data.readULEB128();
@@ -5556,6 +5931,13 @@ class WebAssemblyTagSection extends WebAssemblySection {
         return buf;
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyTagSection}
+     */
     static decode(module, data, size) {
         
         let types = module.types;
@@ -5675,6 +6057,13 @@ class WebAssemblyMemorySection extends WebAssemblySection {
         return buf;
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyMemorySection}
+     */
     static decode(module, data, size) {
         let end = data.offset + size;
         let cnt = data.readULEB128();
@@ -5760,6 +6149,13 @@ class WebAssemblyGlobalSection extends WebAssemblySection {
         return buf;
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyGlobalSection}
+     */
     static decode(module, data, size) {
 
         let cnt = data.readULEB128();
@@ -5840,7 +6236,7 @@ class ExportedGlobal {
 
 /**
  * @todo how to handle reference count for exports?
- * @todo unify .value instead of dedicated property per each?
+ * @todo unify .value instead of dedicated property per each type?
  * @todo merge all types to WasmExport and use ._kind internally with integer and .kind getter with string value.
  */
 class WebAssemblyExportSection extends WebAssemblySection {
@@ -5915,6 +6311,13 @@ class WebAssemblyExportSection extends WebAssemblySection {
         return buf;
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyExportSection}
+     */
     static decode(module, data, size) {
 
         let cnt = data.readULEB128();
@@ -5993,6 +6396,13 @@ class WebAssemblyStartSection extends WebAssemblySection {
         return buf;
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyStartSection}
+     */
     static decode(module, data, size) {
         let funcidx = data.readULEB128();
         let func = mod.functions[funcidx];
@@ -6005,9 +6415,13 @@ class WebAssemblyStartSection extends WebAssemblySection {
 class WasmElementSegment {
 
     constructor() {
+        /** @type {integer} */
         this.kind = undefined;
+        /** @type {WasmInstruction[]} */
         this.opcodes = undefined;
+        /** @type {WasmFunction[]} */
         this.vector = undefined;
+        /** @type {integer} */ // TODO: phase-out
         this.count = undefined;
     }
 }
@@ -6111,6 +6525,13 @@ class WebAssemblyElementSection extends WebAssemblySection {
 
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyElementSection}
+     */
     static decode(module, data, size) {
         
         let cnt = data.readULEB128();
@@ -6189,14 +6610,6 @@ class WebAssemblyElementSection extends WebAssemblySection {
     }
 }
 
-function decodeElementSection(data, secsz, mod) {
-    
-}
-
-function encodeElementSection(mod) {
-
-
-}
 
 /**
  * Holds cache for the input wasm binary.
@@ -6205,8 +6618,16 @@ class WebAssemblyModuleCache {
 
 }
 
+/**
+ * @property {integer} type
+ * @property {integer} usage 
+ */
 class WasmLocal {
 
+    /**
+     * 
+     * @param {integer} type 
+     */
     constructor(type) {
         this.type = type;
         this.usage = 0;
@@ -6215,6 +6636,9 @@ class WasmLocal {
 
 class WebAssemblyCodeSection extends WebAssemblySection {
 
+    /**
+     * @param {WebAssemblyModule} module 
+     */
     constructor(module) {
         super(SECTION_TYPE_CODE, module);
         
@@ -6338,6 +6762,13 @@ class WebAssemblyCodeSection extends WebAssemblySection {
         return buffers;
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyCodeSection}
+     */
     static decode(module, data, size, options) {
         
         let end = data.offset + size;
@@ -6447,14 +6878,20 @@ function prepareModuleEncode(mod) {
     }
 }
 
-
+/**
+ * 
+ */
 class WasmDataSegment {
 
     constructor() {
+        /** @type {????} */
         this._section = undefined;
         this.memory = undefined;
+        /** @type {WasmInstruction[]} */
         this.inst = undefined;
+        /** @type {integer} */
         this.size = undefined;
+        /** @type {Uint8Array} */
         this._buffer = undefined;
         this._mutableDataBuffer = undefined;
         this._mutableDataOffset = undefined;
@@ -6586,6 +7023,15 @@ class WebAssemblyDataSection extends WebAssemblySection {
         return buffer;
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size
+     * @param {string} name The name of the custom-section, called with this parameter set to undefined if not decoding a custom-section.
+     * @param {object} options 
+     * @returns {WebAssemblyDataSection}
+     */
     static decode(module, data, size, name, options) {
 
         let cnt = data.readULEB128();
@@ -6683,6 +7129,13 @@ class WebAssemblyDataCountSection extends WebAssemblySection {
         return buffer;
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyDataCountSection}
+     */
     static decode(module, data, size) {
         let cnt = data.readULEB128();
         let section = new WebAssemblyDataCountSection(module);
@@ -6726,6 +7179,13 @@ class WebAssemblyCustomSectionDylink0 extends WebAssemblyCustomSection {
 
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyCustomSectionDylink0}
+     */
     static decode(module, data, size) {
 
         let info;
@@ -6783,6 +7243,13 @@ class WebAssemblyCustomSectionTargetFeatures extends WebAssemblyCustomSection {
 
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyCustomSectionTargetFeatures}
+     */
     static decode(module, data, size) {
         let features = {};
 
@@ -6921,6 +7388,13 @@ class WebAssemblyCustomSectionProducers extends WebAssemblyCustomSection {
         return buf;
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyCustomSectionProducers}
+     */
     static decode(module, data, size) {
 
         let count = data.readULEB128();
@@ -7353,6 +7827,13 @@ class WebAssemblyCustomSectionName extends WebAssemblyCustomSection {
         return buf;
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyCustomSectionName}
+     */
     static decode(module, data, size) {
 
         let results = {};
@@ -7552,6 +8033,14 @@ class WebAssemblyCustomSectionLinker extends WebAssemblyCustomSection {
 
     constructor(module) {
         super(module, "linking");
+        /** @type {llvm.SegmentInfo[]} */
+        this._segments = undefined;
+        /** @type {Array.<llvm.FuncSymbol|llvm.GlobSymbol|llvm.TagSymbol|llvm.TableSymbol|llvm.DataSymbol|llvm.SectionSymbol} */
+        this._symtable = undefined;
+        /** @type {llvm.InitFunction[]} */
+        this._ctors = undefined;
+        /** @type {llvm.ComdatInfo[]} */
+        this._comdat = undefined;
     }
 
     encode(options) {
@@ -7559,6 +8048,13 @@ class WebAssemblyCustomSectionLinker extends WebAssemblyCustomSection {
         throw new ReferenceError("encoding linker section not supported");
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyCustomSectionLinker}
+     */
     static decode(module, data, size) {
 
         let segments;
@@ -7778,10 +8274,26 @@ function relocTypeName(type) {
     }
 }
 
+/**
+ * @typedef {llvm.Reloc}
+ * @type {object}
+ * @property {integer} type
+ * @property {integer} offset
+ * @property {integer} index
+ * @property {integer} addend
+ */
+
+/**
+ * @typedef {WebAssemblyCustomSectionReloc}
+ * @type {WebAssemblyCustomSectionReloc}
+ * Used to represent the reloc.DATA and reloc.CODE section provided by clang in `*.bc` files.
+ * 
+ * @property {llvm.Reloc[]} relocs
+ */
 class WebAssemblyCustomSectionReloc extends WebAssemblyCustomSection {
 
     constructor(module, name) {
-        super(module, null);
+        super(module, name);
     }
 
     encode(options) {
@@ -7789,6 +8301,13 @@ class WebAssemblyCustomSectionReloc extends WebAssemblyCustomSection {
         throw new ReferenceError("encoding reloc.CODE section not supported");
     }
 
+    /**
+     * 
+     * @param {WebAssemblyModule} module 
+     * @param {ByteArray} data 
+     * @param {integer} size 
+     * @returns {WebAssemblyCustomSectionReloc}
+     */
     static decode(module, data, size, name) {
 
         let end = data.offset + size;
@@ -7827,10 +8346,37 @@ function encodeWebAssemblyBinary(mod, options) {
     // check outputAction() in script.js for impl.
 }
 
+/**
+ */
 class WebAssemblyModule {
 
     constructor() {
+        /** @type {WasmDataSegment[]} */
+        this.dataSegments = undefined;
+        /** @type {WasmElementSegment[]} */
+        this.elementSegments = undefined;
+        /** @type {Array.<ExportedFunction|ExportedGlobal|ExportedMemory|ExportedTable>} */
+        this.exports = undefined;
+        /** @type {Array.<ImportedFunction|WasmFunction>} */
+        this.functions = undefined;
+        /** @type {Array.<ImportedGlobal|WasmGlobal>} */
+        this.globals = undefined;
+        /** @type {Array.<ImportedTable|WasmTable>} */
+        this.tables = undefined;
+        /** @type {Array.<ImportedTag|WasmTag>} */
+        this.tags = undefined;
+        /** @type {Array.<WasmType>} */
+        this.types = undefined;
+
+        /** @type {WasmFunction} Only set on modules that declares a start section. */
+        this.startfn = undefined;
+
+        /** @type {Array.<WebAssemblySection|Object>} */
+        this.sections = undefined;
+
+        /** @type {integer} */
         this._version = undefined;
+        /** @type {Array.<ExportedFunction|ExportedGlobal|ExportedMemory|ExportedTable>} */
         this._explicitExported = []; // exports added trough module.appendExport
     }
 
@@ -7855,9 +8401,9 @@ class WebAssemblyModule {
      * data-segments are inserted if there is no conflict for that address range, RELOC based data segments
      * could allow data-segments in the `wasmModule` to be merged at a non-conflict location.
      * 
-     * @param  {[type]} wasmModule [description]
+     * @param  {WebAssemblyModule} wasmModule [description]
      * @param  {Map} replacementMap 
-     * @return {[type]}            [description]
+     * @return {void}
      */
     mergeWithModule(wasmModule, replacementMap) {
 
@@ -8625,8 +9171,8 @@ class WebAssemblyModule {
 
     /**
      * Return type by the signature of what pull and push from/to the stack.
-     * @param  {Array|Integer} pullv [description]
-     * @param  {Array|Integer} pushv [description]
+     * @param {integer|integer[]} pullv [description]
+     * @param {integer|integer[]} pushv [description]
      * @return {WasmType}      The function type with the signature or null if no matching type was found.
      */
     typeByPullPush(pullv, pushv) {
@@ -8710,6 +9256,11 @@ class WebAssemblyModule {
         return null;
     }
 
+    /**
+     * @param {integer|integer[]} pullv
+     * @param {integer|integer[]} pushv
+     * @return {WasmType}
+     */
     getOrCreateType(pullv, pushv) {
 
         if (pullv === null)
@@ -8761,6 +9312,9 @@ class WebAssemblyModule {
 
     // imports
 
+    /**
+     * @returns {boolean}
+     */
     hasImports() {
 
         let functions = this.functions;
@@ -8811,6 +9365,10 @@ class WebAssemblyModule {
         return false;
     }
 
+    /**
+     * 
+     * @returns {Array.<ImportedFunction|ImportedGlobal|ImportedMemory|ImportedTable|ImportedTag>}
+     */
     getImports() {
 
         let imports = [];
@@ -8862,6 +9420,10 @@ class WebAssemblyModule {
         return imports;
     }
     
+    /**
+     * 
+     * @param {ImportedFunction|ImportedGlobal|ImportedMemory|ImportedTable|ImportedTag} imp 
+     */
     appendImport(imp) {
 
         if (typeof imp.module != "string" || typeof imp.name != "string" || imp.module.length == 0 || imp.module.length == 0)
@@ -9034,6 +9596,13 @@ class WebAssemblyModule {
         return null;
     }
 
+    /**
+     * 
+     * @param {ImportedGlobal|WasmGlobal} oldGlobal 
+     * @param {ImportedGlobal|WasmGlobal} newGlobal 
+     * @param {boolean} byAddress A boolean value that determine if the boolean should also be replaced by address in for example i32.load and i32.store instruction.
+     * @returns 
+     */
     replaceGlobal(oldGlobal, newGlobal, byAddress) {
 
         byAddress = (byAddress === true);
@@ -9189,9 +9758,15 @@ class WebAssemblyModule {
 
     // exports
 
+    /**
+     * 
+     * @param {string} name 
+     * @param {WasmGlobal|WasmFunction|WasmMemory|WasmTable} value
+     * @throws {ReferenceError} If the name or value is already declared as a export.
+     */
     appendExport(name, value) {
 
-        if (!((value instanceof WasmGlobal) || (value instanceof WasmFunction) || (value instanceof WasmMemory) || (value instanceof ExportedTable))) {
+        if (!((value instanceof WasmGlobal) || (value instanceof WasmFunction) || (value instanceof WasmMemory) || (value instanceof WasmTable))) {
             throw TypeError("invalid type for export");
         }
 
@@ -9294,6 +9869,11 @@ class WebAssemblyModule {
 
     }
 
+    /**
+     * 
+     * @param {WasmFunction|WasmGlobal|WasmMemory|WasmTable} obj 
+     * @returns The number of enteries removed.
+     */
     removeExportByRef(obj) {
         // there is nothing in the spec which prevents a object to be exported more than once..
         if (obj instanceof WasmFunction) {
@@ -9433,6 +10013,11 @@ class WebAssemblyModule {
         return 0;
     }
 
+    /**
+     * 
+     * @param {WasmFunction|WasmGlobal|WasmMemory|WasmTable} obj 
+     * @returns {ExportedFunction|ExportedGlobal|ExportedMemory|ExportedTable}
+     */ 
     findExportDefByObject(obj) {
         let exps = this.exports;
         let len = exps.length;
@@ -9452,6 +10037,10 @@ class WebAssemblyModule {
         return undefined;
     }
 
+    /**
+     * @param {WasmFunction|WasmGlobal|WasmMemory|WasmTable} obj 
+     * @returns {Array.<ExportedFunction|ExportedGlobal|ExportedMemory|ExportedTable>}
+     */ 
     findAllExportDefByObject(obj) {
         let results = [];
         let exps = this.exports;
@@ -9475,6 +10064,11 @@ class WebAssemblyModule {
     // Custom Sections
 
     // getCustomSectionsByName(name)
+
+    /**
+     * @param {string} name
+     * @returns {WebAssemblyCustomSection[]}
+     */
     customSections(name) {
         let results = [];
         const sections = this.sections;
@@ -9489,6 +10083,11 @@ class WebAssemblyModule {
 
     // getSectionByType(type)
     
+    /**
+     * 
+     * @param {integer|string} search 
+     * @returns {WebAssemblySection}
+     */
     findSection(search) {
 
         if (typeof search == "string") {
@@ -9518,6 +10117,11 @@ class WebAssemblyModule {
         return null;
     }
 
+    /**
+     * 
+     * @param {integer|string} search 
+     * @returns {WebAssemblySection[]}
+     */
     findAllSections(search) {
 
         let results = [];
@@ -9565,14 +10169,15 @@ class WebAssemblyModule {
     // memory & data segments
 
     /**
+     * @todo This would need relocation to be performed to work will all types of binaries, which would need alot of implementation..
      * Computes and constructs a ArrayBuffer which built up like the initial memory of the module. Which makes
      * access and mutation at addresses possible. If mutable is set to true, the data segments of the module is also
      * 
      * @todo add support for complex data-segment setup, where data-segments might have variable location and might be setup to different memory instances.
      * 
      * @param  {WasmMemory|ImportedMemory} memory The memory for which to compute the initial memory.
-     * @param  {Boolean} mutable [description]
-     * @return {ArrayBuffer}         [description]
+     * @param  {boolean} mutable
+     * @return {Uint8Array}
      */
     computeInitialMemory(memory, mutable) {
         mutable = (mutable === true);
@@ -9658,8 +10263,8 @@ class WebAssemblyModule {
     
     /**
      * Mutates all references to oldMemory to be instead reference newMemory.
-     * @param  {oldMemory} oldMemory [description]
-     * @param  {newMemory} newMemory [description]
+     * @param  {WasmMemory|ImportedMemory} oldMemory [description]
+     * @param  {WasmMemory|ImportedMemory} newMemory [description]
      * @return {[type]}           [description]
      */
     replaceMemory(oldMemory, newMemory) {
@@ -9668,6 +10273,12 @@ class WebAssemblyModule {
 
     // Functions
 
+    /**
+     * 
+     * @param {string} name 
+     * @param {boolean} checkExports 
+     * @returns {WasmFunction|ImportedFunction}
+     */
     getFunctionByName(name, checkExports) {
 
         checkExports = (checkExports === true);
@@ -9698,6 +10309,12 @@ class WebAssemblyModule {
         return null;
     }
 
+    /**
+     * TODO: take a function instead of a name, this will be more flexible.
+     * 
+     * @param {string} name 
+     * @returns {WasmFunction[]}
+     */
     findFuncUses(name) {
         let match;
         let functions = this.functions;
@@ -9753,6 +10370,12 @@ class WebAssemblyModule {
 
     // assemble binary
 
+    /**
+     * 
+     * @param {object} options 
+     * 
+     * @returns {Uint8Array[]} 
+     */
     encode(options) {
         let exported = [];
         let excludeSections = [];
@@ -9917,8 +10540,15 @@ class WebAssemblyModule {
 
 WebAssemblyModule.Name = __nsym;
 
+// TODO: move into WebAssemblyModule.decode (static method)
 // https://webassembly.github.io/spec/core/binary/modules.html#binary-version
 // https://coinexsmartchain.medium.com/wasm-introduction-part-1-binary-format-57895d851580
+/**
+ * 
+ * @param {Uint8Array|ArrayBuffer|DataView} buf 
+ * @param {object} options
+ * @returns {WebAssemblyModule}
+ */
 function parseWebAssemblyBinary(buf, options) {
 
     let data = new ByteArray(buf);

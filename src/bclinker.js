@@ -16,6 +16,24 @@ function readSelectorType(buf) {
     return str;
 }
 
+/**
+ * @typedef DataSection
+ * @type {Object}
+ * @property {string} name
+ * @property {WasmDataSegment} dataSegment
+ * @property {integer} max_align
+ * @property {integer} _dataSize
+ * @property {integer} _packedSize
+ * @property {integer} _paddingTotal
+ * @property {integer} _reloc_start
+ * @property {integer} _reloc_stop
+ */
+
+/**
+ * 
+ * @param {string} name 
+ * @returns {string}
+ */
 function generateRelocImportGlobalName(name) {
     let glob_name = name.replace(/[\.\-\s]/gm, '_');
     if (glob_name[0] != '_')
@@ -5301,6 +5319,7 @@ function dl_create_init_array(linker, module, commonData) {
     init_arr_seg.size = init_arr_buf.byteLength;
     init_arr_seg[__nsym] = ".init_array";
 
+    /** @type {DataSection} */
     let init_arr_dataSection = {
         name: init_arr_seg[__nsym],
         dataSegment: init_arr_seg,
@@ -5431,6 +5450,7 @@ function dl_setup_module_data(linker, wasmModule, dl_data) {
     dlsym_seg.size = dlsym_buf.byteLength;
     dlsym_seg[__nsym] = ".dynsym";
 
+    /** @type {DataSection} */
     let dlsym_dataSection = {
         name: dlsym_seg[__nsym],
         dataSegment: dlsym_seg,
@@ -5441,6 +5461,8 @@ function dl_setup_module_data(linker, wasmModule, dl_data) {
         _reloc_start: 0,                // currently the reloc process, use this value to turn back a change that was done in the early days.
         _reloc_stop: dlsym_seg.size,
     };
+
+    /** @type {DataSection} */
     let dlstr_dataSection = {
         name: dlstr_seg[__nsym],
         dataSegment: dlstr_seg,
@@ -5524,6 +5546,8 @@ function dl_setup_module_data(linker, wasmModule, dl_data) {
  * but the idea is that it could be expanded since there is currently little control of
  * what is a visiable symbol.
  * 
+ * @param {ByteCodeLinker} linker 
+ * @param {WebAssemblyModule} wasmModule 
  */
 function load_dylink_profile(linker, wasmModule) {
     let ident = linker.so_ident;
