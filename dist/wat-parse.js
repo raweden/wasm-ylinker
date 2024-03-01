@@ -245,49 +245,53 @@ function parseWAT(source, options) {
 	let lncnt = 0;	// line index.
 	while (idx < len) {
 		let chr = source.charCodeAt(idx);
-		if (chr == 0x28) {			// '('
 
-			if (source.charCodeAt(idx) == 0x3B) { // '(;' multi-line comment
-				idx += 2;
-				let start = idx;
-				let end = -1;
-				let foundend = false;
-				let tlnoff = lnoff;
-				let tlncnt = lncnt;
-				let str = "";
-				while (idx < len) {
-					chr = source.charCodeAt(idx);
-					if (chr && source.charCodeAt(idx + 1)) {
-						foundend = true;
-						end = idx;
-						idx += 2;
-						break;
-					} else if (chr == 0x0a) {					// new-line
-						
-						// making CR char optional (windows users)
-						if (source.charCodeAt(idx) == 0x0d) {
-							idx++;
-						}
+		if (chr == 0x28 && source.charCodeAt(idx + 1) == 0x3B) { // '(;' multi-line comment
 
-						tlncnt++;
-						tlnoff = idx + 1;
+			idx += 2;
+			let start = idx;
+			let end = -1;
+			let foundend = false;
+			let tlnoff = lnoff;
+			let tlncnt = lncnt;
+			let str = "";
+			while (idx < len) {
+				chr = source.charCodeAt(idx);
+				if (chr == 0x3b && source.charCodeAt(idx + 1) == 0x29) {
+					foundend = true;
+					end = idx;
+					idx += 2;
+					break;
+				} else if (chr == 0x0a) {						// new-line
+					
+					// making CR char optional (windows users)
+					if (source.charCodeAt(idx) == 0x0d) {
+						idx++;
 					}
+
+					tlncnt++;
+					tlnoff = idx + 1;
 				}
-
-				if (!foundend)
-					throw new Error("unexpected end of comment");
-
-				tokens.push({type: WAT_TOKEN_BLOCK_COMMENT, value: source.substring(start, end)});
-				lnoff = tlnoff;
-				lncnt = tlncnt;
-				continue;
-
-			} else {
-				tkn = {type: '('};
-				tokens.push(tkn);
-				tkn.line = lncnt;
-				tkn.column = idx - lnoff;
+				idx++;
 			}
+
+			if (!foundend)
+				throw new Error("unexpected end of comment");
+
+			let tt = {type: WAT_TOKEN_BLOCK_COMMENT, value: source.substring(start, end)};
+			tt.start = {line: lncnt, column: start - lnoff};
+			tt.end = {line: tlncnt, column: end - tlnoff};
+			tokens.push(tt);
+			lnoff = tlnoff;
+			lncnt = tlncnt;
+			continue;
+
+		} else if (chr == 0x28) {			// '('
+
+			tkn = {type: '('};
+			tokens.push(tkn);
+			tkn.line = lncnt;
+			tkn.column = idx - lnoff;
 
 		} else if (chr == 0x29) { 	// ')'
 
@@ -296,7 +300,7 @@ function parseWAT(source, options) {
 			tkn.line = lncnt;
 			tkn.column = idx - lnoff;
 
-		} else if (chr == 0x3B && source.charCodeAt(idx) == 0x3B) {	// ';;' single line comment
+		} else if (chr == 0x3B && source.charCodeAt(idx + 1) == 0x3B) {	// ';;' single line comment
 
 			idx += 2;
 			let start = idx;
@@ -317,6 +321,7 @@ function parseWAT(source, options) {
 			tokens.push(tkn);
 			tkn.line = lncnt;
 			tkn.column = idx - lnoff;
+			continue; // skip increment of index to use new-line handling
 
 		} else if (chr == 0x22) {	// '\"' string
 
@@ -686,12 +691,17 @@ function parseWAT(source, options) {
 	function processTypeuse(tokens, identmap) {
 
 		let peek, last = tokens._index;
+		let start = last;
 		let tkn = tokens.current;
 		let inpush = false;	// in result part of the type declartion.
 		let pullv = [];
 		let pushv = [];
 
 		peek = tokens.peek(true);
+		if (!peek) {
+			return null;
+		}
+
 		if (peek.type == WAT_TOKEN_KEYWORD && peek.value == "type") {
 			let type;
 			tokens.next(true);
@@ -821,6 +831,10 @@ function parseWAT(source, options) {
 			}
 		}
 
+		if (tokens._index == start) {
+			return null; // done nothing so return null to indicate that its not a type
+		}
+
 		let type = findMatchingType(pullv, pushv);
 
 		if (!type) {
@@ -923,7 +937,7 @@ function parseWAT(source, options) {
 		let tkn = tokens.next(true);
 		let anytrue = false;
 
-		if (tkn.type != WAT_TOKEN_KEYWORD) {
+		if (!tkn || tkn.type != WAT_TOKEN_KEYWORD) {
 			tokens._index = start;
 			return false;
 		}
@@ -997,16 +1011,22 @@ function parseWAT(source, options) {
 			case 'block':
 			case 'loop':
 			{
-				let label, tmp = tokens._index;
-				tkn = tokens.next(true);
+				let label, rloc = tokens._index;
+				let tmp = tokens.next(true);
 
-				if (tkn.type == WAT_TOKEN_IDENT) {
-					label = tkn.value;
+				if (tmp && tmp.type == WAT_TOKEN_IDENT) {
+					label = tmp.value;
+					rloc = tokens._index;
+					tkn = tokens.next(true);
 				}
-
+				
 				let type = processTypeuse(tokens);
-				throw new WatSyntaxError("not implemented");
+				if (type == null) {
+					type = 0x40;
+					tokens._index = rloc;
+				}
 				opcode = (opval == 0x03) ? new LoopInst(opval) : new BlockInst(opval);
+				opcode.type = type;
 				break;
 			}
 			case 'if':
@@ -1027,8 +1047,13 @@ function parseWAT(source, options) {
 				}
 
 				let type = processTypeuse(tokens);
-				idx = tokens._index;
-				tkn = tokens.next(true);
+				if (type != null) {
+					idx = tokens._index;
+					tkn = tokens.next(true);
+				} else {
+					tkn = tokens.current;
+					idx = tokens._index - 1;
+				}
 				if (tkn.type == '(') {
 					grp1 = tokens.captureGroup(idx, true, true);
 					console.log(tkn);
@@ -2144,6 +2169,53 @@ function parseWAT(source, options) {
 			return true;
 		}
 
+		let rrloc = tokens._index;
+		start = tokens._index;
+		tkn = tokens.next();
+		while (tkn && tokens.atEnd() == false) {
+			let kwd, type;
+			if (tkn.type == '(') {
+				rrloc = tokens._index;
+				tkn = tokens.next(true);
+				if (tkn.type != WAT_TOKEN_KEYWORD) {
+					console.warn("not keyword after open (");
+					tokens._index = start;
+					break;
+				}
+				kwd = tkn.value;
+				if (instmap.hasOwnProperty(kwd)) {
+					let opcls = instmap[kwd];
+					let rloc = tkn;
+					let subgrp = tokens.captureGroup(start, true, true);
+					let ret = processInstruction(subgrp, opcls, opcodes, locals, true);
+					if (tokens.atEnd())
+						break;
+
+					start = tokens._index;
+					rrloc = tokens._index;
+					tkn = tokens.next(true);
+				} else {
+					throw new WatSyntaxError("unexpected keyword '" + kwd + "'", tkn.line, tkn.column);
+				}
+			} else {
+				kwd = tkn.value;
+				if (instmap.hasOwnProperty(kwd)) {
+					let opcls = instmap[kwd];
+					let rloc = tkn;
+					tokens._index = rrloc;
+					let ret = processInstruction(tokens, opcls, opcodes, locals, false);
+					if (tokens.atEnd())
+						break;
+
+					start = tokens._index;
+					rrloc = tokens._index;
+					tkn = tokens.next(true);
+				} else {
+					throw new WatSyntaxError("unexpected keyword '" + kwd + "'", tkn.line, tkn.column);
+				}
+			}
+		}
+		/*
 		start = tokens._index;
 		tkn = tokens.next();
 		while (tkn.type == '(') {
@@ -2165,7 +2237,7 @@ function parseWAT(source, options) {
 				start = tokens._index;
 				tkn = tokens.next(true);
 			}
-		}
+		}*/
 
 		opcodes.push(opcode);
 
@@ -2733,28 +2805,39 @@ function parseWAT(source, options) {
 				tkn = tokens.next(true);
 			}
 
-			if (tkn.type != '(') {
-				throw new WatSyntaxError(WAT_ERR_EXPECTED_GRP_OPEN, tkn.line, tkn.column);
-			}
+			if (tkn.type == '(') {
 
-			tkn = tokens.next(true);
-			if (tkn.type == WAT_TOKEN_KEYWORD && tkn.value == "mut") {
-				mutable = true;
 				tkn = tokens.next(true);
-			}
+				if (tkn.type == WAT_TOKEN_KEYWORD && tkn.value == "mut") {
+					mutable = true;
+					tkn = tokens.next(true);
+				}
 
-			if (tkn.type != WAT_TOKEN_KEYWORD) {
-				throw new WatSyntaxError(WAT_ERR_EXPECTED_KEYWORD, tkn.line, tkn.column);
-			}
+				if (tkn.type != WAT_TOKEN_KEYWORD) {
+					throw new WatSyntaxError(WAT_ERR_EXPECTED_KEYWORD, tkn.line, tkn.column);
+				}
 
-			type = text2bintype(tkn.value);
-			if (type === undefined) {
-				throw new WatSyntaxError(WAT_ERR_NO_VALTYPE, tkn.line, tkn.column);
-			}
-			tkn = tokens.next(true);
+				type = text2bintype(tkn.value);
+				if (type === undefined) {
+					throw new WatSyntaxError(WAT_ERR_NO_VALTYPE, tkn.line, tkn.column);
+				}
+				tkn = tokens.next(true);
 
-			if (tkn.type != ')') {
-				throw new WatSyntaxError(WAT_ERR_EXPECTED_GRP_END, tkn.line, tkn.column);
+				if (tkn.type != ')') {
+					throw new WatSyntaxError(WAT_ERR_EXPECTED_GRP_END, tkn.line, tkn.column);
+				}
+
+			} else {
+				// wat allows for only the type to be specified if not enclosed like (mut i32)
+				if (tkn.type != WAT_TOKEN_KEYWORD) {
+					throw new WatSyntaxError(WAT_ERR_EXPECTED_KEYWORD, tkn.line, tkn.column);
+				}
+
+				type = text2bintype(tkn.value);
+				if (type === undefined) {
+					throw new WatSyntaxError(WAT_ERR_NO_VALTYPE, tkn.line, tkn.column);
+				}
+				tkn = tokens.next(true);
 			}
 
 			glob = new ImportedGlobal();
