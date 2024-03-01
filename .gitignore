@@ -2,5 +2,14 @@
 DWARF4.pdf
 DWARF5.pdf
 wasm-info.code-workspace
+*.sublime-workspace
+*.sublime-project
+git-copy.sh
+git-copy2.sh
 dist/examples
+dist/testing
+dist/flows
+dist/workflows
+dist/todo.md
 dist/wat-example.wat
+archive/**

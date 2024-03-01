@@ -748,7 +748,7 @@ function showInitialMemory(container, module, mem) {
 
 		let dataOffset = undefined;
 
-		if (dataSeg.inst.opcodes[0].opcode == 0x41 && dataSeg.inst.opcodes[1].opcode == 0x0B) {
+		if (dataSeg.kind == 0 && dataSeg.inst.opcodes[0].opcode == 0x41 && dataSeg.inst.opcodes[1].opcode == 0x0B) {
 			dataOffset = dataSeg.inst.opcodes[0].value;
 		}
 
@@ -1660,6 +1660,9 @@ class WasmFunctionsInspectorView {
 			if (func instanceof ImportedFunction) {
 				obj.imported = true;
 				obj.importedAs = {module: func.module, name: func.name};
+				if (!name) {
+					obj.name = func.module + "." + func.name;
+				}
 			}
 		}
 
@@ -2967,8 +2970,13 @@ function findInputFiles(files) {
 
 async function loadFilePairs(binary, symbolMapFile, options, parseOptions) {
 	let file;
+	let modname;
 	if (binary instanceof FileSystemFileHandle) {
 		file = await binary.getFile();
+		modname = binary.name;
+		if (modname.endsWith(".wasm")) {
+			modname = modname.substring(0, modname.length - 5);
+		}
 	}
 	let buf1 = await file.arrayBuffer();
 	let buf2;
@@ -2977,7 +2985,12 @@ async function loadFilePairs(binary, symbolMapFile, options, parseOptions) {
 		buf2 = await file.text();
 	}
 
-	return loadWebAssemblyBinary(buf1, buf2, options, parseOptions) 
+	let mod = loadWebAssemblyBinary(buf1, buf2, options, parseOptions);
+	if (modname) {
+		mod[__nsym] = modname;
+	}
+
+	return mod;
 }
 
 const flow = {};
@@ -3602,7 +3615,151 @@ function loadWebAssemblyBinary(buf, symbolsTxt, context, options) {
 	return mod;
 }
 
+function handleLinking(wasmModule) {
+	console.log("handle linking called!");
+	let linking = wasmModule.findSection("linking");
+	let reloc_code = wasmModule.findSection("reloc.CODE");
+	let reloc_data = wasmModule.findSection("reloc.DATA");
+
+	let dataSegments = wasmModule.dataSegments;
+	let functions = wasmModule.functions;
+	let relocs = reloc_data.relocs;
+	let dataSecOff = wasmModule.findSection(11)._cache.dataOffset;
+	let codeSecOff = wasmModule.findSection(10)._cache.dataOffset;
+	let symtable = linking._symtable;
+
+	function findDataSegmentForReloc(offset) {
+		let len = dataSegments.length;
+		for (let i = 0; i < len; i++) {
+			let segment = dataSegments[i];
+			let start = segment.offset - dataSecOff;
+			let end = start + segment.size;
+			if (offset >= start && offset < end) {
+				return segment;
+			}
+		}
+
+		return null;
+	}
+
+	function findFunctionForReloc(offset) {
+		let len = functions.length;
+		for (let i = 0; i < len; i++) {
+			let func = functions[i];
+			let start = func.opcode_start - codeSecOff;
+			let end = func.opcode_end - codeSecOff;
+			if (offset >= start && offset < end) {
+				return func;
+			}
+		}
+
+		return null;
+	}
+
+	function findSymbol(index) {
+		let len = dataSegments.length;
+		for (let i = 0; i < len; i++) {
+			let segment = dataSegments[i];
+			let start = segment.offset - dataSecOff;
+			let end = start + segment.size;
+			if (offset >= start && offset < end) {
+				return segment;
+			}
+		}
+
+		return null;
+	}
+
+	len = relocs.length;
+	for (let i = 0; i < len; i++) {
+		let reloc = relocs[i];
+		let segment = findDataSegmentForReloc(reloc.offset);
+		reloc.dst = segment;
+		reloc.off = reloc.offset - (segment.offset - dataSecOff);
+		reloc.ref = symtable[reloc.index];
+	}
+
+	// in code what's needed is: R_WASM_MEMORY_ADDR_SLEB, R_WASM_MEMORY_ADDR_LEB
+	// since the other relocs is performed by reference.
+	relocs = reloc_code.relocs;
+	len = relocs.length;
+	for (let i = 0; i < len; i++) {
+		let reloc = relocs[i];
+		let off = reloc.offset;
+		let func = findFunctionForReloc(off);
+		if (!func)
+			continue;
+
+		let inst, opcodes = func.opcodes;
+		let ylen = opcodes.length;
+		for (let y = 0; y < ylen; y++) {
+			let opcode = opcodes[y];
+			if ((opcode._roff - codeSecOff) == off) {
+				inst = opcode;
+				break;
+			}
+		}
+
+		reloc.func = func;
+		reloc.inst = inst;
+		reloc.ref = symtable[reloc.index];
+	}
+
+	len = symtable.length;
+	for (let i = 0; i < len; i++) {
+		let symbol = symtable[i];
+		if (symbol.kind != 0x00)
+			continue;
+		let func = symbol.value;
+		if (func instanceof WasmFunction) {
+			func[__nsym] = symbol.name;
+		}
+	}
+	
+
+	let dataSections = {
+		'.rodata': {
+			dataSegments: [],
+		},
+		'.data': {
+			dataSegments: [],
+		},
+		'.bss': {
+			dataSegments: [],
+		}
+	};
+	let rodata = dataSections[".rodata"];
+	let data = dataSections[".data"];
+	let bss = dataSections[".bss"];
+
+	
+	let segments = linking._segments;
+	len = segments.length;
+	for (let i = 0; i < len; i++) {
+		let dataSegment = dataSegments[i];
+		let metadata = segments[i];
+		let name = metadata.name;
+		dataSegment[__nsym] = name;
+
+		if (name.startsWith(".rodata")) {
+			rodata.dataSegments.push(dataSegment);
+		} else if (name.startsWith(".data")) {
+			data.dataSegments.push(dataSegment);
+		} else if (name.startsWith(".bss")) {
+			bss.dataSegments.push(dataSegment);
+		}
+	}
+
+	console.log(dataSections);
 }
+
+
+
+
+
+
+
+
 
 
 

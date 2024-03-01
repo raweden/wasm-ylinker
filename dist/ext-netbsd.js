@@ -11,8 +11,8 @@ const WASM_PAGE_SIZE = (1 << 16);
  * u32  	object table count
  * .... count x 32-bit pointers (relative to start if count address)
  * 
- * each object is composed of a 8-byte prefix, where the high 4-byte is the type and
- * the low 4-bytes is the count of the value it holds, a 4-byte value of 0x0 indicates
+ * each object is composed of a 8-bit prefix, where the high 4-bit is the type and
+ * the low 4-bit is the count of the value it holds, a 4-bit value of 0x0 indicates
  * that a 4-byte unsigned integer value follows that tells the count or size of the object.
  * This type of encoding offers the best of two worlds.
  * - for array values this the number of contained object.
@@ -123,14 +123,14 @@ function generateNetbsdWebAssembly(ctx, mod) {
 
 	let initmem = mod.computeInitialMemory(mod.memory[0], true);
 	let data = new DataView(initmem.buffer);
-	console.log(initmem);
+	//console.log(initmem);
 
 	{	
 		let glob = mod.getGlobalByName("__stack_pointer");
-		console.log("__stack_pointer = %d", glob.init[0].value);
+		//console.log("__stack_pointer = %d", glob.init[0].value);
 		ctx.__stack_pointer = glob.init[0].value; // store it for later use.
 		glob = mod.getGlobalByName("lwp0");
-		console.log("lwp0 = %d", glob.init[0].value);
+		//console.log("lwp0 = %d", glob.init[0].value);
 		ctx.lwp0 = glob.init[0].value; // store it for later use.
 	}
 
@@ -139,7 +139,7 @@ function generateNetbsdWebAssembly(ctx, mod) {
 		let glob = mod.getGlobalByName(name);
 		if (!glob) 
 			return undefined;
-		console.log("%s = %d", name, glob.init[0].value);
+		//console.log("%s = %d", name, glob.init[0].value);
 		return glob.init[0].value;
 	}
 
@@ -270,6 +270,9 @@ function generateNetbsdWebAssembly(ctx, mod) {
 		bootinfo: "bootinfo",
 		__wasm_meminfo: "__wasm_meminfo",
 		__builtin_iosurfaceAddr: "__builtin_iosurfaceReqMem",
+		__kmem_data: "__kmem_data",
+		__wasm_kmeminfo: "__wasm_kmeminfo",
+		__mmblkd_head: "__mmblkd_head"
 	};
 
 	for (let p in rump_variant) {
@@ -317,7 +320,7 @@ function generateNetbsdWebAssembly(ctx, mod) {
 		
 	}
 
-	console.log(netbsd_wakern_info);
+	//console.log(netbsd_wakern_info);
 	let section = new WasmNetbsdKVOContainer(mod, "com.netbsd.kernel-locore", netbsd_wakern_info);
 	mod.sections.push(section);
 
@@ -397,7 +400,33 @@ function postOptimizeNetbsdUserBinaryAction(ctx, mod, options) {
 		}
 	}];
 
+	if (typeof mod[__nsym] != "string") {
+		mod[__nsym] = "test-name v.1.0.1";
+	}
+
 	replaceCallInstructions(ctx, mod, null, c99_builtin_to_inst);
+}
+
+function cleanupGlobalsAction(ctx, mod, options) {
+	
+	let globals = mod.globals;
+	let len = globals.length;
+	let idx = 0;
+	while (idx < len) {
+		let glob = globals[idx];
+		if (glob instanceof ImportedGlobal) {
+			idx++;
+			continue;
+		}
+
+		if (glob.usage > 0 || glob._usage > 0) {
+			idx++;
+			continue;
+		}
+
+		globals.splice(idx, 1);
+		len--;
+	}
 }
 
 
@@ -434,8 +463,10 @@ let _netbsdKernMainWorkflow = {
 		}, {
 			action: "filterModuleExports",
 			options: {
-				names: ["__wasm_call_ctors", "__indirect_function_table", "global_start", "syscall", "syscall_trap", "syscall_trap_handler", "lwp_trampoline", "uvm_total", "wasm_update_vmtotal_stats"]
+				names: ["__wasm_call_ctors", "__indirect_function_table", "global_start", "syscall", "syscall_trap", "syscall_trap_handler", "lwp_trampoline", "uvm_total", "wasm_update_vmtotal_stats", "new_uvmspace", "ref_uvmspace", "deref_uvmspace", "uvmspace_ref", "uvmspace_deref", "kmem_page_alloc", "kmem_page_free", "wasm_load_dylib", "wasm_find_dylib"]
 			}
+		}, {
+			action: "cleanupGlobals",
 		}, {
 			action: "output",
 			options: {
@@ -483,8 +514,10 @@ let _netbsdUserBinaryForkWorkflow = {
 		{
 			action: "filterModuleExports",
 			options: {
-				names: ["__wasm_call_ctors", "main", "start", "__indirect_function_table"]
+				names: ["__wasm_call_ctors", "main", "start", "__indirect_function_table", "new_uvmspace", "deref_uvmspace", "ref_uvmspace", "malloc", "free", "__spawn_user_lwp"]
 			}
+		}, {
+			action: "cleanupGlobals",
 		}, {
 			action: "output",
 			options: {
@@ -493,7 +526,40 @@ let _netbsdUserBinaryForkWorkflow = {
 						  {type: 0x00, name: ".debug_ranges"}, 
 						  {type: 0x00, name: ".debug_abbrev"},
 						  {type: 0x00, name: ".debug_line"},
-						  {type: 0x00, name: ".debug_str"}]
+						  {type: 0x00, name: ".debug_str"}],
+				mempad: true,
+			}
+		}
+	]
+};
+
+let _netbsdDynldBinaryWorkflow = {
+	name: "netbsd 10.99.4 dynld Binary",
+	id: "netbsd_10.dynld-binary",
+	actions: [
+		{
+			action: "convertMemory",
+			options: {
+				type: "import", 	// no value leaves the type as is.
+				memidx: 0,
+				// min: 			// no value leaves the min as is.
+				new_name: "__linear_memory",
+				max: 1954,
+				shared: true,
+			}
+		}, {
+			action: "postOptimizeNetbsdUserBinary",
+			options: undefined,
+		}, {
+			action: "output",
+			options: {
+				exclude: [{type: 0x00, name: ".debug_info"},
+						  {type: 0x00, name: ".debug_loc"},
+						  {type: 0x00, name: ".debug_ranges"}, 
+						  {type: 0x00, name: ".debug_abbrev"},
+						  {type: 0x00, name: ".debug_line"},
+						  {type: 0x00, name: ".debug_str"}],
+				mempad: true,
 			}
 		}
 	]
@@ -515,9 +581,14 @@ const netbsd_ext = {
     }, {
         name: "postOptimizeNetbsdUserBinary",
         handler: postOptimizeNetbsdUserBinaryAction
+    }, {
+        name: "cleanupGlobals",
+        handler: cleanupGlobalsAction
     }],
-    flowTemplates: [_netbsdKernMainWorkflow, _netbsdKernModuleWorkflow, _netbsdUserBinaryForkWorkflow
-
+    flowTemplates: [_netbsdKernMainWorkflow, 
+					_netbsdKernModuleWorkflow, 
+					_netbsdUserBinaryForkWorkflow,
+					_netbsdDynldBinaryWorkflow
     ],
     uiInspect: [{
         type: "binary",

@@ -165,6 +165,7 @@ function convertMemoryAction(ctx, mod, options) {
 	let mem;
 	let exp;
 	let type;
+	let new_name = options.new_name;
 
 	if (typeof options.memory_name == "string") {
 		// check mod.exports
@@ -206,7 +207,7 @@ function convertMemoryAction(ctx, mod, options) {
 					let org = mem;
 					mem = new ImportedMemory();
 					mem.module = "env";
-					mem.name = "memory";
+					mem.name = typeof new_name == "string" ? new_name : "memory";
 					mem.min = org.min;
 					mem.max = org.max;
 					mem.shared = org.shared;
@@ -270,6 +271,10 @@ function convertMemoryAction(ctx, mod, options) {
 		} else {
 			console.warn("options.min < mem.min");
 		}
+	}
+
+	if (typeof new_name == "string" && mem instanceof ImportedMemory) {
+		mem.name = new_name;
 	}
 }
 
@@ -414,7 +419,7 @@ function extractDataSegmentsAction(ctx, mod, options) {
 		
 		buffers = tmod.encode({});
 
-		console.log(buffers);
+		//console.log(buffers);
 
 		// data 0x0B
 		let tmp = new WebAssemblyDataSection(mod); // detached 
@@ -504,6 +509,7 @@ function outputAction(ctx, mod, options) {
 	let sections = mod.sections;
 	let len = sections.length;
 	let buffers = [];
+	let passed_opts = typeof options == "object" && options != null ? Object.assign({}, options) : {};
 
 	if (Array.isArray(options.exclude)) {
 		let exclude = options.exclude;
@@ -534,6 +540,8 @@ function outputAction(ctx, mod, options) {
 
 			exported[y] = !match;
 		}
+
+		delete passed_opts.exclude;
 	}
 
     let header = new Uint8Array(8);
@@ -560,7 +568,7 @@ function outputAction(ctx, mod, options) {
 				continue;
 			}
 		} else if (section instanceof WebAssemblySection) {
-			let sub = section.encode({});
+			let sub = section.encode(passed_opts);
 			if (Array.isArray(sub)) {
 				let xlen = sub.length;
 				for (let x = 0; x < xlen; x++) {
@@ -1165,11 +1173,51 @@ const atomic_op_replace_map = [
 			calle._usage--;
 			return true;
 		}
-	},{
+	}, {
 		name: {module: "__builtin", name: "i64_atomic_rmw_cmpxchg"},
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I64, WA_TYPE_I64], [WA_TYPE_I64]),
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE49, 3, 0);
+			calle._usage--;
+			return true;
+		}
+	}, {
+		name: {module: "__builtin", name: "memory_size"},
+		type: WasmType.create(null, [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0x3f, memidx: 0};
+			calle._usage--;
+			return true;
+		}
+	}, {
+		name: {module: "__builtin", name: "memory_grow"},
+		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0x40, memidx: 0};
+			calle._usage--;
+			return true;
+		}
+	}, {
+		name: {module: "__builtin", name: "memory_fill"},
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], null),
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0xfc0b, memidx: 0};
+			calle._usage--;
+			return true;
+		}
+	}, {
+		name: {module: "__builtin", name: "f64_ceil"},
+		type: WasmType.create([WA_TYPE_F64], [WA_TYPE_F64]),
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0x9b};
+			calle._usage--;
+			return true;
+		}
+	}, {
+		name: {module: "__builtin", name: "f64_floor"},
+		type: WasmType.create([WA_TYPE_F64], [WA_TYPE_F64]),
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0x9c};
 			calle._usage--;
 			return true;
 		}
@@ -1664,6 +1712,7 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
  */
 function filterModuleExports(ctx, mod, options) {
 
+	let explicit = mod._explicitExported;
 	let callback, names, regexps;
 	let keptnames = [];
 	if (typeof options.callback == "function") {
@@ -1691,6 +1740,8 @@ function filterModuleExports(ctx, mod, options) {
 		let keep;
 		if (callback) {
 			keep = callback(exp);
+		} else if (explicit.indexOf(exp) !== -1) {
+			keep = true;
 		} else {
 			let name = exp.name;
 			keep = names.indexOf(name) !== -1;
@@ -1972,7 +2023,7 @@ function analyzeForkEntryPoint(ctx, module, options) {
 			}
 		}
 	}
-
+	let forkFromGlobal, forkArgGlobal;
 	let inForkGlobal = new ImportedGlobal();
 	inForkGlobal.module = "sys";
 	inForkGlobal.name = "in_fork";
@@ -1980,13 +2031,25 @@ function analyzeForkEntryPoint(ctx, module, options) {
 	inForkGlobal.mutable = true;
 	// or
 	inForkGlobal = WasmGlobal.createGlobalInt32(0, true);
+	inForkGlobal[__nsym] = "in_fork";
+	inForkGlobal._usage = 1;
 	module.appendExport("in_fork", inForkGlobal);
+	if (module.globals.indexOf(inForkGlobal) == -1)
+		module.globals.push(inForkGlobal);
 
 	forkFromGlobal = WasmGlobal.createGlobalInt32(0, true);
+	forkFromGlobal[__nsym] = "fork_from";
+	forkFromGlobal._usage = 1;
 	module.appendExport("fork_from", forkFromGlobal);
+	if (module.globals.indexOf(forkFromGlobal) == -1)
+		module.globals.push(forkFromGlobal);
 
 	forkArgGlobal = WasmGlobal.createGlobalInt32(0, true); // temporary used to hold one argument.
+	forkArgGlobal[__nsym] = "fork_arg";
+	forkArgGlobal._usage = 1;
 	module.appendExport("fork_arg", forkArgGlobal);
+	if (module.globals.indexOf(forkArgGlobal) == -1)
+		module.globals.push(forkArgGlobal);
 
 	// modify __sys_fork() to return 0 when in_fork is not 0, also unset in_fork before return
 	let opcodes = [];
@@ -2003,6 +2066,7 @@ function analyzeForkEntryPoint(ctx, module, options) {
 				 {opcode: 0x0b});						// end
 	forkFn.opcodes.unshift.apply(forkFn.opcodes, opcodes); // prepend opcodes.
 	forkFn._opcodeDirty = true;
+	inForkGlobal._usage += 2;
 
 	console.log(forkFn);
 	console.log(nmap);
@@ -2036,6 +2100,9 @@ function analyzeForkEntryPoint(ctx, module, options) {
 							 {opcode: 0x47}, 						// i32.ne
 							 inst);									// if
  */
+		forkFromGlobal._usage += 1;
+		forkArgGlobal._usage += 1;
+		inForkGlobal._usage += 1;
 
 		module.appendExport("run_script", func);
 	}
