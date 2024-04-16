@@ -13,3 +13,9 @@ dist/workflows
 dist/todo.md
 dist/wat-example.wat
 archive/**
+node_modules/**
+.vscode/tab-goups.localStorage.json
+dist/lab/**
+
+# bin files
+bin/wasm-ylinker.map
