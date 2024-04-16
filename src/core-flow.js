@@ -1,7 +1,50 @@
 
+/*
+ * Copyright (c) 2023, 2024, Jesper Svensson All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ * 
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ * 3. All advertising materials mentioning features or use of this software must
+ *    display the following acknowledgement: This product includes software
+ *    developed by the Jesper Svensson.
+ * 4. Neither the name of the Jesper Svensson nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission. 
+ * 
+ * THIS SOFTWARE IS PROVIDED BY Jesper Svensson AS IS AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+ * EVENT SHALL Jesper Svensson BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+import { SECTION_TYPE_EXPORT, SECTION_TYPE_MEMORY, SECTION_TYPE_IMPORT, SECTION_TYPE_GLOBAL, SECTION_TYPE_DATA,
+ 	WA_TYPE_I32, WA_TYPE_I64, WA_TYPE_F32, WA_TYPE_F64, __nsym} from "./core/const";	
+import { WasmFunction, WasmGlobal, WasmType, WasmLocal, 
+	ImportedFunction, ImportedMemory, ImportedGlobal, 
+	ExportedFunction, ExportedMemory, ExportedGlobal,
+	WebAssemblySection } from "./core/types";
+import { AtomicInst, BlockInst, ReturnInst, IfInst } from "./core/inst";
+import { WebAssemblyFuncTypeSection, WebAssemblyFunctionSection, WebAssemblyTableSection, WebAssemblyMemorySection,
+	WebAssemblyGlobalSection, WebAssemblyDataSection, WebAssemblyModule, traverseStack} from "./core/WebAssembly";
+import { WebAssemblyCustomSectionName } from "./core/name";
+
 // The core flow is was is common for GUI & Shell command, and is not part of a specific type of binary.
 
-let _flowActions = {
+const MODULE_BUILT_IN = "__builtin";
+
+export const _flowActions = {
 	postOptimizeAtomicInst: {
 		handler: postOptimizeAtomicInst
 	},
@@ -49,13 +92,51 @@ let _flowActions = {
 	},
 };
 
+export function namedGlobalsMap(mod) {
 
-function getWorkflowParameterValues() {
+	if (!mod.globals)
+		return;
+
+	let arr1 = [];
+	let arr2 = [];
+	let unamedGlobals = [];
+	let map = {};
+	let globals = mod.globals;
+	let exported = mod.exports;
+	let len = exported.length;
+	for (let i = 0; i < len; i++) {
+		let exp = exported[i];
+		if (exp.type != "global")
+			continue;
+		arr1.push(exp.name);
+		arr2.push(exp.global);
+		map[exp.name] = exp.global;
+	}
+
+	len = globals.length;
+	for (let i = 0; i < len; i++) {
+		let glob = globals[i];
+		if (typeof glob[__nsym] == "string") {
+			let name = glob[__nsym];
+			map[name] = glob;
+		} else if (arr2.indexOf(glob) === -1) {
+			unamedGlobals.push(glob);
+		}
+	}
+
+	console.log(map);
+	console.log(unamedGlobals);
+
+	return map;
+}
+
+
+export function getWorkflowParameterValues() {
 
 	let obj = {};
 	let files = [];
-	let viewMap = _workflowParamViews;
-	let params = _workflowParameters;
+	let viewMap = globalThis._workflowParamViews;
+	let params = globalThis._workflowParameters;
 	let len = !Array.isArray(params) ? 0 : params.length;
 	let values = {};
 	for (let i = 0; i < len; i++) {
@@ -74,7 +155,7 @@ function getWorkflowParameterValues() {
 	return obj;
 }
 
-function runWorkflowActions(mod, actions, defaultContext, runOptions) {
+export function runWorkflowActions(mod, actions, defaultContext, runOptions) {
 
 	/*
 	let len = actions.length;
@@ -324,10 +405,10 @@ function convertToImportedGlobalAction(ctx, mod, options) {
 
 function getGlobalInitialValueAction(ctx, mod, options) {
 
-	if (!_namedGlobals)
-		_namedGlobals = namedGlobalsMap(mod);
+	if (!globalThis._namedGlobals)
+		globalThis._namedGlobals = namedGlobalsMap(mod);
 	let name = options.name;
-	let glob = _namedGlobals[name];
+	let glob = globalThis._namedGlobals[name];
 	console.log("%s = %d", name, glob.init[0].value);
 }
 
@@ -423,7 +504,7 @@ function extractDataSegmentsAction(ctx, mod, options) {
 
 		// data 0x0B
 		let tmp = new WebAssemblyDataSection(mod); // detached 
-		buf = tmp.encode({dataSegments: segments});
+		let buf = tmp.encode({dataSegments: segments});
 		//buffers.push(buf.buffer);
 
 		// custom:names 0x00
@@ -477,8 +558,8 @@ function extractDataSegmentsAction(ctx, mod, options) {
 					}, rejectFn);
 				}, rejectFn);
 
-                if (typeof updateFileSizeInUI == "function")
-				    updateFileSizeInUI(file, blob.size);
+                if (typeof globalThis.updateFileSizeInUI == "function")
+					globalThis.updateFileSizeInUI(file, blob.size);
 
 			}, rejectFn);
 
@@ -509,6 +590,7 @@ function outputAction(ctx, mod, options) {
 	let sections = mod.sections;
 	let len = sections.length;
 	let buffers = [];
+	let input = ctx.input;
 	let passed_opts = typeof options == "object" && options != null ? Object.assign({}, options) : {};
 
 	if (Array.isArray(options.exclude)) {
@@ -544,13 +626,11 @@ function outputAction(ctx, mod, options) {
 		delete passed_opts.exclude;
 	}
 
-    let header = new Uint8Array(8);
-    buffers.push(header.buffer);
-    header = new DataView(header.buffer);
+    let header, hbuf = new Uint8Array(8);
+    buffers.push(hbuf.buffer);
+    header = new DataView(hbuf.buffer);
     header.setUint32(0, 0x6D736100, true);
     header.setUint32(4, mod._version, true);
-
-	prepareModuleEncode(mod);
 
 	for (let i = 0;i < len;i++) {
 		let section = sections[i];
@@ -603,8 +683,8 @@ function outputAction(ctx, mod, options) {
 				writable.close().then(resolveFn, rejectFn);
 			}, rejectFn);
 
-			if (typeof updateFileSizeInUI == "function")
-				updateFileSizeInUI(file, blob.size);
+			if (typeof globalThis.updateFileSizeInUI == "function")
+				globalThis.updateFileSizeInUI(file, blob.size);
 		}, rejectFn);
 
 		
@@ -816,9 +896,11 @@ function indexOfFuncType(mod, argv, retv) {
 	return -1;
 }
 
+/*
 function generateVirtualMemoryWrapperAction(ctx, module, options) {
 	generateVirtualMemoryWrapper(module);
 }
+*/
 
 function postOptimizeKernSideAction(ctx, module, options) {
 
@@ -1025,7 +1107,7 @@ const atomic_op_replace_map = [
 		name: {module: "__builtin", name: "i32_atomic_rmw16_cmpxchg_u"},
 		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr, scope, calle) {
-			arr[index] = new AtomicInst(0xFE4B, 0, 0);
+			arr[index] = new AtomicInst(0xFE4B, 1, 0);
 			calle._usage--;
 			return true;
 		}
@@ -1033,7 +1115,7 @@ const atomic_op_replace_map = [
 		name: {module: "__builtin", name: "i32_atomic_load"},
 		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
 		replace: function(inst, index, arr, scope, calle) {
-			arr[index] = new AtomicInst(0xFE10, 1, 0);
+			arr[index] = new AtomicInst(0xFE10, 2, 0);
 			calle._usage--;
 			return true;
 		}
@@ -1221,6 +1303,42 @@ const atomic_op_replace_map = [
 			calle._usage--;
 			return true;
 		}
+	}, {
+		module: MODULE_BUILT_IN,
+		name: "memory_copy",
+		type: WasmType.create(null, [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0xfc0a, memidx1: 0, memidx2: 0};
+			calle._usage--;
+			return true;
+		}
+	}, {
+		module: MODULE_BUILT_IN,
+		name: "memory_size",
+		type: WasmType.create(null, [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0x3f, memidx: 0};
+			calle._usage--;
+			return true;
+		}
+	}, {
+		module: MODULE_BUILT_IN,
+		name: "memory_grow",
+		type: WasmType.create([WA_TYPE_I32], [WA_TYPE_I32]),
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0x40, memidx: 0};
+			calle._usage--;
+			return true;
+		}
+	}, {
+		module: MODULE_BUILT_IN,
+		name: "memory_fill",
+		type: WasmType.create([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], null),
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0xfc0b, memidx: 0};
+			calle._usage--;
+			return true;
+		}
 	}
 ];
 
@@ -1294,7 +1412,7 @@ const memory_op_replace_map = [{ 							// memory operations.
 		// memory.fill instruction does not. check for drop instruction but if not found we must fake
 		// the return of memset 
 		replace: memset_to_inst_handler
-}];
+	}];
 
 function localUsedInRange(instructions, local, start, end) {
 
@@ -1422,8 +1540,6 @@ function memset_to_inst_handler(inst, index, arr, func) {
 	return false;
 }
 
-let _namedGlobals;
-
 function postOptimizeAtomicInst(ctx, mod) {
 
 	replaceCallInstructions(ctx, mod, null, atomic_op_replace_map)
@@ -1532,7 +1648,7 @@ function postOptimizeMemInstAction(ctx, mod) {
  * @param  {Array} inst_replace A array of objects in the format described above.
  * @return {void}              
  */
-function replaceCallInstructions(ctx, mod, functions, inst_replace) {
+export function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 
 	let opsopt = [];
 	
@@ -1540,11 +1656,13 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 	let namemap = new Map();
 	let funcmap = new Map();
 	let names = [];
-	let ylen = inst_replace.length;
+	let xlen, ylen = inst_replace.length;
 	for (let y = 0; y < ylen; y++) {
 		let handler = inst_replace[y];
 		let name = handler.name;
-		if (typeof name == "string") {
+		if (typeof handler.name == "string" && typeof handler.module == "string") {
+			impfnarr.push(handler);
+		} else if (typeof name == "string") {
 			if (namemap.has(name)) {
 				let tmp = namemap.get(name);
 				if (!Array.isArray(tmp)) {
@@ -1596,6 +1714,9 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 	for (let x = 0; x < xlen; x++) {
 		let obj = impfnarr[x];
 		let imp = obj.name;
+		if (typeof imp == "string") {
+			imp = obj;
+		}
 		for (let y = 0; y < ylen; y++) {
 			let func = fns[y];
 			if (!(func instanceof ImportedFunction))
@@ -1705,10 +1826,10 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
  * or
  * options.names = Array of strings.
  * 
- * @param  {[type]} ctx     [description]
- * @param  {[type]} mod     [description]
- * @param  {[type]} options [description]
- * @return {[type]}         [description]
+ * @param  {Object} ctx
+ * @param  {WebAssemblyModule} mod
+ * @param  {Object} options
+ * @return {void}
  */
 function filterModuleExports(ctx, mod, options) {
 
@@ -1842,12 +1963,12 @@ function convertToImportedGlobal(mod, oldGlobal, newGlobal) {
 	}
 
 	let start = 0;
-	functions = mod.functions;
-	ylen = functions.length;
+	let functions = mod.functions;
+	let ylen = functions.length;
 	for (let y = start; y < ylen; y++) {
 		let func = functions[y];
 		if (!(func instanceof ImportedFunction)) {
-			start = i - 1;
+			start = y - 1;
 			break;
 		}
 	}
@@ -1998,7 +2119,7 @@ function analyzeForkEntryPoint(ctx, module, options) {
 	console.log(callsite);
 	callers = callsite.callers;
 
-	len = callers.length
+	let len = callers.length
 	for (let i = 0; i < len; i++) {
 		let callsite = callers[i];
 		let func = callsite.func;

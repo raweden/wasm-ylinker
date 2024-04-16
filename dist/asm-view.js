@@ -1274,7 +1274,11 @@ fetch(url).then(function(res) {
 	res.arrayBuffer().then(function(buf) {
 
 		moduleBuffer = buf;
-		let mod = parseWebAssemblyBinary(buf);
+		let mod = parseWebAssemblyBinary(buf, {
+            customSections: function() {
+                
+            }
+        });
         let fn = mod.getFunctionByName("_c_NSColor__initialize");
 		//let fn = mod.functions[1463];
         //let fn = mod.functions[178];

@@ -70,7 +70,7 @@ class WasmNetbsdKVOContainer extends WebAssemblyCustomSection {
 		totsz = secsz;
 		totsz += lengthULEB128(totsz);
 
-		let buf = new ArrayBuffer(totsz + 1);
+		let buf = new Uint8Array(totsz + 1);
         let data = new ByteArray(buf);
         data.writeUint8(SECTION_TYPE_CUSTOM);
         data.writeULEB128(secsz);
@@ -269,10 +269,11 @@ function generateNetbsdWebAssembly(ctx, mod) {
 		l2_addr: "PDPpaddr",
 		bootinfo: "bootinfo",
 		__wasm_meminfo: "__wasm_meminfo",
-		__builtin_iosurfaceAddr: "__builtin_iosurfaceReqMem",
+		__dsrpc_server_head: "__dsrpc_server_head",
 		__kmem_data: "__kmem_data",
 		__wasm_kmeminfo: "__wasm_kmeminfo",
-		__mmblkd_head: "__mmblkd_head"
+		__mmblkd_head: "__mmblkd_head",
+		scheduler_tasks: "scheduler_tasks",
 	};
 
 	for (let p in rump_variant) {
@@ -463,7 +464,8 @@ let _netbsdKernMainWorkflow = {
 		}, {
 			action: "filterModuleExports",
 			options: {
-				names: ["__wasm_call_ctors", "__indirect_function_table", "global_start", "syscall", "syscall_trap", "syscall_trap_handler", "lwp_trampoline", "uvm_total", "wasm_update_vmtotal_stats", "new_uvmspace", "ref_uvmspace", "deref_uvmspace", "uvmspace_ref", "uvmspace_deref", "kmem_page_alloc", "kmem_page_free", "wasm_load_dylib", "wasm_find_dylib"]
+				names: ["__wasm_call_ctors", "__indirect_function_table", "global_start", "syscall", "syscall_trap", "syscall_trap_handler", "lwp_trampoline", "uvm_total", "wasm_update_vmtotal_stats", "new_uvmspace", "ref_uvmspace", "deref_uvmspace", "uvmspace_ref", "uvmspace_deref", "kmem_page_alloc", "kmem_page_free", "wasm_load_dylib", "wasm_find_dylib", 
+				"run_vdrain_thread", "DSMessageChannelConnect", "DSMessageChannelDisconnect", "DSMessageServerIsReady"]
 			}
 		}, {
 			action: "cleanupGlobals",
@@ -488,6 +490,53 @@ let _netbsdKernModuleWorkflow = {
 	actions: []
 };
 
+
+function generateWasmRTLDUserBinary(ctx, mod) {
+
+
+	{	
+		let glob = mod.getGlobalByName("__stack_pointer");
+		//console.log("__stack_pointer = %d", glob.init[0].value);
+		ctx.__stack_pointer = glob.init[0].value; // store it for later use.
+	}
+
+	function getValueByName(name) {
+
+		let glob = mod.getGlobalByName(name);
+		if (!glob) 
+			return undefined;
+		//console.log("%s = %d", name, glob.init[0].value);
+		return glob.init[0].value;
+	}
+
+	function isConst(opcode) {
+		return opcode == 0x41 || opcode == 0x42 || opcode == 0x43 || opcode == 0x44;
+	}
+
+	//console.log(netbsd_wakern_info);
+
+	let g1 = mod.getGlobalByName("__stack_pointer");
+	let g2 = new ImportedGlobal();
+	g2.module = "kern";
+	g2.name = "__stack_pointer";
+	g2.type = g1.type;
+	g2.mutable = g1.mutable;
+	mod.replaceGlobal(g1, g2, true);
+	mod.removeExportByRef(g1);
+
+	let sec = mod.findSection(SECTION_TYPE_IMPORT);
+	if (sec)
+		sec.markDirty();
+
+	sec = mod.findSection(SECTION_TYPE_EXPORT);
+	if (sec)
+		sec.markDirty();
+
+	sec = mod.findSection(SECTION_TYPE_GLOBAL);
+	if (sec)
+		sec.markDirty();
+}
+
 let _netbsdUserBinaryForkWorkflow = {
 	name: "netbsd 10.99.4 User Binary with emulated fork (workflow)",
 	id: "netbsd_10.user-binary+emul-fork",
@@ -502,12 +551,15 @@ let _netbsdUserBinaryForkWorkflow = {
 				shared: true,
 			}
 		}, {
-			action: "postOptimizeNetbsdUserBinary",
+			action: "postOptimizeAtomicInst",
 			options: undefined,
 		}, {
+			action: "generateWasmRTLDUserBinary",
+			options: undefined
+		}, /* {
 			action: "analyzeForkEntryPoint",
 			options: undefined,
-		},/*{
+		},*//*{
 			action: "addToExports",
 			options: {exports: ["__stack_pointer"]},
 		},*/ 
@@ -584,7 +636,10 @@ const netbsd_ext = {
     }, {
         name: "cleanupGlobals",
         handler: cleanupGlobalsAction
-    }],
+    }, {
+		name: "generateWasmRTLDUserBinary",
+		handler: generateWasmRTLDUserBinary
+	}],
     flowTemplates: [_netbsdKernMainWorkflow, 
 					_netbsdKernModuleWorkflow, 
 					_netbsdUserBinaryForkWorkflow,

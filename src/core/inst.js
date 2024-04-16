@@ -1,19 +1,43 @@
 
-const WA_TYPE_I32 = 0x7F;
-const WA_TYPE_I64 = 0x7E;
-const WA_TYPE_F32 = 0x7D;
-const WA_TYPE_F64 = 0x7C;
-const WA_TYPE_VOID = 0x00;
-const WA_TYPE_V128 = 0x7b;
-const WA_TYPE_FUNC_REF = 0x70;
-const WA_TYPE_EXTERN_REF = 0x67;
-const WA_TYPE_ANY = Symbol("@any");
-const WA_TYPE_NUMRIC = Symbol("@type-numric");
+/*
+ * Copyright (c) 2023, 2024, Jesper Svensson All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ * 
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ * 3. All advertising materials mentioning features or use of this software must
+ *    display the following acknowledgement: This product includes software
+ *    developed by the Jesper Svensson.
+ * 4. Neither the name of the Jesper Svensson nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission. 
+ * 
+ * THIS SOFTWARE IS PROVIDED BY Jesper Svensson AS IS AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+ * EVENT SHALL Jesper Svensson BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+import { WA_TYPE_I32, WA_TYPE_I64, WA_TYPE_F32, WA_TYPE_F64, WA_TYPE_VOID, WA_TYPE_V128, WA_TYPE_FUNC_REF, WA_TYPE_EXTERN_REF } from "./const"
+
+export const WA_TYPE_ANY = Symbol("@any");
+export const WA_TYPE_NUMRIC = Symbol("@type-numric");
 
 const WA_LOCAL_TYPE = Symbol("@local-type"); // indicates that the pull/push value is of the type of the local at given index.
 
 const WA_ROLE_ADDR = "addr";
-const WA_TYPE_ADDR = WA_TYPE_I32; //Symbol("@addr");   // everything that is a memory address has this type.. 
+export const WA_TYPE_ADDR = WA_TYPE_I32; //Symbol("@addr");   // everything that is a memory address has this type.. 
 
 // the .type or .flag field [8 bits = type][8 bit = natural alignment (memory load/store)][16 bit flags]
 const OP_TYPE_CTRL = 0x00;
@@ -43,8 +67,651 @@ const NAT_ALIGN_128 = (5 << 8);
 const __t__ = Symbol("@type");
 const ______ = undefined;
 
-const opclsmap = new Map();
-const opcode_info = [
+/**
+ * Returns the instruction name given the two bytes that of it, not all instruction use two bytes.
+ * @param {integer} opt1 
+ * @param {integer} opt2 
+ * @returns {?string}
+ */
+function instname(opt1, opt2) {
+
+    switch(opt1) {
+        case 0x00: return "unreachable";
+        case 0x01: return "nop"
+        case 0x02: return "block";
+        case 0x03: return "loop";
+        case 0x04: return "if";
+        case 0x05: return "else";
+        case 0x0B: return "end"
+        case 0x0C: return "br";
+        case 0x0D: return "br_if";
+        case 0x0E: return "br_table";
+        case 0x0F: return "return";
+        case 0x10: return "call";
+        case 0x11: return "call_indirect";
+        // https://github.com/WebAssembly/tail-call/blob/main/proposals/tail-call/Overview.md
+        // return_call          0x12    [t3* t1*] -> [t4*]
+        // return_call_indirect 0x13    [t3* t1* i32] -> [t4*]
+        case 0x1A: return "drop";
+        case 0x1B: return "select";
+        case 0x20: return "local.get";
+        case 0x21: return "local.set";
+        case 0x22: return "local.tee";
+        case 0x23: return "global.get";
+        case 0x24: return "global.set";
+
+        // wasm 2.0
+        case 0x25: return "table.get";
+        case 0x26: return "table.set";
+
+        case 0x28: return "i32.load";
+        case 0x29: return "i64.load";
+        case 0x2A: return "f32.load";
+        case 0x2B: return "f64.load";
+        case 0x2C: return "i32.load8_s";
+        case 0x2D: return "i32.load8_u";
+        case 0x2E: return "i32.load16_s";
+        case 0x2F: return "i32.load16_u";
+        case 0x30: return "i64.load8_s";
+        case 0x31: return "i64.load8_u";
+        case 0x32: return "i64.load16_s";
+        case 0x33: return "i64.load16_u";
+        case 0x34: return "i64.load32_s";
+        case 0x35: return "i64.load32_u";
+        case 0x36: return "i32.store";
+        case 0x37: return "i64.store";
+        case 0x38: return "f32.store";
+        case 0x39: return "f64.store";
+        case 0x3A: return "i32.store8";
+        case 0x3B: return "i32.store16";
+        case 0x3C: return "i64.store8";
+        case 0x3D: return "i64.store16";
+        case 0x3E: return "i64.store32";
+        case 0x3F: return "memory.size";
+        case 0x40: return "memory.grow";
+        case 0xFE: // Atomic Memory Instructions
+        {
+            switch (opt2) {
+                case 0x00: return "memory.atomic.notify";
+                case 0x01: return "memory.atomic.wait32";
+                case 0x02: return "memory.atomic.wait64";
+                case 0x03: return "atomic.fence";
+
+                case 0x10: return "i32.atomic.load";
+                case 0x11: return "i64.atomic.load";
+                case 0x12: return "i32.atomic.load8_u";
+                case 0x13: return "i32.atomic.load16_u";
+                case 0x14: return "i64.atomic.load8_u";
+                case 0x15: return "i64.atomic.load16_u";
+                case 0x16: return "i64.atomic.load32_u";
+                case 0x17: return "i32.atomic.store";
+                case 0x18: return "i64.atomic.store";
+                case 0x19: return "i32.atomic.store8";
+                case 0x1A: return "i32.atomic.store16";
+                case 0x1B: return "i64.atomic.store8";
+                case 0x1C: return "i64.atomic.store16";
+                case 0x1D: return "i64.atomic.store32";
+
+                case 0x1E: return "i32.atomic.rmw.add";
+                case 0x1F: return "i64.atomic.rmw.add";
+                case 0x20: return "i32.atomic.rmw8.add_u";
+                case 0x21: return "i32.atomic.rmw16.add_u";
+                case 0x22: return "i64.atomic.rmw8.add_u";
+                case 0x23: return "i64.atomic.rmw16.add_u";
+                case 0x24: return "i64.atomic.rmw32.add_u";
+
+                case 0x25: return "i32.atomic.rmw.sub";
+                case 0x26: return "i64.atomic.rmw.sub";
+                case 0x27: return "i32.atomic.rmw8.sub_u";
+                case 0x28: return "i32.atomic.rmw16.sub_u";
+                case 0x29: return "i64.atomic.rmw8.sub_u";
+                case 0x2A: return "i64.atomic.rmw16.sub_u";
+                case 0x2B: return "i64.atomic.rmw32.sub_u";
+
+                case 0x2C: return "i32.atomic.rmw.and";
+                case 0x2D: return "i64.atomic.rmw.and";
+                case 0x2E: return "i32.atomic.rmw8.and_u";
+                case 0x2F: return "i32.atomic.rmw16.and_u";
+                case 0x30: return "i64.atomic.rmw8.and_u";
+                case 0x31: return "i64.atomic.rmw16.and_u";
+                case 0x32: return "i64.atomic.rmw32.and_u";
+
+                case 0x33: return "i32.atomic.rmw.or";
+                case 0x34: return "i64.atomic.rmw.or";
+                case 0x35: return "i32.atomic.rmw8.or_u";
+                case 0x36: return "i32.atomic.rmw16.or_u";
+                case 0x37: return "i64.atomic.rmw8.or_u";
+                case 0x38: return "i64.atomic.rmw16.or_u";
+                case 0x39: return "i64.atomic.rmw32.or_u";
+
+                case 0x3A: return "i32.atomic.rmw.xor";
+                case 0x3B: return "i64.atomic.rmw.xor";
+                case 0x3C: return "i32.atomic.rmw8.xor_u";
+                case 0x3D: return "i32.atomic.rmw16.xor_u";
+                case 0x3E: return "i64.atomic.rmw8.xor_u";
+                case 0x3F: return "i64.atomic.rmw16.xor_u";
+                case 0x40: return "i64.atomic.rmw32.xor_u";
+
+                case 0x41: return "i32.atomic.rmw.xchg";
+                case 0x42: return "i64.atomic.rmw.xchg";
+                case 0x43: return "i32.atomic.rmw8.xchg_u";
+                case 0x44: return "i32.atomic.rmw16.xchg_u";
+                case 0x45: return "i64.atomic.rmw8.xchg_u";
+                case 0x46: return "i64.atomic.rmw16.xchg_u";
+                case 0x47: return "i64.atomic.rmw32.xchg_u";
+
+                case 0x48: return "i32.atomic.rmw.cmpxchg";
+                case 0x49: return "i64.atomic.rmw.cmpxchg";
+                case 0x4A: return "i32.atomic.rmw8.cmpxchg_u";
+                case 0x4B: return "i32.atomic.rmw16.cmpxchg_u";
+                case 0x4C: return "i64.atomic.rmw8.cmpxchg_u";
+                case 0x4D: return "i64.atomic.rmw16.cmpxchg_u";
+                case 0x4E: return "i64.atomic.rmw32.cmpxchg_u";
+                default:
+                    return null;
+            }
+        }
+
+        // Numeric Instructions
+
+        case 0x41: return "i32.const";
+        case 0x42: return "i64.const";
+        case 0x43: return "f32.const";
+        case 0x44: return "f64.const";
+
+        case 0x45: return "i32.eqz";
+        case 0x46: return "i32.eq";
+        case 0x47: return "i32.ne";
+        case 0x48: return "i32.lt_s";
+        case 0x49: return "i32.lt_u";
+        case 0x4A: return "i32.gt_s";
+        case 0x4B: return "i32.gt_u";
+        case 0x4C: return "i32.le_s";
+        case 0x4D: return "i32.le_u";
+        case 0x4E: return "i32.ge_s";
+        case 0x4F: return "i32.ge_u";
+
+        case 0x50: return "i64.eqz";
+        case 0x51: return "i64.eq";
+        case 0x52: return "i64.ne";
+        case 0x53: return "i64.lt_s";
+        case 0x54: return "i64.lt_u";
+        case 0x55: return "i64.gt_s";
+        case 0x56: return "i64.gt_u";
+        case 0x57: return "i64.le_s";
+        case 0x58: return "i64.le_u";
+        case 0x59: return "i64.ge_s";
+        case 0x5A: return "i64.ge_u";
+
+        case 0x5B: return "f32.eq";
+        case 0x5C: return "f32.ne";
+        case 0x5D: return "f32.lt";
+        case 0x5E: return "f32.gt";
+        case 0x5F: return "f32.le";
+        case 0x60: return "f32.ge";
+
+        case 0x61: return "f64.eq";
+        case 0x62: return "f64.ne";
+        case 0x63: return "f64.lt";
+        case 0x64: return "f64.gt";
+        case 0x65: return "f64.le";
+        case 0x66: return "f64.ge";
+
+        case 0x67: return "i32.clz";
+        case 0x68: return "i32.ctz";
+        case 0x69: return "i32.popcnt";
+        case 0x6A: return "i32.add";
+        case 0x6B: return "i32.sub";
+        case 0x6C: return "i32.mul";
+        case 0x6D: return "i32.div_s";
+        case 0x6E: return "i32.div_u";
+        case 0x6F: return "i32.rem_s";
+        case 0x70: return "i32.rem_u";
+        case 0x71: return "i32.and";
+        case 0x72: return "i32.or";
+        case 0x73: return "i32.xor";
+        case 0x74: return "i32.shl";
+        case 0x75: return "i32.shr_s";
+        case 0x76: return "i32.shr_u";
+        case 0x77: return "i32.rotl";
+        case 0x78: return "i32.rotr";
+
+        case 0x79: return "i64.clz";
+        case 0x7A: return "i64.ctz";
+        case 0x7B: return "i64.popcnt";
+        case 0x7C: return "i64.add";
+        case 0x7D: return "i64.sub";
+        case 0x7E: return "i64.mul";
+        case 0x7F: return "i64.div_s";
+        case 0x80: return "i64.div_u";
+        case 0x81: return "i64.rem_s";
+        case 0x82: return "i64.rem_u";
+        case 0x83: return "i64.and";
+        case 0x84: return "i64.or";
+        case 0x85: return "i64.xor";
+        case 0x86: return "i64.shl";
+        case 0x87: return "i64.shr_s";
+        case 0x88: return "i64.shr_u";
+        case 0x89: return "i64.rot";
+        case 0x8A: return "li64.rotr";
+
+        case 0x8B: return "f32.abs";
+        case 0x8C: return "f32.neg";
+        case 0x8D: return "f32.ceil";
+        case 0x8E: return "f32.floor";
+        case 0x8F: return "f32.trunc";
+        case 0x90: return "f32.nearest";
+        case 0x91: return "f32.sqrt";
+        case 0x92: return "f32.add";
+        case 0x93: return "f32.sub";
+        case 0x94: return "f32.mul";
+        case 0x95: return "f32.div";
+        case 0x96: return "f32.min";
+        case 0x97: return "f32.max";
+        case 0x98: return "f32.copysign";
+
+        case 0x99: return "f64.abs";
+        case 0x9A: return "f64.neg";
+        case 0x9B: return "f64.ceil";
+        case 0x9C: return "f64.floor";
+        case 0x9D: return "f64.trunc";
+        case 0x9E: return "f64.nearest";
+        case 0x9F: return "f64.sqrt";
+        case 0xA0: return "f64.add";
+        case 0xA1: return "f64.sub";
+        case 0xA2: return "f64.mul";
+        case 0xA3: return "f64.div";
+        case 0xA4: return "f64.min";
+        case 0xA5: return "f64.max";
+        case 0xA6: return "f64.copysign";
+
+        case 0xA7: return "i32.wrap_i64";
+        case 0xA8: return "i32.trunc_f32_s";
+        case 0xA9: return "i32.trunc_f32_u";
+        case 0xAA: return "i32.trunc_f64_s";
+        case 0xAB: return "i32.trunc_f64_u";
+        case 0xAC: return "i64.extend_i32_s";
+        case 0xAD: return "i64.extend_i32_u";
+        case 0xAE: return "i64.trunc_f32_s";
+        case 0xAF: return "i64.trunc_f32_u";
+        case 0xB0: return "i64.trunc_f64_s";
+        case 0xB1: return "i64.trunc_f64_u";
+        case 0xB2: return "f32.convert_i32_s";
+        case 0xB3: return "f32.convert_i32_u";
+        case 0xB4: return "f32.convert_i64_s";
+        case 0xB5: return "f32.convert_i64_u";
+        case 0xB6: return "f32.demote_f64";
+        case 0xB7: return "f64.convert_i32_s";
+        case 0xB8: return "f64.convert_i32_u";
+        case 0xB9: return "f64.convert_i64_s";
+        case 0xBA: return "f64.convert_i64_u";
+        case 0xBB: return "f64.promote_f32";
+        case 0xBC: return "i32.reinterpret_f32";
+        case 0xBD: return "i64.reinterpret_f64";
+        case 0xBE: return "f32.reinterpret_i32";
+        case 0xBF: return "f64.reinterpret_i64";
+
+        case 0xC0: return "i32.extend8_s";
+        case 0xC1: return "i32.extend16_s";
+        case 0xC2: return "i64.extend8_s";
+        case 0xC3: return "i64.extend16_s";
+        case 0xC4: return "i64.extend32_s";
+
+        case 0xFC:
+        {
+            switch (opt2) {
+                case  0: return "i32.trunc_sat_f32_s";
+                case  1: return "i32.trunc_sat_f32_u";
+                case  2: return "i32.trunc_sat_f64_s";
+                case  3: return "i32.trunc_sat_f64_u";
+                case  4: return "i64.trunc_sat_f32_s";
+                case  5: return "i64.trunc_sat_f32_u";
+                case  6: return "i64.trunc_sat_f64_s";
+                case  7: return "i64.trunc_sat_f64_u";
+                case  8: return "memory.init";
+                case  9: return "data.drop";
+                case 10: return "memory.copy";
+                case 11: return "memory.fill";
+                //
+                case 12: return "table.init";
+                case 13: return "elem.drop";
+                case 14: return "table.copy";
+                case 15: return "table.grow";
+                case 16: return "table.size";
+                case 17: return "table.fill";
+
+                default:
+                    return null;
+            }
+        }
+
+        case 0xFD: // multi-byte sequence
+        {
+                switch (opt2) {
+                    case  0: // v128.load
+                    case  1: // v128.load8x8_s
+                    case  2: // v128.load8x8_u
+                    case  3: // v128.load16x4_s
+                    case  4: // v128.load16x4_u
+                    case  5: // v128.load32x2_s
+                    case  6: // v128.load32x2_u
+                    case  7: // v128.load8_splat
+                    case  8: // v128.load16_splat
+                    case  9: // v128.load32_splat
+                    case 10: // v128.load64_splat
+                    case 92: // v128.load32_zero
+                    case 93: // v128.load64_zero
+                    case 11: // v128.store
+                        break;
+                    case 12: // v128.const
+                        break
+                    case 13: // i8x16.shuffle
+                        break
+                    case 84: // v128.load8_lane
+                    case 85: // v128.load16_lane
+                    case 86: // v128.load32_lane
+                    case 87: // v128.load64_lane
+                    case 88: // v128.store8_lane
+                    case 89: // v128.store16_lane
+                    case 90: // v128.store32_lane
+                    case 91: // v128.store64_lane
+                        break;
+                        // the list of ops convers the whole 0-255 byte range.
+                }
+            }
+
+        default:
+            return null;
+    }
+}
+
+/**
+ * This defintion describes all the possible properties that could be present on a instruction.
+ * @typedef WasmInstruction
+ * @type {Object}
+ * @property {integer} opcode Present on every instruction.
+ * @property {integer|number} value Present `i32.const`, `i64.const`, `f32.const`, `f64.const` 
+ * @property {integer} offset Present on all *.load and *.store instruction
+ * @property {integer} align Present on all *.load and *.store instruction
+ * @property {integer} _loc
+ * @property {integer} _roff Present on certain instruction when relocation is enabled.
+ * @property {WasmLocal} local Present on local.tee local.get local.set
+ * @property {WasmGlobal|ImportedGlobal} global Present on global.set global.get
+ * @property {WasmType} type Present on `block`, `loop`, `if`, `try`, `indirect_call`, 
+ * @property {WasmFunction|ImportedFunction} func Present on `call` and `ref.func`
+ * @property {WasmTable|ImportedTable} table Present on `indirect_call`, `table.get`, `table.set`, `table.grow`, `table.size`, `table.fill`
+ * @property {WasmTag|ImportedTag} tag Present on `catch`, `throw`
+ * @property {integer} relative_depth Present on `delegate`, `rethrow`
+ * @property {integer} labelidx Present on `br`, `br_if`, 
+ * @property {integer} default_br Present on `br_table`
+ * @property {integer} memidx Present on memory.size, memory.grow, memory.fill, atomic.fence (Will be renamed and type will change)
+ * @property {integer} reftype Present on `ref.null`
+ * @property {WasmDataSegment} dataSegment Present on memory.init, data.drop
+ * @property {integer} memidx1 Present on `memory.copy` (Will be renamed and type will change)
+ * @property {integer} memidx2 Present on `memory.copy` (Will be renamed and type will change)
+ * @property {WasmTable|ImportedTable} table1 Present on `memory.copy`
+ * @property {WasmTable|ImportedTable} table2 Present on `memory.copy`
+ */
+
+/**
+ * @typedef InstructionRange
+ * @type {Object}
+ * @property {WasmInstruction} start
+ * @property {WasmInstruction} end
+ */
+
+class InstList {
+
+    constructor(opcode) {
+        this.opcodes = [];
+    }
+};
+
+/**
+ * @extends WasmInstruction
+ */
+export class Inst {
+
+    constructor(opcode) {
+        this.opcode = opcode;
+    }
+};
+
+export class UnreachableInst extends Inst {
+
+    constructor() {
+        super(0x00);
+    }
+}
+
+export class NopInst extends Inst {
+
+    constructor() {
+        super(0x01);
+    }
+}
+
+export class EndInst extends Inst {
+
+    constructor() {
+        super(0x0b);
+    }
+}
+
+export class BlockInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+    }
+}
+
+export class LoopInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+    }
+}
+
+export class IfInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+    }
+}
+
+export class ReturnInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+    }
+}
+
+export class LoadInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+    }
+}
+
+export class StoreInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+    }
+}
+
+export class CallInst extends Inst {
+
+    constructor(opcode, func) {
+        super(opcode);
+        this.func = func;
+    }
+}
+
+export class LocalInst extends Inst {
+
+    constructor(opcode, local) {
+        super(opcode);
+        this.local = local;
+    }
+}
+
+export class GlobalInst extends Inst {
+
+    constructor(opcode, glob) {
+        super(opcode);
+        this.global = glob;
+    }
+}
+
+export class AtomicInst extends Inst {
+
+    constructor(opcode, align, offset) {
+        super(opcode);
+        /** @type {integer} */
+        this.offset = offset;
+        /** @type {integer} */
+        this.align = align;
+    }
+}
+
+export class BranchInst extends Inst {
+
+    constructor(opcode, labelidx) {
+        super(opcode);
+        this.labelidx = labelidx;
+    }
+}
+
+export class BranchIfInst extends Inst {
+
+    constructor(opcode, labelidx) {
+        super(opcode);
+        this.labelidx = labelidx;
+    }
+}
+
+export class BranchTableInst extends Inst {
+
+    constructor(opcode, labels) {
+        super(opcode);
+        this.labels = labels;
+    }
+}
+
+export class IndirectCallInst extends Inst {
+
+    constructor(opcode, table, type) {
+        super(opcode);
+        /** @type {WasmTable|ImportedTable} */
+        this.table = table;
+        /** @type {WasmType} */
+        this.type = type;
+    }
+}
+
+export class LocalGetInst extends Inst {
+
+    constructor(opcode, localidx) {
+        super(opcode);
+        this.localidx = localidx;
+    }
+}
+
+export class LocalSetInst extends Inst {
+
+    constructor(opcode, localidx) {
+        super(opcode);
+        this.localidx = localidx;
+    }
+}
+
+export class GlobalGetInst extends Inst {
+
+    constructor(opcode, globalidx) {
+        super(opcode);
+        this.globalidx = globalidx;
+    }
+}
+
+export class GlobalSetInst extends Inst {
+
+    constructor(opcode, globalidx) {
+        super(opcode);
+        this.globalidx = globalidx;
+    }
+}
+
+export class TableGetInst extends Inst {
+
+    constructor(opcode, tableidx) {
+        super(opcode);
+        this.tableidx = tableidx;
+    }
+}
+
+export class TableSetInst extends Inst {
+
+    constructor(opcode, tableidx) {
+        super(opcode);
+        this.tableidx = tableidx;
+    }
+}
+
+export class TryInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+        /** @type {WasmType} */
+        this.type = undefined;
+    }
+}
+
+export class CatchInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+        /** @type {WasmTag|ImportedTag} */
+        this.tag = undefined;
+    }
+}
+
+export class CatchAllInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+    }
+}
+
+export class DelegateInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+        /** @type {integer} */
+        this.relative_depth = undefined;
+    }
+}
+
+export class ThrowInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+        /** @type {WasmTag|ImportedTag} */
+        this.tag = undefined;
+    }
+}
+
+export class ReThrowInst extends Inst {
+
+    constructor(opcode) {
+        super(opcode);
+        /** @type {integer} */
+        this.relative_depth = undefined;
+    }
+}
+
+export const opclsmap = new Map();
+export const opcode_info = [
     {
         opcode: 0x00,
         type: OP_TYPE_CTRL,

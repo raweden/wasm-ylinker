@@ -20,6 +20,18 @@
 // 
 // https://hacks.mozilla.org/2017/07/webassembly-table-imports-what-are-they/
 
+import { ByteArray, lengthBytesUTF8, lengthSLEB128, lengthULEB128 } from "../../src/core/ByteArray";
+import * as constant from "../../src/core/const";
+import { WebAssemblySection, WasmFunction, WasmType, WasmGlobal, ImportedFunction, ImportedGlobal, ImportedTable, ImportedMemory, WasmTag, WasmTable, WasmMemory, WasmDataSegment, WasmElementSegment, WebAssemblyCustomSection, ImportedTag, WasmLocal } from "../../src/core/types";
+import { parseWebAssemblyBinary,  WebAssemblyModule } from "../../src/core/WebAssembly";
+import { WA_TYPE_ANY, opcode_info } from "../../src/core/inst";
+import { type_name } from "../../src/core/utils";
+import { EventEmitter } from "./ui/EventEmitter";
+import { humanFileSize, sectionnames } from "./utils";
+import { _flowActions, namedGlobalsMap, replaceCallInstructions, getWorkflowParameterValues, runWorkflowActions } from "../../src/core-flow";
+import { WebAssemblyCustomSectionNetBSDDylinkV2 } from "../../src/ylinker/rtld.dylink0";
+import { WebAssemblyCustomSectionNetBSDExecHeader } from "../../src/ylinker/rtld.exechdr";
+
 const WASM_PAGE_SIZE = (1 << 16);
 
 const moreIcon = `<svg aria-hidden="true" focusable="false" role="img" class="octicon octicon-kebab-horizontal" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="display: inline-block; user-select: none; vertical-align: text-bottom; overflow: visible;"><path d="M8 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM1.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm13 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path></svg>`;
@@ -38,15 +50,15 @@ function saveAsFile(buffer, filename, filetype) {
     	blob = new Blob([buffer], { type: filetype });
     }
 
-    if (navigator.msSaveBlob) {
+    if (typeof navigator.msSaveBlob == "function") {
      	navigator.msSaveBlob(blob, filename);
-      	return resolve();
+      	return resolveFn();
     } else if (/iPhone|fxios/i.test(navigator.userAgent)) {
       	// This method is much slower but createObjectURL is buggy on iOS
       	const reader = new FileReader();
       	reader.addEventListener('loadend', function () {
 	        if (reader.error) {
-	          	return reject(reader.error);
+	          	return rejectFn(reader.error);
 	        }
 	        if (reader.result) {
 	          	const a = document.createElement('a');
@@ -69,40 +81,6 @@ function saveAsFile(buffer, filename, filetype) {
       	URL.revokeObjectURL(downloadUrl);
       	setTimeout(resolveFn, 100);
     }
-}
-
-/**
- * Format bytes as human-readable text.
- * 
- * @param bytes Number of bytes.
- * @param si True to use metric (SI) units, aka powers of 1000. False to use binary (IEC), aka powers of 1024.
- * @param dp Number of decimal places to display.
- * 
- * @return Formatted string.
- */
-function humanFileSize(bytes, si, dp) {
-	if (typeof si == "undefined") {
-		si = false;
-	}
-	if (typeof dp == "undefined") {
-		dp = 1;
-	}
-  	const threshold = si ? 1000 : 1024;
-
-	if (Math.abs(bytes) < threshold) {
-	    return bytes + ' bytes';
-	}
-
-	const units = si ? ['kB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'] : ['KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'];
-	let u = -1;
-	const r = 10 ** dp;
-
-	do {
-		bytes /= threshold;
-		++u;
-	} while (Math.round(Math.abs(bytes) * r) / r >= threshold && u < units.length - 1);
-
-  	return bytes.toFixed(dp) + ' ' + units[u];
 }
 
 function showWasmInfoStats(mod, sections) {
@@ -152,7 +130,7 @@ function showWasmInfoStats(mod, sections) {
 			sectionSize = section.size;
 		}
 
-		if (section.type == SECTION_TYPE_CUSTOM) {
+		if (section.type == constant.SECTION_TYPE_CUSTOM) {
 
 			nameStr = section.name;
 
@@ -260,7 +238,7 @@ function showWasmInfoStats(mod, sections) {
 		tr.appendChild(td);
 
 		let weight = size / totalBytes;
-		weightStr = String((weight * 100).toFixed(2)) + "%";
+		let weightStr = String((weight * 100).toFixed(2)) + "%";
 
 		td = document.createElement("td");
 		td.textContent = weightStr;
@@ -404,6 +382,11 @@ const _workflows = [];
 
 // Generate statistics of instructions
 
+/**
+ * 
+ * @param {WebAssemblyModule} mod 
+ * @returns 
+ */
 function computeInstructionStatistics(mod) {
 
 	let map = new Map();
@@ -546,13 +529,6 @@ function setupUI() {
 	memContainers.parentElement.classList.add("no-padding")
 
 
-		
-	let runWorkflowBtn = document.querySelector("#run-workflow");
-	runWorkflowBtn.addEventListener("click", function(evt) {
-		if (typeof selectedAction.onrun == "function") {
-			selectedAction.onrun(actionInfo, selectedAction);
-		}
-	});
 
 	let runWorkflowUIBtn = document.querySelector("#run-workflow-2");
 	runWorkflowUIBtn.addEventListener("click", function(evt) {
@@ -630,7 +606,7 @@ function showMemoryParamEditor(container, module, memory) {
 
 	minInput.addEventListener("change", function(evt) {
 		memory.min = parseInt(minInput.value);
-		let sec = (memory instanceof ImportedMemory) ? module.findSection(SECTION_TYPE_IMPORT) : module.findSection(SECTION_TYPE_MEMORY);
+		let sec = (memory instanceof ImportedMemory) ? module.findSection(constant.SECTION_TYPE_IMPORT) : module.findSection(constant.SECTION_TYPE_MEMORY);
 		sec._isDirty = true;
 	});
 
@@ -649,7 +625,7 @@ function showMemoryParamEditor(container, module, memory) {
 			memory.max = parseInt(maxInput.value);
 		}
 		
-		let sec = (memory instanceof ImportedMemory) ? module.findSection(SECTION_TYPE_IMPORT) : module.findSection(SECTION_TYPE_MEMORY);
+		let sec = (memory instanceof ImportedMemory) ? module.findSection(constant.SECTION_TYPE_IMPORT) : module.findSection(constant.SECTION_TYPE_MEMORY);
 		sec._isDirty = true;
 	});
 
@@ -657,7 +633,7 @@ function showMemoryParamEditor(container, module, memory) {
 	input.checked = memory.shared;
 	input.addEventListener("change", function(evt) {
 		memory.shared = input.checked;
-		let sec = (memory instanceof ImportedMemory) ? module.findSection(SECTION_TYPE_IMPORT) : module.findSection(SECTION_TYPE_MEMORY);
+		let sec = (memory instanceof ImportedMemory) ? module.findSection(constant.SECTION_TYPE_IMPORT) : module.findSection(constant.SECTION_TYPE_MEMORY);
 		sec._isDirty = true;
 	});
 
@@ -672,6 +648,12 @@ function showMemoryParamEditor(container, module, memory) {
 	showInitialMemory(dataContainer, module, memory)
 }
 
+/**
+ * 
+ * @param {HTMLDivElement} container 
+ * @param {WebAssemblyModule} module 
+ * @param {*} mem 
+ */
 function showInitialMemory(container, module, mem) {
 
 	let tbl, tbody;
@@ -836,105 +818,6 @@ const SEARCH_ICON_SVG = `<svg aria-hidden="true" focusable="false" role="img" cl
 const SORT_ASC_ICON_SVG = `<svg aria-hidden="true" focusable="false" role="img" class="TableSortIcon TableSortIcon--ascending" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="display: inline-block; user-select: none; vertical-align: text-bottom; overflow: visible;"><path d="m12.927 2.573 3 3A.25.25 0 0 1 15.75 6H13.5v6.75a.75.75 0 0 1-1.5 0V6H9.75a.25.25 0 0 1-.177-.427l3-3a.25.25 0 0 1 .354 0ZM0 12.25a.75.75 0 0 1 .75-.75h7.5a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75Zm0-4a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5H.75A.75.75 0 0 1 0 8.25Zm0-4a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5H.75A.75.75 0 0 1 0 4.25Z"></path></svg>`;
 const SORT_DES_ICON = `<svg aria-hidden="true" focusable="false" role="img" class="TableSortIcon TableSortIcon--descending" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="display: inline-block; user-select: none; vertical-align: text-bottom; overflow: visible;"><path d="M0 4.25a.75.75 0 0 1 .75-.75h7.5a.75.75 0 0 1 0 1.5H.75A.75.75 0 0 1 0 4.25Zm0 4a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5H.75A.75.75 0 0 1 0 8.25Zm0 4a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75ZM13.5 10h2.25a.25.25 0 0 1 .177.427l-3 3a.25.25 0 0 1-.354 0l-3-3A.25.25 0 0 1 9.75 10H12V3.75a.75.75 0 0 1 1.5 0V10Z"></path></svg>`;
 const FILTER_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16"><path d="M.75 3h14.5a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1 0-1.5ZM3 7.75A.75.75 0 0 1 3.75 7h8.5a.75.75 0 0 1 0 1.5h-8.5A.75.75 0 0 1 3 7.75Zm3 4a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z"></path></svg>`;
-
-class EventEmitter {
-    
-    constructor() {
-    	this._listeners = {};
-    }
-
-    addListener(type, callback){
-        this.on(type, callback);
-    }
-
-    on(type, callback) {
-        if((typeof type !== "string" && typeof type !== "symbol") || typeof callback != "function")
-            throw new TypeError("on() unexpected arguments provided")
-
-        if (!this._listeners.hasOwnProperty(type)) {
-        	let arr = [];
-        	this._listeners[type] = arr;
-        	arr.push(callback);
-        } else {
-        	let arr = this._listeners[type];
-        	let idx = arr.indexOf(callback);
-        	if (arr.indexOf(callback) == -1)
-        		arr.push(callback);
-        }
-    }
-
-    once(type, callback) {
-        if(typeof callback  !== 'function')
-            throw new TypeError('only takes instances of Function');
-        
-        var self = this;
-        function g() {
-            self.removeListener(type, g);
-            callback.apply(this, arguments);
-        };
-
-        g.callback = callback;
-        self.on(type, g);
-        
-        return this;
-    }
-
-    removeListener(type, callback){
-        if((typeof type !== "string" && typeof type !== "symbol") || typeof callback != "function")
-            throw new Error(".removeListener() unexpected argument provided");
-
-        if(!this._listeners.hasOwnProperty(type))
-            delete this._listeners[event];
-
-        // Removes the listener if it exists under reference of the event type.
-        const listeners = this._listeners[type];
-        const index = listeners.indexOf(callback);
-        if(index != -1)
-            listeners.splice(index,1);
-
-        // Removes the listeners array for the type if empty.
-        if(listeners.length === 0){
-            delete listeners[type];
-        }
-    }
-
-    removeAllListeners(type) {
-        if(this._listeners.hasOwnProperty(event)){
-            delete this._listeners[event];
-        }
-    }
-
-    listeners(type){
-        return this._listeners.hasOwnProperty(type) ? this._listeners[type].slice() : null;
-    }
-
-    emit(type) {
-        if(typeof type !== "string" && typeof type !== "symbol")
-            throw new TypeError("emit() unexpected arguments provided");
-
-        if(!this._listeners.hasOwnProperty(type))
-            return;
-        
-        // copying the arguments provided to this method.
-        const args = Array.prototype.slice.call(arguments);
-        const listeners = this._listeners[type];
-        const len = listeners.length;
-        
-        // emits the event to all registerd listeners.
-        for(let i = 0; i < len; i++){
-            let callback = listeners[i];
-            if(typeof callback !== "function")
-                continue;
-            
-            // calls the listener.
-            callback.apply(this, args);
-        }
-    }
-    
-    destroy() {
-        this._listeners.length = 0;
-    }
-};
 
 class FilteredSearchView extends EventEmitter {
 
@@ -1297,7 +1180,7 @@ class WasmGlobalsInspectorView {
 				}
 				break;
 			case "regexp": {
-				let regexp = new Regexp(string);
+				let regexp = new RegExp(string);
 				for (let i = 0; i < len; i++) {
 					let item = items[i];
 					if (item.name.search(regexp)) {
@@ -1408,10 +1291,83 @@ class WasmFunctionsInspectorView {
 		let findResults = document.createElement("ul");
 		body.appendChild(findResults);
 
+		let thChilds = [];
+		let columns = [{
+			title: "funcidx",
+			valueType: "number",
+			cssClass: "wasm-funcidx",
+			key: "funcidx",
+			render: null,
+		}, {
+			title: "name",
+			valueType: "string",
+			key: "name",
+			render: null,
+		}, {
+			title: "in -> out",
+			valueType: "wasm-type",
+			cssClass: "wasm-stack-signature",
+			key: "type",
+			render: function (context, td, item) {
+				let sign, func = item.func;
+				sign = func.type.toString();
+				sign = sign.replace("->", "→");
+				return sign;
+			}
+		}, {
+			title: "typeidx",
+			valueType: "number",
+			cssClass: "wasm-typeidx",
+			key: "typeidx",
+			contents: null,
+		}, {
+			title: "use count",
+			valueType: "number",
+			key: "usecount",
+			render: null,
+		}, {
+			title: "stack usage",
+			valueType: "number",
+			key: "stackuse",
+			render: null
+		}, {
+			title: "inst cnt",
+			valueType: "number",
+			key: "instcount",
+			render: null,
+		}, {
+			title: "bytecode size",
+			valueType: "number",
+			key: "bcsize",
+			render: null
+		}];
+
+		this._sortColumns = [{column: 0, "direction":"asc"}];
+
+		function onTableTitleClick(evt) {
+			let idx = thChilds.indexOf(evt.target);
+			if (idx == -1)
+				return;
+			let col = columns[idx];
+			_self._sortBy(idx, null);
+			_self._pageIndex = 0;
+			_self.render();
+		}
+
 		let table = document.createElement("table");
-		table.classList.add("data-table","wasm-functions");
+		table.classList.add("data-table", "wasm-functions");
 		let thead = document.createElement("thead");
-		thead.innerHTML = "<tr><th>funcidx</th><th>name</th><th><code>in -> out</code></th><th>typeidx</th><th>use count</th><th>stack usage</th><th>inst cnt</th><th>bytecode size</th></tr>";
+		let tr = document.createElement("tr");
+		let len = columns.length;
+		for (let i = 0; i < len; i++) {
+			let column = columns[i];
+			let th = document.createElement("th");
+			th.textContent = column.title;
+			th.addEventListener("click", onTableTitleClick);
+			tr.appendChild(th);
+			thChilds.push(th);
+		}
+		thead.appendChild(tr);
 		table.appendChild(thead);
 		let tbody = document.createElement("tbody");
 		table.appendChild(tbody);
@@ -1427,6 +1383,7 @@ class WasmFunctionsInspectorView {
 		this._collection = null;
 		this._pageIndex = 0;
 		this._pageRowCount = 25;
+		this._columns = columns;
 
 		{
 			let paginator = document.createElement("div");
@@ -1504,6 +1461,76 @@ class WasmFunctionsInspectorView {
 		//body.appendChild(tbltest);
 	}
 
+	_sortBy(columnIndex, direction) {
+
+		let key;
+		
+		function num_desc(a, b){
+			let av = a[key];
+			let bv = b[key];
+			if (av > bv) {
+				return 1;
+			} else if (av < bv) {
+				return -1;
+			} else {
+				return 0;
+			}
+		}
+
+		function num_asc(a, b){
+			let av = a[key];
+			let bv = b[key];
+			if (av > bv) {
+				return -1;
+			} else if (av < bv) {
+				return 1;
+			} else {
+				return 0;
+			}
+		}
+
+		if (this._sortColumns.length == 1 && this._sortColumns[0].column == columnIndex) {
+			let sortcol = this._sortColumns[0];
+			let dir = sortcol.dir;
+			if (dir == "asc") {
+				dir = "desc";
+			} else if (dir == "desc") {
+				dir = "asc";
+			}
+
+			let idx = sortcol.column;
+			let col = this._columns[idx];
+			key = col.key;
+
+			if (dir == "desc") {
+				this._collection.sort(num_desc);
+			} else if (dir == "asc") {
+				this._collection.sort(num_asc);
+			} else {
+				throw new TypeError("invalid direction");
+			}
+		} else {
+			let dir;
+			if (direction == null || direction == undefined) {
+				dir = "asc";
+			} else {
+				dir = direction;
+			}
+
+			this._sortColumns[0] = {column: columnIndex, dir: dir};
+			let col = this._columns[columnIndex];
+			key = col.key;
+
+			if (dir == "desc") {
+				this._collection.sort(num_desc);
+			} else if (dir == "asc") {
+				this._collection.sort(num_asc);
+			} else {
+				throw new TypeError("invalid direction");
+			}
+		}
+	}
+
 	search(string, opts) {
 		let mod = this._module;
 		let items = this._defaultCollection;
@@ -1567,7 +1594,7 @@ class WasmFunctionsInspectorView {
 				}
 				break;
 			case "regexp": {
-				let regexp = new Regexp(string);
+				let regexp = new RegExp(string);
 				for (let i = 0; i < len; i++) {
 					let item = items[i];
 					if (item.name.search(regexp)) {
@@ -1592,6 +1619,8 @@ class WasmFunctionsInspectorView {
 		let start = this._pageIndex * this._pageRowCount;
 		let items = this._collection;
 		let mod = this._module;
+		let columns = this._columns;
+		let xlen = columns.length;
 
 		let len = Math.min(items.length, start + this._pageRowCount);
 		for (let i = start; i < len; i++) {
@@ -1600,8 +1629,28 @@ class WasmFunctionsInspectorView {
 			let func = item.func; //mod.functions[funcidx];
 
 			let tr = document.createElement("tr");
+			for (let x = 0; x < xlen; x++) {
+				let col = columns[x];
+				let key = col.key;
+				let td = document.createElement("td");
+				if (col.cssClass) {
+					td.classList.add(col.cssClass);
+				}
+
+				if (typeof col.render == "function") {
+					let ret = col.render(this, td, item);
+					if (typeof ret == "string")
+						td.textContent = ret;
+				} else if (col.key && item.hasOwnProperty(key) && item[key] !== undefined && item[key] !== null) {
+					td.textContent = item[key];
+				}
+
+				tr.appendChild(td);
+			}
+			/*
 			let td = document.createElement("td");
-			td.classList.add("wasm-funcidx");
+			td.classList.add();
+
 			//let span = document.createElement("span");
 			//span.classList.add("index-badge")
 			//span.textContent = item.funcidx;
@@ -1639,6 +1688,7 @@ class WasmFunctionsInspectorView {
 			td = document.createElement("td"); // bytecode size
 			td.textContent = (func instanceof WasmFunction) ? (func.opcode_end - func.codeStart) : "";
 			tr.appendChild(td);
+			*/
 			tbody.appendChild(tr);
 		}
 
@@ -1654,16 +1704,22 @@ class WasmFunctionsInspectorView {
 		let len = functions.length;
 		for (let i = 0; i < len; i++) {
 			let func = functions[i];
-			let name = typeof func[__nsym] == "string" ? func[__nsym] : null;
+			let name = typeof func[constant.__nsym] == "string" ? func[constant.__nsym] : null;
 			let obj = {funcidx: i, func: func, name: name, exportedAS: null, importedAs: null};
-			items.push(obj);
-			if (func instanceof ImportedFunction) {
+			obj.type = func.type;
+			obj.typeidx = mod.types.indexOf(func.type);
+			obj.usecount = func._usage;
+			if (func instanceof WasmFunction) {
+				obj.imported = false;
+				obj.instcount = func.opcodes.length;
+				obj.bcsize = func.opcode_end - func.codeStart;
+			} else if (func instanceof ImportedFunction) {
 				obj.imported = true;
-				obj.importedAs = {module: func.module, name: func.name};
-				if (!name) {
-					obj.name = func.module + "." + func.name;
-				}
+				obj.name = func.module + "." + func.name;
+				obj.instcount = null;
+				obj.bcsize = null;
 			}
+			items.push(obj);
 		}
 
 		let exported = mod.exports;
@@ -1873,7 +1929,7 @@ class WasmTablesInspectorView {
 				}
 				break;
 			case "regexp": {
-				let regexp = new Regexp(string);
+				let regexp = new RegExp(string);
 				for (let i = 0; i < len; i++) {
 					let item = items[i];
 					if (item.name.search(regexp)) {
@@ -1998,7 +2054,7 @@ class WasmTablesInspectorView {
 				let func = vector[x];
 				if (func === undefined)
 					continue;
-				let name = typeof func[__nsym] == "string" ? func[__nsym] : null;
+				let name = typeof func[constant.__nsym] == "string" ? func[constant.__nsym] : null;
 				let idx = functions.indexOf(func);
 				let obj = {tblidx: y, index: x, funcidx: idx, func: func, name: name, exportedAS: null, importedAs: null};
 				items.push(obj);
@@ -2043,44 +2099,6 @@ const inspectorUI = {
 
 const _inspectorViews = {};
 
-function namedGlobalsMap(mod) {
-
-	if (!mod.globals)
-		return;
-
-	let arr1 = [];
-	let arr2 = [];
-	let unamedGlobals = [];
-	let map = {};
-	let globals = mod.globals;
-	let exported = mod.exports;
-	let len = exported.length;
-	for (let i = 0; i < len; i++) {
-		let exp = exported[i];
-		if (exp.type != "global")
-			continue;
-		arr1.push(exp.name);
-		arr2.push(exp.global);
-		map[exp.name] = exp.global;
-	}
-
-	len = globals.length;
-	for (let i = 0; i < len; i++) {
-		let glob = globals[i];
-		if (typeof glob[__nsym] == "string") {
-			let name = glob[__nsym];
-			map[name] = glob;
-		} else if (arr2.indexOf(glob) === -1) {
-			unamedGlobals.push(glob);
-		}
-	}
-
-	console.log(map);
-	console.log(unamedGlobals);
-
-	return map;
-}
-
 /**
  * 
  * @param {*} mod 
@@ -2119,10 +2137,10 @@ function populateWebAssemblyInfo(mod) {
 			} else {
 				view = _inspectorViews[txt];
 			}
-			if (!_namedGlobals)
-				_namedGlobals = namedGlobalsMap(mod);
+			if (!globalThis._namedGlobals)
+			globalThis._namedGlobals = namedGlobalsMap(mod);
 			view.module = mod;
-			view.model = _namedGlobals;
+			view.model = globalThis._namedGlobals;
 			
 
 		} else if (txt == "functions") {
@@ -2213,14 +2231,6 @@ function populateWebAssemblyInfo(mod) {
 
 // run-length-encoding
 
-
-function encodeRLE(data, offset, length) {
-
-}
-
-function decodeRLE(data, offset, length) {
-
-}
 
 /*
 // NOTE: the impl below (from the as3 era) don't works, its more of a unfinished mockup.
@@ -2890,11 +2900,26 @@ function appendFiles(files) {
 	}
 }
 
+function customSectionsHandler(mod, data, size, name, options, chunk) {
+	let result;
+	if (name == 'rtld.dylink.0') {
+		result = WebAssemblyCustomSectionNetBSDDylinkV2.decode(mod, data, size, name);
+		mod._dl_data = result.data;
+	} else if (name == 'rtld.exec-hdr') {
+		result = WebAssemblyCustomSectionNetBSDExecHeader.decode(mod, data, size, name);
+		mod._exechdr = result.data;
+	}
+
+	return result;
+}
+
 function findInputFiles(files) {
 
 	let wasmFiles = [];
 	let hasSymbolFile = false;
-	let parseOptions = {};
+	let parseOptions = {
+		customSections: customSectionsHandler,
+	};
 
 	let len = files.length;
 	for (let i = 0; i < len; i++) {
@@ -2946,10 +2971,10 @@ function findInputFiles(files) {
 			options.symbolsFile = wasmFiles[0].symbolMapFile;
 		}
 		loadFilePairs(wasmFiles[0].binary, wasmFiles[0].symbolMapFile, options, parseOptions).then(function(res) {
-			if (file.name == "kern.wasm") {
+			if (file.name == "kern.wasm" && globalThis.inspectFreeBSDBinary) {
 				//postOptimizeWasm(targetModule);
 				//postOptimizeFreeBSDKernMainAction(null, targetModule, {});
-				inspectFreeBSDBinary(moduleBuffer, targetModule);
+				globalThis.inspectFreeBSDBinary(moduleBuffer, targetModule);
 			}
 			setupWorkflowUIForTarget(null, wasmFiles[0].binary, wasmFiles[0].symbolMapFile, options);
 
@@ -2987,7 +3012,7 @@ async function loadFilePairs(binary, symbolMapFile, options, parseOptions) {
 
 	let mod = loadWebAssemblyBinary(buf1, buf2, options, parseOptions);
 	if (modname) {
-		mod[__nsym] = modname;
+		mod[constant.__nsym] = modname;
 	}
 
 	return mod;
@@ -3009,6 +3034,51 @@ const globalApp = {
 	}
 };
 
+function setupGlobalScope(obj) {
+	// adding common constants to worflows global scope
+	obj.SECTION_TYPE_FUNCTYPE = constant.SECTION_TYPE_FUNCTYPE;
+	obj.SECTION_TYPE_IMPORT = constant.SECTION_TYPE_IMPORT;
+	obj.SECTION_TYPE_FUNC = constant.SECTION_TYPE_FUNC;
+	obj.SECTION_TYPE_CODE = constant.SECTION_TYPE_CODE;
+	obj.SECTION_TYPE_GLOBAL = constant.SECTION_TYPE_GLOBAL;
+	obj.SECTION_TYPE_CUSTOM = constant.SECTION_TYPE_CUSTOM;
+	obj.SECTION_TYPE_EXPORT = constant.SECTION_TYPE_EXPORT;
+	obj.SECTION_TYPE_ELEMENT = constant.SECTION_TYPE_ELEMENT;
+	obj.SECTION_TYPE_DATA = constant.SECTION_TYPE_DATA;
+	obj.SECTION_TYPE_DATA_COUNT = constant.SECTION_TYPE_DATA_COUNT;
+	obj.SECTION_TYPE_MEMORY = constant.SECTION_TYPE_MEMORY;
+	obj.SECTION_TYPE_START = constant.SECTION_TYPE_START;
+	obj.WA_TYPE_I32 = constant.WA_TYPE_I32;
+	obj.WA_TYPE_I64 = constant.WA_TYPE_I64;
+	obj.WA_TYPE_F32 = constant.WA_TYPE_F32;
+	obj.WA_TYPE_F64 = constant.WA_TYPE_F64;
+	obj.WA_TYPE_ANY = WA_TYPE_ANY;
+	obj.__nsym = constant.__nsym;
+	// adding common classes to workflows globalThis object
+	obj.ByteArray = ByteArray;
+	obj.lengthBytesUTF8 = lengthBytesUTF8;
+	obj.lengthSLEB128 = lengthSLEB128;
+	obj.lengthULEB128 = lengthULEB128;
+	obj.WasmLocal = WasmLocal;
+	obj.WasmFunction = WasmFunction;
+	obj.WasmGlobal = WasmGlobal;
+	obj.WasmType = WasmType;
+	obj.WasmTable = WasmTable;
+	obj.WasmMemory = WasmMemory;
+	obj.WasmDataSegment = WasmDataSegment;
+	obj.WasmElementSegment = WasmElementSegment;
+	obj.WasmTag = WasmTag;
+	obj.ImportedFunction = ImportedFunction;
+	obj.ImportedGlobal = ImportedGlobal;
+	obj.ImportedMemory = ImportedMemory;
+	obj.ImportedTable = ImportedTable;
+	obj.ImportedTag = ImportedTag;
+	obj.WebAssemblyCustomSection = WebAssemblyCustomSection;
+	obj.WebAssemblyModule = WebAssemblyModule;
+	obj.replaceCallInstructions = replaceCallInstructions;
+	obj.parseWebAssemblyBinary = parseWebAssemblyBinary;
+}
+
 async function setupMainUI() {
 
 	let readmeContainer = document.querySelector("article#readme");
@@ -3023,7 +3093,9 @@ async function setupMainUI() {
 		event.preventDefault();
 	});*/
 
-	let _exts = ["./ext-objc.js", "./ext-netbsd.js", "./ext-freebsd.js"];
+	setupGlobalScope(globalThis);
+
+	let _exts = ["./../ext-objc.js", "./../ext-netbsd.js", "./../ext-freebsd.js"];
 	for (let path of _exts) {
 		let module = await import(path);
 		let def = module.default;
@@ -3147,7 +3219,7 @@ function processSymbolsMap(mod, txt) {
 			idx = len;
 		}
 		let fn = functions[num];
-		fn[__nsym] = name;
+		fn[constant.__nsym] = name;
 	}
 }
 
@@ -3656,21 +3728,7 @@ function handleLinking(wasmModule) {
 		return null;
 	}
 
-	function findSymbol(index) {
-		let len = dataSegments.length;
-		for (let i = 0; i < len; i++) {
-			let segment = dataSegments[i];
-			let start = segment.offset - dataSecOff;
-			let end = start + segment.size;
-			if (offset >= start && offset < end) {
-				return segment;
-			}
-		}
-
-		return null;
-	}
-
-	len = relocs.length;
+	let len = relocs.length;
 	for (let i = 0; i < len; i++) {
 		let reloc = relocs[i];
 		let segment = findDataSegmentForReloc(reloc.offset);
@@ -3712,7 +3770,7 @@ function handleLinking(wasmModule) {
 			continue;
 		let func = symbol.value;
 		if (func instanceof WasmFunction) {
-			func[__nsym] = symbol.name;
+			func[constant.__nsym] = symbol.name;
 		}
 	}
 	
@@ -3739,7 +3797,7 @@ function handleLinking(wasmModule) {
 		let dataSegment = dataSegments[i];
 		let metadata = segments[i];
 		let name = metadata.name;
-		dataSegment[__nsym] = name;
+		dataSegment[constant.__nsym] = name;
 
 		if (name.startsWith(".rodata")) {
 			rodata.dataSegments.push(dataSegment);

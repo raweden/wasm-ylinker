@@ -1005,6 +1005,280 @@ function postOptimizeFreeBSDKernMain(ctx, mod, options) {
 	}
 }
 
+class FreeBDSKernInfoContainer extends WebAssemblyCustomSection {
+
+	constructor(module, name, kvo) {
+		super(module, name);
+		this.name = name;
+		this.data = kvo;
+	}
+
+	encode() {
+		// for now we simply use JSON in order to not spend to much time on a encoding when we should get 
+		// kernel up and runnning..
+		let kvo = this.data;
+		let totsz, secsz = 0;
+		let json = JSON.stringify(kvo, null, 2);
+		let datasz = lengthBytesUTF8(json);
+		let namesz = lengthBytesUTF8(this.name);
+		secsz = datasz + namesz;
+		secsz += lengthULEB128(namesz);
+		totsz = secsz;
+		totsz += lengthULEB128(totsz);
+
+		let buf = new Uint8Array(totsz + 1);
+        let data = new ByteArray(buf);
+        data.writeUint8(SECTION_TYPE_CUSTOM);
+        data.writeULEB128(secsz);
+        data.writeULEB128(namesz);
+        data.writeUTF8Bytes(this.name);
+        data.writeUTF8Bytes(json);
+
+        if (data.offset != totsz + 1)
+        	console.error("expected length != actual length (%d vs. %d)", data.offset, totsz + 1);
+
+        return buf;
+	}
+
+	static decode(module, data, size) {
+
+	}
+} 
+
+const WASM_PAGE_SIZE = 65536;
+
+function generateFreeBSDKernelModule(ctx, mod) {
+	let initmem = mod.computeInitialMemory(mod.memory[0], true);
+	let data = new DataView(initmem.buffer);
+	//console.log(initmem);
+
+	{	
+		let glob = mod.getGlobalByName("__stack_pointer");
+		//console.log("__stack_pointer = %d", glob.init[0].value);
+		ctx.__stack_pointer = glob.init[0].value; // store it for later use.
+		glob = mod.getGlobalByName("thread0_st");
+		//console.log("thread0_st = %d", glob.init[0].value);
+		ctx.thread0_st = glob.init[0].value; // store it for later use.
+	}
+
+	function getValueByName(name) {
+
+		let glob = mod.getGlobalByName(name);
+		if (!glob) 
+			return undefined;
+		//console.log("%s = %d", name, glob.init[0].value);
+		return glob.init[0].value;
+	}
+	
+	let netbsd_wakern_info = {};
+
+	let __global_base = getValueByName("__global_base");
+
+	let addr_start_mem = getValueByName("__start__init_memory");
+	let addr_stop_mem = getValueByName("__stop__init_memory");
+	let addr_bss_start = getValueByName("__bss_start");
+	let addr_kernel_text = getValueByName("__kernel_text");			// ?
+	let addr_kernel_end = getValueByName("_end");					// ?
+	let addr_data_start = getValueByName("__data_start");
+	let addr_rodata_start = getValueByName("__rodata_start");
+	let addr_physical_start = getValueByName("physical_start");
+	let addr_physical_end = getValueByName("physical_end");
+	let addr_bootstrap_pde = getValueByName("bootstrap_pde");		// done by locore at boot.
+	let addr_l1_pte = getValueByName("l1_pte");						// done by locore at boot.
+	//let addr_bootargs = getValueByName("bootargs");
+	//let addr_bootdevstr = getValueByName("bootdevstr");
+	//let addr_boot_args = getValueByName("boot_args");
+	let addr_fdt_base = getValueByName("__fdt_base");
+	
+
+	netbsd_wakern_info.physical_start = addr_physical_start;
+	netbsd_wakern_info.physical_end = addr_physical_end;
+	netbsd_wakern_info.bootstrap_pde = addr_bootstrap_pde;
+	netbsd_wakern_info.l1_pte = addr_l1_pte;
+	//netbsd_wakern_info.bootargsbuf = addr_bootargs;
+	//netbsd_wakern_info.bootdevstr = addr_bootdevstr;
+	//netbsd_wakern_info.bootargsp = addr_boot_args;
+	netbsd_wakern_info.__start__init_memory = addr_start_mem;
+	netbsd_wakern_info.__stop__init_memory = addr_stop_mem;
+	netbsd_wakern_info.__start_kern = addr_kernel_text;
+	netbsd_wakern_info.__stop_kern = addr_kernel_end;
+	netbsd_wakern_info.fdt_base = addr_fdt_base;
+	netbsd_wakern_info.thread0_st = getValueByName("thread0_st");
+	netbsd_wakern_info.thread0_stackp = getValueByName("__stack_pointer");
+	netbsd_wakern_info.__wasmkern_envp = getValueByName("__wasmkern_envp");
+	netbsd_wakern_info.__shared_vmtotal = getValueByName("wasm_shared_vmtotal")
+	netbsd_wakern_info.addresses = [
+		{
+			name: "__global_base",
+			addr: __global_base
+		}, {
+			name: "__start__init_memory",
+			addr: addr_start_mem
+		}, {
+			name: "__stop__init_memory",
+			addr: addr_stop_mem
+		}, {
+			name: "__bss_start",
+			addr: addr_bss_start
+		}, {
+			name: "__kernel_text",
+			addr: addr_kernel_text
+		}, {
+			name: "_end",
+			addr: addr_kernel_end
+		}, {
+			name: "__data_start",
+			addr: addr_data_start
+		}, {
+			name: "__rodata_start",
+			addr: addr_rodata_start
+		}, {
+			name: "physical_start",
+			addr: addr_physical_start
+		}, {
+			name: "physical_end",
+			addr: addr_physical_end
+		}, {
+			name: "bootstrap_pde",
+			addr: addr_bootstrap_pde
+		}, {
+			name: "l1_pte",
+			addr: addr_l1_pte
+		},/*{
+			name: "bootargs",
+			addr: addr_bootargs
+		}, {
+			name: "bootdevstr",
+			addr: addr_bootdevstr
+		}, {
+			name: "boot_args",
+			addr: addr_boot_args
+		},*/{
+			name: "__fdt_base",
+			addr: addr_fdt_base
+		}
+	];
+
+	data.setUint32(addr_start_mem, __global_base, true);
+	data.setUint32(addr_stop_mem, initmem.byteLength, true);
+	netbsd_wakern_info.hint_min_stacksz = (netbsd_wakern_info.thread0_stackp - initmem.byteLength); // clang always by default place the stack at the end of initmem, growing towards the end of initmem.
+
+	function isConst(opcode) {
+		return opcode == 0x41 || opcode == 0x42 || opcode == 0x43 || opcode == 0x44;
+	}
+
+	let rump_variant = {
+		__wasmkern_envp: "__wasmkern_envp",
+		__physmemlimit: "rump_physmemlimit",
+		__curphysmem: "curphysmem",
+		thread0uarea: "thread0uarea",
+		opfs_ext4_head: "opfs_ext4_head",		// opfs+ext4 driver location
+		opfs_blkdev_head: "opfs_blkdev_head",	// opfs-blkdev
+		__first_avail: "__first_avail",
+		avail_end: "avail_end",
+		l2_addr: "PDPpaddr",
+		bootinfo: "bootinfo",
+		__wasm_meminfo: "__wasm_meminfo",
+		__dsrpc_server_head: "__dsrpc_server_head",
+		__kmem_data: "__kmem_data",
+		__wasm_kmeminfo: "__wasm_kmeminfo",
+		__mmblkd_head: "__mmblkd_head",
+		scheduler_tasks: "scheduler_tasks",
+		kenv_addr: "static_kenv",
+		wabp_addr: "__static_wabp",
+	};
+
+	for (let p in rump_variant) {
+		let glob, name = rump_variant[p];
+		if (netbsd_wakern_info.hasOwnProperty(p))
+			continue;
+		glob = mod.getGlobalByName(name);
+		if (glob === null)
+			continue;
+		if (glob.init.length != 2 || !(isConst(glob.init[0].opcode) && glob.init[1].opcode == 0x0b)) {
+			throw new TypeError("global of unsupported value");
+		}
+
+		netbsd_wakern_info[p] = glob.init[0].value;
+	}
+
+
+	let memseg = mod.getDataSegmentByName(".bss");
+	let memstart = memseg.inst.opcodes[0].value;
+	data.setUint32(addr_bss_start, memstart, true);
+
+	memseg = mod.getDataSegmentByName(".rodata");
+	memstart = memseg.inst.opcodes[0].value;
+	data.setUint32(addr_rodata_start, memstart, true);
+
+	memseg = mod.getDataSegmentByName(".data");
+	memstart = memseg.inst.opcodes[0].value;
+	data.setUint32(addr_data_start, memstart, true);
+
+	if (mod.memory.length != 1) {
+		throw new Error("only implemented with one memory in mind");
+	}
+
+	if (addr_physical_start) {
+		data.setUint32(addr_physical_start, 0, true);
+	}
+
+	if (addr_physical_end) {
+		let memmax = 0;
+		if (mod.memory[0].max) {
+			memmax = mod.memory[0].max * WASM_PAGE_SIZE;
+		} else {
+			memmax = 0xFFFFFFFF;
+		}
+		data.setUint32(addr_physical_end, memmax, true);
+	}
+
+	let data_min = mod.dataSegments[0].inst.opcodes[0].value;
+	let data_max = data_min + mod.dataSegments[0].size;
+	let segments = mod.dataSegments;
+	let len = segments.length;
+	for (let i = 0; i < len; i++) {
+		let segment = segments[i];
+		let start = segment.inst.opcodes[0].value;
+		let end = start + segment.size;
+		if (start < data_min) 
+			data_min = start;
+		if (end > data_max)
+			data_max = end;
+	}
+
+	netbsd_wakern_info.__start__init_memory = data_min;
+	netbsd_wakern_info.__stop__init_memory = data_max;
+
+	if (netbsd_wakern_info.__curphysmem) {
+		data.setUint32(netbsd_wakern_info.__curphysmem, initmem.byteLength, true);
+		
+	}
+
+	//console.log(netbsd_wakern_info);
+	let section = new FreeBDSKernInfoContainer(mod, "tinybsd.kern-locore", netbsd_wakern_info);
+	mod.sections.push(section);
+
+	let g1 = mod.getGlobalByName("__stack_pointer");
+	let g2 = new ImportedGlobal();
+	g2.module = "kern";
+	g2.name = "__stack_pointer";
+	g2.type = g1.type;
+	g2.mutable = g1.mutable;
+	mod.replaceGlobal(g1, g2, true);
+	mod.removeExportByRef(g1);
+
+	g1 = mod.getGlobalByName("__curthread");
+	g2 = new ImportedGlobal();
+	g2.module = "kern";
+	g2.name = "__curthread";
+	g2.type = g1.type;
+	g2.mutable = g1.mutable;
+	mod.replaceGlobal(g1, g2, true);
+	mod.removeExportByRef(g1);
+
+}
+
 let _freebsdKernMainWorkflow = {
 	name: "tinybsd 14.0 Kernel Main Binary (workflow)",
 	id: "tinybsd_14_0.kern-main-binary",
@@ -1015,8 +1289,8 @@ let _freebsdKernMainWorkflow = {
 				type: "import", 	// no value leaves the type as is.
 				memidx: 0,
 				// min: 			// no value leaves the min as is.
-				min: 1954,
-				max: 1954,
+				min: 2000,
+				max: 2000,
 				shared: true,
 			}
 		}/*, {
@@ -1051,14 +1325,17 @@ let _freebsdKernMainWorkflow = {
 				},
 				mutable: undefined,
 			}
-		}*/, {
+		}, {
 			action: "generateModinfo",
 			options: undefined,
 		}, {
 			action: "configureBootParameters",
 			options: undefined,
+		}*/, {
+			action: "generateFreeBSDKernelModule",
+			options: undefined,
 		}, {
-			action: "postOptimizeWasm",
+			action: "postOptimizeAtomicInst",
 			options: undefined,
 		}, /*{
 			action: "postOptimizeFreeBSDKernMain",
@@ -1068,8 +1345,9 @@ let _freebsdKernMainWorkflow = {
 			options: {
 				format: "wasm",
 				consume: true,
+				exclude: [".bss"]
 			}
-		}, {
+		}, /*{
 			action: "configureBindingTemplate",
 			options: {
 				format: "javascript",
@@ -1152,7 +1430,7 @@ let _freebsdKernMainWorkflow = {
 					return text;
 				}
 			}
-		}, {
+		},*/ {
 			action: "output",
 			options: {
 				exclude: [{type: 0x0B}, 
@@ -1181,10 +1459,10 @@ let _freebsdKernModuleWorkflow = {
 				max: 1954,
 				shared: true,
 			}
-		}, {
+		}, /*{
 			action: "generateModinfo",
 			options: undefined,
-		}, {
+		}, */{
 			action: "postOptimizeWasm",
 			options: undefined,
 		}, {
@@ -1703,14 +1981,9 @@ function postOptimizeTinybsdUserBinary(ctx, mod) {
 	g2.type = g1.type;
 	g2.mutable = g1.mutable;
 	mod.replaceGlobal(g1, g2, true);
-	mod.imports.unshift(g2);
-	mod.removeExportFor(g1);
+	mod.removeExportByRef(g1);
 
-	let section = mod.findSection(SECTION_TYPE_IMPORT);
-	if (section)
-		section.markDirty();
-
-	section = mod.findSection(SECTION_TYPE_EXPORT);
+	let section = mod.findSection(SECTION_TYPE_EXPORT);
 	if (section)
 		section.markDirty();
 
@@ -1731,9 +2004,6 @@ function postOptimizeWasmAction(ctx, mod, options) {
 
 function postOptimizeWasm(ctx, mod) {
 
-	replaceCallInstructions(ctx, mod, null, atomic_op_replace_map);
-	replaceCallInstructions(ctx, mod, null, memory_op_replace_map);	
-
 	{	
 		let glob = mod.getGlobalByName("__stack_pointer");
 		console.log("%s = %d", glob.name, glob.init[0].value);
@@ -1751,8 +2021,7 @@ function postOptimizeWasm(ctx, mod) {
 	g2.type = g1.type;
 	g2.mutable = g1.mutable;
 	mod.replaceGlobal(g1, g2, true);
-	mod.imports.unshift(g2);
-	removeExportFor(mod, g1);
+	mod.removeExportByRef(g1);
 
 	g1 = mod.getGlobalByName("__curthread");
 	g2 = new ImportedGlobal();
@@ -1761,14 +2030,9 @@ function postOptimizeWasm(ctx, mod) {
 	g2.type = g1.type;
 	g2.mutable = g1.mutable;
 	mod.replaceGlobal(g1, g2, true);
-	mod.imports.push(g2);
-	removeExportFor(mod, g1);
+	mod.removeExportByRef(g1);
 
-	let sec = mod.findSection(SECTION_TYPE_IMPORT);
-	if (sec)
-		sec.markDirty();
-
-	sec = mod.findSection(SECTION_TYPE_EXPORT);
+	let sec = mod.findSection(SECTION_TYPE_EXPORT);
 	if (sec)
 		sec.markDirty();
 
@@ -1776,12 +2040,14 @@ function postOptimizeWasm(ctx, mod) {
 	if (sec)
 		sec.markDirty();
 
-	console.log(funcmap);
 }
 
 const freebsd_ext = {
     name: "FreeBSD Extension",
     flowActions: [{
+        name: "generateFreeBSDKernelModule",
+        handler: generateFreeBSDKernelModule,
+    }, {
         name: "postOptimizeFreeBSDKernMain",
         handler: postOptimizeFreeBSDKernMain,
     }, {

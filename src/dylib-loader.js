@@ -1,13 +1,71 @@
 
-const fs = require("fs");
+/*
+ * Copyright (c) 2023, 2024, Jesper Svensson All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ * 
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ * 3. All advertising materials mentioning features or use of this software must
+ *    display the following acknowledgement: This product includes software
+ *    developed by the Jesper Svensson.
+ * 4. Neither the name of the Jesper Svensson nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission. 
+ * 
+ * THIS SOFTWARE IS PROVIDED BY Jesper Svensson AS IS AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+ * EVENT SHALL Jesper Svensson BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
+import * as fs from "node:fs"
+import { ByteArray } from "./core/ByteArray";
+import { WasmType, ImportedFunction } from "./core/types"
+import { WebAssemblyFuncTypeSection, WebAssemblyImportSection, WebAssemblyFunctionSection, WebAssemblyExportSection, WebAssemblyDataSection } from "./core/WebAssembly";
+import { WebAssemblyCustomSectionNetBSDExecHeader } from "./ylinker/rtld.exechdr"
+import { WebAssemblyCustomSectionNetBSDDylinkV2 } from "./ylinker/rtld.dylink0";
+import { RuntimeLinkingSymbol } from "./ylinker/core";
+import { SECTION_TYPE_DATA } from "./core/const";
 
-class DylibSymbolLinker {
+/**
+ * @typedef {dylink0Symbol}
+ * @type {object}
+ * @property {string} name
+ */
+
+export class DylibSymbolLinker {
 
     constructor() {
-
+        /** @type {Object.<string, dylink0Symbol>} */
+        this._datamap = undefined;
+        /** @type {Object.<string, dylink0Symbol>} */
+        this._funcmap = undefined;
+        /** @type {Object} */
+        this._dl_data = undefined;
+        /** @type {string} */
+        this._linkMethod = undefined;
+        /** @type {Object.<string, object>} */
+        this._func_exports = undefined;
     }
 
+    /**
+     * 
+     * @param {integer} fd 
+     * @param {integer} filesize 
+     * @param {object=} parseOptions 
+     * @returns {DylibSymbolLinker}
+     */
     static fromSymbolFile(fd, filesize, parseOptions) {
         let buffer = new Uint8Array(filesize);
         fs.readSync(fd, buffer, 0, filesize, 0);
@@ -52,7 +110,7 @@ class DylibSymbolLinker {
                 chunk.size = chunk.size - (data.offset - tmp);
                 data.offset = tmp;
             } else if (type > 0x0C) {
-                console.warn("section type: %d (%s) not handled", type, sectionnames[type]);
+                console.warn("section type: %d not handled", type);
             }
 
             // wasm binaries sometimes have trailing non used bytes.
@@ -62,6 +120,7 @@ class DylibSymbolLinker {
         let dylink_opts = {decode_relocs: false};
 
         // we must include the exports into consideration so we load everything that makes that happen..
+        let dataSection;
         let mod = {}
         mod._version = version;
         mod.dataSegments = [];
@@ -113,6 +172,7 @@ class DylibSymbolLinker {
                     let sec = WebAssemblyDataSection.decode(mod, data, size, null, {noCopy: true});
                     chunks[chunk.index] = sec;
                     sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
+                    dataSection = sec._cache;
                     break;
                 }
                 case 0x00:  // custom
@@ -121,14 +181,14 @@ class DylibSymbolLinker {
                     let name = chunk.name;
                     switch (name) {
                         // custom netbsd
-                        case 'netbsd.dylink.0':
+                        case 'rtld.dylink.0':
                             sec = WebAssemblyCustomSectionNetBSDDylinkV2.decode(mod, data, size, name, dylink_opts);
                             chunks[chunk.index] = sec;
                             mod._dl_data = sec.data;
                             chunk.data = sec.data;
                             sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                             break;
-                        case 'netbsd.exec-hdr':
+                        case 'rtld.exec-hdr':
                             sec = WebAssemblyCustomSectionNetBSDExecHeader.decode(mod, data, size, name);
                             chunks[chunk.index] = sec;
                             mod._exechdr = sec.data;
@@ -170,7 +230,6 @@ class DylibSymbolLinker {
         len = dataSegments.length;
         for (let i = 0; i < len; i++) {
             let seg = dataSegments[i];
-            seg.offset = mod.dataSegments[i].offset;
             if (seg.name == ".dynstr") {
                 dynstr_seg = seg;
             } else if (seg.name == ".dynsym") {
@@ -182,8 +241,8 @@ class DylibSymbolLinker {
             throw TypeError("DYNLINK_LOADER requires .dynstr & .dynsym segments");
         }
 
-        dynstr_off = dynstr_seg.offset;
-        dynsym_off = dynsym_seg.offset;
+        dynstr_off = dataSection.dataOffset + dynstr_seg.offset;
+        dynsym_off = dataSection.dataOffset + dynsym_seg.offset;
         len = dynsym_seg.size / DYNSYM_SIZE;
         let symbols = [];
         for (let i = 0; i < len; i++) {
@@ -239,6 +298,12 @@ class DylibSymbolLinker {
         return obj;
     }
 
+    /**
+     * 
+     * @param {string} symbol 
+     * @param {WasmType} functype 
+     * @returns {ImportedFunction|RuntimeLinkingSymbol}
+     */
     resolveFuncSymbol(symbol, functype) {
 
         let method = this._linkMethod;
@@ -280,7 +345,7 @@ class DylibSymbolLinker {
         // TODO: if its found here it means that its table based function export
 
         if (tblfunc._symbol)
-            return funcSymbol._symbol; // ImportedFunction is cached here
+            return tblfunc._symbol; // ImportedFunction is cached here
 
         let mname = this._dl_data.module_name;
         let func = new RuntimeLinkingSymbol(mname, symbol, functype);
@@ -290,6 +355,11 @@ class DylibSymbolLinker {
         return func;
     }
 
+    /**
+     * 
+     * @param {string} symbol 
+     * @returns {RuntimeLinkingSymbol}
+     */
     resolveDataSymbol(symbol) {
 
         let datamap = this._datamap;
@@ -300,6 +370,12 @@ class DylibSymbolLinker {
         return true;
     }
 
+    /**
+     * @param {integer} type
+     * @param {string} symbol 
+     * @param {WasmType} functype 
+     * @returns {ImportedFunction|RuntimeLinkingSymbol}
+     */
     resolve(type, symbol, functype) {
 
         if (type == 0) {
@@ -312,5 +388,3 @@ class DylibSymbolLinker {
         return null;
     }
 }
-
-module.exports = DylibSymbolLinker;

@@ -1,4 +1,5 @@
 .DS_Store
+package-lock.json
 DWARF4.pdf
 DWARF5.pdf
 wasm-info.code-workspace
@@ -11,6 +12,7 @@ dist/testing
 dist/flows
 dist/workflows
 dist/todo.md
+dist/lab/**
 dist/wat-example.wat
 archive/**
 node_modules/**

@@ -1,5 +1,37 @@
 
-import "../dist/wasm-info.js";
+/*
+ * Copyright (c) 2023, 2024, Jesper Svensson All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ * 
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ * 3. All advertising materials mentioning features or use of this software must
+ *    display the following acknowledgement: This product includes software
+ *    developed by the Jesper Svensson.
+ * 4. Neither the name of the Jesper Svensson nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission. 
+ * 
+ * THIS SOFTWARE IS PROVIDED BY Jesper Svensson AS IS AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+ * EVENT SHALL Jesper Svensson BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+import {WasmFunction, ImportedFunction, ImportedGlobal, WasmType, WasmLocal } from "./core/types";
+import { AtomicInst } from "./core/inst"
+import {WA_TYPE_I32, WA_TYPE_I64, WA_TYPE_F32, WA_TYPE_F64, __nsym} from "./core/const"
 
 const REPLACE_CALL_SKIP_FUNC = Symbol("@skip-func");
 const MODULE_BUILT_IN = "__builtin";
@@ -24,7 +56,7 @@ const MODULE_BUILT_IN = "__builtin";
  */
 
 /** @type {ylinker.ReplaceCallInstParams[]} */
-const builtin_op_replace_map = [ // every function is ImportedFunction and in module __builtin
+export const builtin_op_replace_map = [ // every function is ImportedFunction and in module __builtin
 	// 
 	{ 	// atomic operations.
 		module: MODULE_BUILT_IN,
@@ -363,6 +395,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
 		/** @type {InstReplaceCallback} */
 		replace: function(inst, index, arr, scope, calle) {
 			arr[index] = new AtomicInst(0xFE1F, 3, 0);
+			calle._usage--;
 			return true;
 		}
 	}, {
@@ -813,7 +846,7 @@ const builtin_op_replace_map = [ // every function is ImportedFunction and in mo
  * @param  {Array} inst_replace A array of objects in the format described above.
  * @return {void}              
  */
-function replaceCallInstructions(ctx, mod, functions, inst_replace) {
+export function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 
 	let opsopt = [];
 	
@@ -823,7 +856,7 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
 	/** @type {Map.<WasmFunction|ImportedFunction, ReplaceCallInstParams>} */
 	let funcmap = new Map();
 	let names = [];
-	let ylen = inst_replace.length;
+	let xlen, ylen = inst_replace.length;
 	for (let y = 0; y < ylen; y++) {
 		/** @type {ReplaceCallInstParams} */
 		let handler = inst_replace[y];
@@ -985,8 +1018,7 @@ function replaceCallInstructions(ctx, mod, functions, inst_replace) {
     }
 
 }
-
-function fixup_builtins(linker) {
+export function fixup_builtins(linker) {
 
 	replaceCallInstructions(null, linker._wasmModule, linker.functions, builtin_op_replace_map);
 }

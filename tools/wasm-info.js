@@ -4,11 +4,49 @@
 // 
 // a node.js variant with command line interface of the ui based workflow optimization.
 
-const fs = require("fs");
-const fsPromises = require("fs/promises");
-const path = require("path");
-const vm = require("vm");
-const Blob = require("buffer").Blob;
+/*
+ * Copyright (c) 2023, 2024, Jesper Svensson All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ * 
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ * 3. All advertising materials mentioning features or use of this software must
+ *    display the following acknowledgement: This product includes software
+ *    developed by the Jesper Svensson.
+ * 4. Neither the name of the Jesper Svensson nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission. 
+ * 
+ * THIS SOFTWARE IS PROVIDED BY Jesper Svensson AS IS AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+ * EVENT SHALL Jesper Svensson BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+import * as fs from "node:fs"
+import * as fsPromises from "node:fs/promises"
+import * as path from "node:path"
+import * as vm from "node:vm"
+import { Blob } from "node:buffer"
+import {WebAssemblyModule, parseWebAssemblyBinary} from "../src/core/WebAssembly"
+import { ByteArray, lengthBytesUTF8, lengthSLEB128, lengthULEB128 } from "../src/core/ByteArray"
+import { ImportedFunction, ImportedGlobal, ImportedMemory, ImportedTable, ImportedTag, WasmDataSegment, WasmElementSegment, WasmFunction, WasmGlobal, WasmLocal, WasmMemory, WasmTable, WasmTag, WasmType, WebAssemblyCustomSection } from "../src/core/types"
+import { _flowActions, replaceCallInstructions } from "../src/core-flow"
+import { SECTION_TYPE_CODE, SECTION_TYPE_CUSTOM, SECTION_TYPE_DATA, SECTION_TYPE_DATA_COUNT, SECTION_TYPE_ELEMENT, SECTION_TYPE_EXPORT, SECTION_TYPE_FUNC, SECTION_TYPE_FUNCTYPE, SECTION_TYPE_GLOBAL, SECTION_TYPE_IMPORT, SECTION_TYPE_MEMORY, SECTION_TYPE_START, WA_TYPE_F32, WA_TYPE_F64, WA_TYPE_I32, WA_TYPE_I64, __nsym } from "../src/core/const"
+import { WA_TYPE_ANY } from "../src/core/inst";
+import { WebAssemblyCustomSectionNetBSDDylinkV2 } from "../src/ylinker/rtld.dylink0";
+import { WebAssemblyCustomSectionNetBSDExecHeader } from "../src/ylinker/rtld.exechdr";
 
 const scopes = new Map();
 
@@ -28,7 +66,8 @@ const _workflowNameMap = {
 	'nb10-usrbin': {script: "../dist/ext-netbsd.js", id: "netbsd_10.user-binary+emul-fork"},
 	'nb10-dynld': {script: "../dist/ext-netbsd.js", id: "netbsd_10.dynld-binary"},
 	//'nb10-usr-bin': {script: "../dist/flows/netbsd-usrbin-flow.js"},
-	'nb10-kmain': {script: "../dist/ext-netbsd.js", id: "netbsd_10.kern-main-binary"}
+	'nb10-kmain': {script: "../dist/ext-netbsd.js", id: "netbsd_10.kern-main-binary"},
+	'freebsd-kernel': {script: "../dist/ext-freebsd.js", id: "tinybsd_14_0.kern-main-binary"}
 }
 
 function main() {
@@ -147,6 +186,10 @@ function main() {
 	console.log("params: %o", params);
 	*/
 
+	// these are expected to be on the global scope.
+	globalThis.FileSystemFileHandle = FileSystemFileHandle;
+	globalThis.Blob = Blob;
+
 	if (workflowPath) {
 		console.error("no such workflow = %s", workflowPath);
 		process.exit(1);
@@ -241,19 +284,19 @@ class WorkflowWorkletGlobalScope {
 
 	/**
 	 * Pauses the execution of the next workflow step until the promise provided has been resolved.
-	 * @param  {[type]} promise [description]
-	 * @return {[type]}         [description]
+	 * @param  {Promise} promise
+	 * @return {void}
 	 */
 	waitUntil(promise) {
 		calledWaitUntil(this, promise);
 	}
 
 	get wasmModule() {
-		this._wasmModule;
+		return this._wasmModule;
 	}
 
 	get workflow() {
-		this._WorkflowContext;
+		return this._WorkflowContext;
 	}
 }
 
@@ -504,7 +547,7 @@ class FileSystemWritableFileStream {
 
 		} else if (data && ArrayBuffer.isView(data)) {
 
-			fhandle.write(value, 0, value.byteLength, _self._fpos).then(function(res) {
+			fhandle.write(data, 0, data.byteLength, _self._fpos).then(function(res) {
 				_self._fpos += res.bytesWritten;
 				resolveFn(undefined);
 			}, rejectFn);
@@ -625,27 +668,54 @@ async function loadWorkflowScript_mjs(scriptPath, flowId, params) {
 	ctxobj.FileSystemWritableFileStream = FileSystemWritableFileStream;
 	ctxobj.FileSystemSyncAccessHandle = FileSystemSyncAccessHandle;
 	ctxobj.Blob = Blob;
+	// adding common constants to worflows global scope
+	ctxobj.SECTION_TYPE_FUNCTYPE = SECTION_TYPE_FUNCTYPE;
+	ctxobj.SECTION_TYPE_IMPORT = SECTION_TYPE_IMPORT;
+	ctxobj.SECTION_TYPE_FUNC = SECTION_TYPE_FUNC;
+	ctxobj.SECTION_TYPE_CODE = SECTION_TYPE_CODE;
+	ctxobj.SECTION_TYPE_GLOBAL = SECTION_TYPE_GLOBAL;
+	ctxobj.SECTION_TYPE_CUSTOM = SECTION_TYPE_CUSTOM;
+	ctxobj.SECTION_TYPE_EXPORT = SECTION_TYPE_EXPORT;
+	ctxobj.SECTION_TYPE_ELEMENT = SECTION_TYPE_ELEMENT;
+	ctxobj.SECTION_TYPE_DATA = SECTION_TYPE_DATA;
+	ctxobj.SECTION_TYPE_DATA_COUNT = SECTION_TYPE_DATA_COUNT;
+	ctxobj.SECTION_TYPE_MEMORY = SECTION_TYPE_MEMORY;
+	ctxobj.SECTION_TYPE_START = SECTION_TYPE_START;
+	ctxobj.WA_TYPE_I32 = WA_TYPE_I32;
+	ctxobj.WA_TYPE_I64 = WA_TYPE_I64;
+	ctxobj.WA_TYPE_F32 = WA_TYPE_F32;
+	ctxobj.WA_TYPE_F64 = WA_TYPE_F64;
+	ctxobj.WA_TYPE_ANY = WA_TYPE_ANY;
+	ctxobj.__nsym = __nsym;
+	// adding common classes to workflows globalThis object
+	ctxobj.ByteArray = ByteArray;
+	ctxobj.lengthBytesUTF8 = lengthBytesUTF8;
+	ctxobj.lengthSLEB128 = lengthSLEB128;
+	ctxobj.lengthULEB128 = lengthULEB128;
+	ctxobj.WasmLocal = WasmLocal;
+	ctxobj.WasmFunction = WasmFunction;
+	ctxobj.WasmGlobal = WasmGlobal;
+	ctxobj.WasmType = WasmType;
+	ctxobj.WasmTable = WasmTable;
+	ctxobj.WasmMemory = WasmMemory;
+	ctxobj.WasmDataSegment = WasmDataSegment;
+	ctxobj.WasmElementSegment = WasmElementSegment;
+	ctxobj.WasmTag = WasmTag;
+	ctxobj.ImportedFunction = ImportedFunction;
+	ctxobj.ImportedGlobal = ImportedGlobal;
+	ctxobj.ImportedMemory = ImportedMemory;
+	ctxobj.ImportedTable = ImportedTable;
+	ctxobj.ImportedTag = ImportedTag;
+	ctxobj.WebAssemblyCustomSection = WebAssemblyCustomSection;
+	ctxobj.WebAssemblyModule = WebAssemblyModule;
+	ctxobj.replaceCallInstructions = replaceCallInstructions;
+	ctxobj.parseWebAssemblyBinary = parseWebAssemblyBinary;
+	ctxobj._flowActions = _flowActions;
 	let ctx = vm.createContext(ctxobj);
 
-	// load default wasm impl enviroment
-	let script = await fsPromises.readFile(path.join(__dirname, "../dist/wasm-info.js"));
-	let wasmInfoScript = new vm.Script(script, {filename: "wasm-info.js"});
-	wasmInfoScript.runInContext(ctx);
-
-	script = await fsPromises.readFile(path.join(__dirname, "../dist/inst-info.js"));
-	let instInfoScript = new vm.Script(script, {filename: "inst-info.js"});
-	instInfoScript.runInContext(ctx);
-
-	script = await fsPromises.readFile(path.join(__dirname, "../dist/wat-parse.js"));
-	let watScript = new vm.Script(script, {filename: "wat-parse.js"});
-	watScript.runInContext(ctx);
-
-	script = await fsPromises.readFile(path.join(__dirname, "../src/core-flow.js"));
-	let coreFlowScript = new vm.Script(script, {filename: "src/core-flow.js"});
-	coreFlowScript.runInContext(ctx);
-
+	// loading the module extention
 	let filename = scriptPath.split('/').pop();
-	script = await fsPromises.readFile(scriptPath, {encoding: "utf8"});
+	let script = await fsPromises.readFile(scriptPath, {encoding: "utf8"});
 	let flowModule, flowModuleSrc = new vm.SourceTextModule(script, {
 		filename: filename,
 		context: ctx,
@@ -653,13 +723,13 @@ async function loadWorkflowScript_mjs(scriptPath, flowId, params) {
 			console.log("initializeImportMeta called");
 		},
 		importModuleDynamically: function(specifier, script, importAssertions) {
-			console.log("found import statement %s", specifier);
+			console.log("found import statement %s %s", specifier, script);
 		}
 	});
 
-	let moduleMap = {
-		'ext-netbsd.js': flowModuleSrc
-	}
+	let moduleMap = {};
+
+	moduleMap[filename] = flowModuleSrc;
 	
 	/*
 	flowModule = await flowModuleSrc.link(function(specifier, referencingModule, extra) {
@@ -801,7 +871,20 @@ async function loadWorkflowScript_mjs(scriptPath, flowId, params) {
 	//console.log(srcbuf);
 	let _input = params.defaultInputFile;
 	let _output = params.defaultOutputFile;
-	let wasmModule = ctx.parseWebAssemblyBinary(srcbuf);
+	let wasmModule = parseWebAssemblyBinary(srcbuf, {
+		customSections: function(mod, data, size, name, options, chunk) {
+            let result;
+            if (name == 'rtld.dylink.0') {
+                result = WebAssemblyCustomSectionNetBSDDylinkV2.decode(mod, data, size, name);
+                mod._dl_data = result.data;
+            } else if (name == 'rtld.exec-hdr') {
+                result = WebAssemblyCustomSectionNetBSDExecHeader.decode(mod, data, size, name);
+                mod._exechdr = result.data;
+            }
+
+			return result;
+        }
+	});
 	wasmModule._buffer = srcbuf;
 	if (typeof params.moduleName == "string") {
 		wasmModule[ctxobj.__nsym] = params.moduleName;
