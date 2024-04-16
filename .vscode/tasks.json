@@ -1,0 +1,61 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build wasm-info webapp",
+            "type": "shell",
+            "command": "rollup --config build/web.wasm-info.config.mjs --sourcemap",
+            "problemMatcher": []
+        },
+        {
+            "label": "build wasm-info webapp (live compile)",
+            "type": "shell",
+            "command": "rollup -w --config build/web.wasm-info.config.mjs --sourcemap",
+            "problemMatcher": []
+        },
+        {
+            "label": "build ylinker command-line tool",
+            "type": "shell",
+            "command": "rollup --config build/bin.wasm-ylinker.config.mjs --sourcemap",
+            "problemMatcher": []
+        },
+        {
+            "label": "build ylinker command-line tool (live compile)",
+            "type": "shell",
+            "command": "rollup -w --config build/bin.wasm-ylinker.config.mjs --sourcemap",
+            "problemMatcher": []
+        },
+        {
+            "label": "build wasm-info command-line tool",
+            "type": "shell",
+            "command": "rollup --config build/bin.wasm-info.config.mjs",
+            "problemMatcher": []
+        },
+        {
+            "label": "build wasm-info command-line tool (live compile)",
+            "type": "shell",
+            "command": "rollup -w --config build/bin.wasm-info.config.mjs",
+            "problemMatcher": []
+        },
+        {
+            "label": "build hexedit webapp",
+            "type": "shell",
+            "command": "rollup --config build/web.hexedit-test.config.mjs",
+            "problemMatcher": []
+        },
+        {
+            "label": "build hexedit webapp (live compile)",
+            "type": "shell",
+            "command": "rollup -w --config build/web.hexedit-test.config.mjs",
+            "problemMatcher": []
+        },
+        {
+            "label": "dwarf5 live development (live compile)",
+            "type": "shell",
+            "command": "rollup -w --config build/web.dwarf5-test.config.mjs",
+            "problemMatcher": []
+        }
+    ]
+}
