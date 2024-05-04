@@ -1,3 +1,4 @@
+
 export default {
 	input: 'tools/wasm-info.js',
 	output: {

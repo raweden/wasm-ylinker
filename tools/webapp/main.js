@@ -1,24 +1,33 @@
 
-// 1954 (1953.125) wasm-pages are about 128mb of memory
-// 
-// TODO:
-// - drag & drop
-//   - support for loading and saving to file system, reduces copying @done
-// - import name section from emscripten symbolmap
-// - reqognize objc method names.
-// - objc-abi inspector.
-// - headless workflows 
-// - more expressive filterig of table based content, could use filter per column. This only requires some data-type notation per column.
-// - Rebuild Inspect into reflect more of the section generic structure of a module..
-// - Memory to be split into data-segments & memory (as this can be decoupled trough data.init instructions..)
-// - merge with WAT module action
-// - separate this script into; needs one for UI and one for shell and what would be common for both.
-// - make the inspector like for freebsd a accept based invokation, like allowing each inspector letting the UI know whether it has
-//   anything to display for the current binary, globalApp.registerInspector()
-// - consider to support multiple drop of source wasms, 
-// - add drop-down per file parameter (to chose from active files)
-// 
-// https://hacks.mozilla.org/2017/07/webassembly-table-imports-what-are-they/
+/*
+ * Copyright (c) 2023, 2024, Jesper Svensson All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ * 
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ * 3. All advertising materials mentioning features or use of this software must
+ *    display the following acknowledgement: This product includes software
+ *    developed by the Jesper Svensson.
+ * 4. Neither the name of the Jesper Svensson nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission. 
+ * 
+ * THIS SOFTWARE IS PROVIDED BY Jesper Svensson AS IS AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+ * EVENT SHALL Jesper Svensson BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 import { ByteArray, lengthBytesUTF8, lengthSLEB128, lengthULEB128 } from "../../src/core/ByteArray";
 import * as constant from "../../src/core/const";

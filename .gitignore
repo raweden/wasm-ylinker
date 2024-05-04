@@ -18,6 +18,9 @@ archive/**
 node_modules/**
 .vscode/tab-goups.localStorage.json
 dist/lab/**
+dist/assets/**
 
 # bin files
+bin/wasm-info
+bin/wasm-ylinker
 bin/wasm-ylinker.map
