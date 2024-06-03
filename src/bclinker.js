@@ -40,7 +40,7 @@ import { WA_TYPE_I32, SECTION_TYPE_CODE, SECTION_TYPE_FUNCTYPE, SECTION_TYPE_IMP
 import { WebAssemblyCustomSection, WebAssemblySection, WasmDataSegment, WasmElementSegment, WasmFunction, 
     WasmGlobal, WasmLocal, WasmMemory, WasmTable, WasmType, WasmTag,
     ImportedFunction, ImportedGlobal, ImportedMemory, ImportedTable, ImportedTag, 
-    ExportedFunction, ExportedGlobal, ExportedMemory, ExportedTable  } from "./core/types"
+    WasmExport, WA_EXPORT_KIND_FUNC} from "./core/types"
 import { WebAssemblyModule, WebAssemblyImportSection, WebAssemblyCodeSection, WebAssemblyDataSection, 
     WebAssemblyDataCountSection, WebAssemblyStartSection, WebAssemblyExportSection, WebAssemblyGlobalSection, 
     WebAssemblyMemorySection, WebAssemblyElementSection, WebAssemblyFuncTypeSection, WebAssemblyFunctionSection,
@@ -252,7 +252,7 @@ export class ByteCodeLinker {
 	    this.dataSegments = [];
         /** @type {WasmElementSegment[]} */
 	    this.elementSegments = [];
-        /** @type {Array.<ExportedFunction, ExportedGlobal, ExportedMemory, ExportedTable>} */
+        /** @type {WasmExport[]} */
 	    this.exports = [];
 	    /** @type {Array.<WasmFunction|ImportedFunction>} */
         this.functions = [];
@@ -3957,9 +3957,8 @@ export class ByteCodeLinker {
             len = export_list.length;
             for (let i = 0; i < len; i++) {
                 let func = export_list[i];
-                let exp = new ExportedFunction();
-                exp.name = func[__nsym];
-                exp.function = func;
+                let name = func[__nsym];
+                let exp = new WasmExport(WA_EXPORT_KIND_FUNC, name, func);
                 dst_exports.push(exp);
             }
         }
@@ -4128,9 +4127,8 @@ export class ByteCodeLinker {
 
             _functions.push(ctor_dylib_tbl);
 
-            let texp = new ExportedFunction();
-            texp.name = ctor_dylib_tbl[__nsym];
-            texp.function = ctor_dylib_tbl;
+            let name = ctor_dylib_tbl[__nsym];
+            let texp = new WasmExport(WA_EXPORT_KIND_FUNC, name, ctor_dylib_tbl);
             dst_exports.push(texp);
         }
 
@@ -4759,9 +4757,8 @@ function dl_generate_exports(linker, module, profile) {
     let len = export_list.length;
     for (let i = 0; i < len; i++) {
         let func = export_list[i];
-        let exp = new ExportedFunction();
-        exp.name = func[__nsym];
-        exp.function = func;
+        let name = func[__nsym];
+        let exp = new WasmExport(WA_EXPORT_KIND_FUNC, name, func);
         dst_exports.push(exp);
     }
 }

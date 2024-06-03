@@ -45,7 +45,7 @@ import { WA_TYPE_ANY, WA_TYPE_NUMRIC, opclsmap } from "./inst"
 import { WebAssemblySection, WebAssemblyCustomSection, 
     WasmLocal, WasmGlobal, WasmType, WasmFunction, WasmTag, WasmTable, WasmMemory, WasmDataSegment, WasmElementSegment,
     ImportedFunction, ImportedGlobal, ImportedMemory, ImportedTable, ImportedTag,
-    ExportedFunction, ExportedGlobal, ExportedMemory, ExportedTable
+    WasmExport, WA_EXPORT_KIND_FUNC, WA_EXPORT_KIND_TABLE, WA_EXPORT_KIND_MEMORY, WA_EXPORT_KIND_GLOBAL, WA_EXPORT_KIND_TAG
 } from "./types";
 import { byteCodeComputeByteLength, decodeByteCode, encodeByteCode } from "./bytecode";
 import { WebAssemblyCustomSectionName } from "./name";
@@ -1209,7 +1209,8 @@ export class WebAssemblyGlobalSection extends WebAssemblySection {
     }
 }
 
-
+const ERR_INDEX_RANGE = "Index out of range";
+const ERR_EXPORT_INVL_TYPE = "Invalid export type";
 
 /**
  * @todo how to handle reference count for exports?
@@ -1232,21 +1233,24 @@ export class WebAssemblyExportSection extends WebAssemblySection {
         secsz += exported.length; // each export have a type-id
         let len = exported.length;
         for (let i = 0; i < len; i++) {
+            /** @type {WasmExport} */
             let exp = exported[i];
             let nlen = lengthBytesUTF8(exp.name);
             secsz += nlen;
             secsz += lengthULEB128(nlen);
             let idx = -1;
-            if (exp instanceof ExportedFunction) {
-                idx = mod.functions.indexOf(exp.function);
+            if (exp._kind == WA_EXPORT_KIND_FUNC) {
+                idx = mod.functions.indexOf(exp.value);
                 //if (exp._function._usage <= 0)
                 //    throw new ReferenceError("exporting function with usage zero");
-            } else if (exp instanceof ExportedTable) {
-                idx = mod.tables.indexOf(exp.table);
-            } else if (exp instanceof ExportedMemory) {
-                idx = mod.memory.indexOf(exp.memory);
-            } else if (exp instanceof ExportedGlobal) {
-                idx = mod.globals.indexOf(exp.global);
+            } else if (exp._kind == WA_EXPORT_KIND_TABLE) {
+                idx = mod.tables.indexOf(exp.value);
+            } else if (exp._kind == WA_EXPORT_KIND_MEMORY) {
+                idx = mod.memory.indexOf(exp.value);
+            } else if (exp._kind == WA_EXPORT_KIND_GLOBAL) {
+                idx = mod.globals.indexOf(exp.value);
+            } else if (exp._kind == WA_EXPORT_KIND_TAG) {
+                idx = mod.tags.indexOf(exp.value);
             }
 
             if (idx === -1)
@@ -1270,17 +1274,20 @@ export class WebAssemblyExportSection extends WebAssemblySection {
             let strlen = lengthBytesUTF8(exp.name);
             data.writeULEB128(strlen);
             data.writeUTF8Bytes(exp.name);
-            if (exp instanceof ExportedFunction) {
+            if (exp._kind == WA_EXPORT_KIND_FUNC) {
                 data.writeUint8(0x00);
                 data.writeULEB128(idx);
-            } else if (exp instanceof ExportedTable) {
+            } else if (exp._kind == WA_EXPORT_KIND_TABLE) {
                 data.writeUint8(0x01);
                 data.writeULEB128(idx);
-            } else if (exp instanceof ExportedMemory) {
+            } else if (exp._kind == WA_EXPORT_KIND_MEMORY) {
                 data.writeUint8(0x02);
                 data.writeULEB128(idx);
-            } else if (exp instanceof ExportedGlobal) {
+            } else if (exp._kind == WA_EXPORT_KIND_GLOBAL) {
                 data.writeUint8(0x03);
+                data.writeULEB128(idx);
+            } else if (exp._kind == WA_EXPORT_KIND_TAG) {
+                data.writeUint8(0x04);
                 data.writeULEB128(idx);
             }
         }
@@ -1297,38 +1304,78 @@ export class WebAssemblyExportSection extends WebAssemblySection {
      */
     static decode(module, data, size) {
 
+        const max_func = module.functions.length;
+        const max_tbl = module.tables.length;
+        const max_mem = module.memory.length;
+        const max_glob = module.globals.length;
+        const max_tag = module.tags.length;
+
         let cnt = data.readULEB128();
         let vector = [];
         for (let i = 0; i < cnt; i++) {
 
+            let func, tbl, mem, glob, tag;
             let nlen = data.readULEB128();
             let name = data.readUTF8Bytes(nlen);
             let type = data.readUint8();
             let idx = data.readULEB128();
+            let exp = null;
 
             if (type == 0x00) {
-                let exp = new ExportedFunction();
-                let func = module.functions[idx];
-                exp.name = name;
-                exp.function = func;
-                vector.push(exp);
+                if (idx < 0 || idx >= max_func) {
+                    throw new RangeError(ERR_INDEX_RANGE);
+                }
+                func = module.functions[idx];
+                if (!func || func instanceof ImportedFunction) {
+                    throw new TypeError(ERR_EXPORT_INVL_TYPE);
+                }
+
+                exp = new WasmExport(WA_EXPORT_KIND_FUNC, name, func);
             } else if (type == 0x01) {
-                let exp = new ExportedTable();
-                exp.name = name;
-                exp.table = module.tables[idx];
-                vector.push(exp);
+                if (idx < 0 || idx >= max_tbl) {
+                    throw new RangeError(ERR_INDEX_RANGE);
+                }
+                tbl = module.tables[idx];
+                if (!tbl || tbl instanceof ImportedTable) {
+                    throw new TypeError(ERR_EXPORT_INVL_TYPE);
+                }
+
+                exp = new WasmExport(WA_EXPORT_KIND_TABLE, name, tbl);
             } else if (type == 0x02) {
-                let exp = new ExportedMemory();
-                exp.name = name;
-                exp.memory = module.memory[idx];
-                vector.push(exp);
+                if (idx < 0 || idx >= max_mem) {
+                    throw new RangeError(ERR_INDEX_RANGE);
+                }
+                mem = module.memory[idx];
+                if (!mem || mem instanceof ImportedMemory) {
+                    throw new TypeError(ERR_EXPORT_INVL_TYPE);
+                }
+                exp = new WasmExport(WA_EXPORT_KIND_MEMORY, name, mem);
             } else if (type == 0x03) {
-                let exp = new ExportedGlobal();
-                exp.name = name;
-                exp.global = module.globals[idx];
-                vector.push(exp);
+                if (idx < 0 || idx >= max_glob) {
+                    throw new RangeError(ERR_INDEX_RANGE);
+                }
+                glob = module.globals[idx];
+                if (!glob || glob instanceof ImportedGlobal) {
+                    throw new TypeError(ERR_EXPORT_INVL_TYPE);
+                }
+                exp = new WasmExport(WA_EXPORT_KIND_GLOBAL, name, glob);
+            } else if (type == 0x04) {
+                if (idx < 0 || idx >= max_tag) {
+                    throw new RangeError(ERR_INDEX_RANGE);
+                }
+                tag = module.tags[idx];
+                if (!tag || tag instanceof ImportedTag) {
+                    throw new TypeError(ERR_EXPORT_INVL_TYPE);
+                }
+                exp = new WasmExport(WA_EXPORT_KIND_TAG, name, tag);
             } else {
                 console.warn("export of type %d is not supported", type);
+            }
+
+            if (exp !== null) {
+                vector.push(exp);
+            } else {
+                throw new ReferenceError("Not a Export!");
             }
         }
 
@@ -2214,7 +2261,7 @@ export class WebAssemblyModule {
         this.dataSegments = undefined;
         /** @type {WasmElementSegment[]} */
         this.elementSegments = undefined;
-        /** @type {Array.<ExportedFunction|ExportedGlobal|ExportedMemory|ExportedTable>} */
+        /** @type {WasmExport[]} */
         this.exports = undefined;
         /** @type {Array.<ImportedFunction|WasmFunction>} */
         this.functions = undefined;
@@ -2237,7 +2284,7 @@ export class WebAssemblyModule {
 
         /** @type {integer} */
         this._version = undefined;
-        /** @type {Array.<ExportedFunction|ExportedGlobal|ExportedMemory|ExportedTable>} */
+        /** @type {WasmExport[]} */
         this._explicitExported = []; // exports added trough module.appendExport
     }
 
@@ -3399,7 +3446,7 @@ export class WebAssemblyModule {
      * 
      * @param {String} name
      * @param {String} module Optional. If specified the search is explicity done for a ImportedGlobal
-     * @returns {WasmGlobal|ImportedGlobal}
+     * @returns {WasmGlobal|ImportedGlobal?}
      */
     getGlobalByName(name, module) {
         /*if (!this.names || !this.names.globals)
@@ -3450,8 +3497,11 @@ export class WebAssemblyModule {
         len = exported.length;
         for (let i = 0; i < len; i++) {
             let exp = exported[i];
-            if (exp instanceof ExportedGlobal && exp.name == name) {
-                return exp.global;
+            if (exp._kind !== WA_EXPORT_KIND_GLOBAL) {
+                continue;
+            }
+            if (exp.name == name) {
+                return exp.value;
             }
         }
 
@@ -3625,108 +3675,84 @@ export class WebAssemblyModule {
     /**
      * 
      * @param {string} name 
-     * @param {WasmGlobal|WasmFunction|WasmMemory|WasmTable} value
-     * @throws {ReferenceError} If the name or value is already declared as a export.
+     * @param {WasmGlobal|WasmFunction|WasmMemory|WasmTable|WasmTag} value
+     * @throws {ReferenceError|TypeError} If the name or value is already declared as a export.
+     * @throws {TypeError} If the class of value is not a valid type to be exported.
      */
     appendExport(name, value) {
 
-        if (!((value instanceof WasmGlobal) || (value instanceof WasmFunction) || (value instanceof WasmMemory) || (value instanceof WasmTable))) {
-            throw TypeError("invalid type for export");
+        if (!((value instanceof WasmGlobal) || (value instanceof WasmFunction) || (value instanceof WasmMemory) || (value instanceof WasmTable) || (value instanceof WasmTag))) {
+            throw TypeError(ERR_EXPORT_INVL_TYPE);
         }
 
-        if (value instanceof WasmGlobal) {
-
-            let items = this.exports;
-            let len = items.length;
-            for (let i = 0; i < len; i++) {
-                let item = items[i];
-                if (item.name == name) {
-                    throw new ReferenceError("name already declared");
-                } else if (item.global == value) {
-                    throw new ReferenceError("value already exported");
-                }
+        let explicit = this._explicitExported;
+        let exps = this.exports;
+        let len = exps.length;
+        for (let i = 0; i < len; i++) {
+            let exp = exps[i];
+            if (exp.name == name) {
+                throw new ReferenceError("name already declared");
+            } else if (exp.value == value) {
+                throw new ReferenceError("value already exported");
             }
+        }
 
-            let globals = this.globals;
-            if (globals.indexOf(value) == -1) {
-                globals.push(value);
-            }
-
-            let exp = new ExportedGlobal();
-            exp.name = name;
-            exp.global = value;
-            items.push(exp);
-            this._explicitExported.push(exp);
-
-        } else if (value instanceof WasmFunction) {
-
-            let items = this.exports;
-            let len = items.length;
-            for (let i = 0; i < len; i++) {
-                let item = items[i];
-                if (item.name == name) {
-                    throw new ReferenceError("name already declared");
-                } else if (item.function == value) {
-                    throw new ReferenceError("value already exported");
-                }
-            }
+        if (value instanceof WasmFunction) {
 
             let functions = this.functions;
             if (functions.indexOf(value) == -1) {
                 functions.push(value);
             }
 
-            let exp = new ExportedFunction();
-            exp.name = name;
-            exp.function = value;
-            items.push(exp);
-            this._explicitExported.push(exp);
+            let exp = new WasmExport(WA_EXPORT_KIND_FUNC, name, value);
+            exps.push(exp);
+            explicit.push(exp);
+
+        } else if (value instanceof WasmGlobal) {
+
+            let globals = this.globals;
+            if (globals.indexOf(value) == -1) {
+                globals.push(value);
+            }
+
+            let exp = new WasmExport(WA_EXPORT_KIND_GLOBAL, name, value);
+            exps.push(exp);
+            explicit.push(exp);
 
         } else if (value instanceof WasmMemory) {
-
-            let items = this.exports;
-            let len = items.length;
-            for (let i = 0; i < len; i++) {
-                let item = items[i];
-                if (item.name == name) {
-                    throw new ReferenceError("name already declared");
-                } else if (item.memory == value) {
-                    throw new ReferenceError("value already exported");
-                }
-            }
 
             let memory = this.memory;
             if (memory.indexOf(value) == -1) {
                 memory.push(value);
             }
 
-            let exp = new ExportedMemory();
-            exp.name = name;
-            exp.memory = value;
-            items.push(exp);
-            this._explicitExported.push(exp);
+            let exp = new WasmExport(WA_EXPORT_KIND_MEMORY, name, value);
+            exps.push(exp);
+            explicit.push(exp);
 
-        } else if (value instanceof ExportedTable) {
+        } else if (value instanceof WasmTable) {
 
-            let items = this.exports;
-            let len = items.length;
-            for (let i = 0; i < len; i++) {
-                let item = items[i];
-                if (item.name == name) {
-                    throw new ReferenceError("name already declared");
-                } else if (item.table == value) {
-                    throw new ReferenceError("value already exported");
-                }
+            let tables = this.tables;
+            if (tables.indexOf(value) == -1) {
+                tables.push(value);
             }
 
-            let exp = new ExportedTable();
-            exp.name = name;
-            exp.table = value;
-            items.push(exp);
-            this._explicitExported.push(exp);
+            let exp = new WasmExport(WA_EXPORT_KIND_TABLE, name, value);
+            exps.push(exp);
+            explicit.push(exp);
+
+        } else if (value instanceof WasmTag) {
+
+            let tags = this.tags;
+            if (tags.indexOf(value) == -1) {
+                tags.push(value);
+            }
+
+            let exp = new WasmExport(WA_EXPORT_KIND_TAG, name, value);
+            exps.push(exp);
+            explicit.push(exp);
 
         } 
-
     }
 
     removeExportByName(name) {
@@ -3735,194 +3761,53 @@ export class WebAssemblyModule {
 
     /**
      * 
-     * @param {WasmFunction|WasmGlobal|WasmMemory|WasmTable} obj 
-     * @returns The number of enteries removed.
+     * @param {WasmFunction|WasmGlobal|WasmMemory|WasmTable|WasmTag} obj 
+     * @returns {WasmExport?}
      */
     removeExportByRef(obj) {
-        // there is nothing in the spec which prevents a object to be exported more than once..
-        if (obj instanceof WasmFunction) {
-
-            let matched = [];
-            let exported = this.exports;
-            let len = exported.length;
-            for (let i = 0; i < len; i++) {
-                let exp = exported[i];
-                if (!(exp instanceof ExportedFunction))
-                    continue;
-                if (exp.function == obj) {
-                    matched.push(i);
-                }
+        
+        let matched;
+        let exps = this.exports;
+        let len = exps.length;
+        for (let i = 0; i < len; i++) {
+            let exp = exps[i];
+            if (exp.value == obj) {
+                exps.splice(i, 1);
+                matched = exp;
+                break;
             }
-
-            // removes in reverse..
-            for (let i = matched.length - 1; i >= 0; i--) {
-                let idx = matched[i];
-                matched = exported[idx];
-                exported.splice(idx, 1);
-            }
-
-            let explicit = this._explicitExported;
-            len = matched.length;
-            for (let i = 0; i < len; i++) {
-                let exp = matched[i];
-                let idx = explicit.indexOf(exp);
-                if (idx !== -1) {
-                    explicit.splice(idx, 1);
-                }
-            }
-
-            return matched.length;
-
-        } else if (obj instanceof WasmGlobal) {
-
-            let matched = [];
-            let exported = this.exports;
-            let len = exported.length;
-            for (let i = 0; i < len; i++) {
-                let exp = exported[i];
-                if (!(exp instanceof ExportedGlobal))
-                    continue;
-                if (exp.global == obj) {
-                    matched.push(i);
-                }
-            }
-
-            // removes in reverse..
-            for (let i = matched.length - 1; i >= 0; i--) {
-                let idx = matched[i];
-                matched = exported[idx];
-                exported.splice(idx, 1);
-            }
-
-            let explicit = this._explicitExported;
-            len = matched.length;
-            for (let i = 0; i < len; i++) {
-                let exp = matched[i];
-                let idx = explicit.indexOf(exp);
-                if (idx !== -1) {
-                    explicit.splice(idx, 1);
-                }
-            }
-
-            return matched.length;
-
-        } else if (obj instanceof WasmTable) {
-
-            let matched = [];
-            let exported = this.exports;
-            let len = exported.length;
-            for (let i = 0; i < len; i++) {
-                let exp = exported[i];
-                if (!(exp instanceof ExportedTable))
-                    continue;
-                if (exp.table == obj) {
-                    matched.push(i);
-                }
-            }
-
-            // removes in reverse..
-            for (let i = matched.length - 1; i >= 0; i--) {
-                let idx = matched[i];
-                matched = exported[idx];
-                exported.splice(idx, 1);
-            }
-
-            let explicit = this._explicitExported;
-            len = matched.length;
-            for (let i = 0; i < len; i++) {
-                let exp = matched[i];
-                let idx = explicit.indexOf(exp);
-                if (idx !== -1) {
-                    explicit.splice(idx, 1);
-                }
-            }
-
-            return matched.length;
-
-        } else if (obj instanceof WasmMemory) {
-
-            let matched = [];
-            let exported = this.exports;
-            let len = exported.length;
-            for (let i = 0; i < len; i++) {
-                let exp = exported[i];
-                if (!(exp instanceof ExportedMemory))
-                    continue;
-                if (exp.memory == obj) {
-                    matched.push(i);
-                }
-            }
-
-            // removes in reverse..
-            for (let i = matched.length - 1; i >= 0; i--) {
-                let idx = matched[i];
-                matched = exported[idx];
-                exported.splice(idx, 1);
-            }
-
-            let explicit = this._explicitExported;
-            len = matched.length;
-            for (let i = 0; i < len; i++) {
-                let exp = matched[i];
-                let idx = explicit.indexOf(exp);
-                if (idx !== -1) {
-                    explicit.splice(idx, 1);
-                }
-            }
-
-            return matched.length;
         }
 
+        if (!matched)
+            return null;
 
-        return 0;
+        // remove in explicit if present
+        let explicit = this._explicitExported;
+        let idx = explicit.indexOf(matched);
+
+        if (idx !== -1) {
+            explicit.splice(idx, 1);
+        }
+
+        return matched;
     }
 
     /**
      * 
      * @param {WasmFunction|WasmGlobal|WasmMemory|WasmTable} obj 
-     * @returns {ExportedFunction|ExportedGlobal|ExportedMemory|ExportedTable}
+     * @returns {WasmExport?}
      */ 
     findExportDefByObject(obj) {
         let exps = this.exports;
         let len = exps.length;
         for (let i = 0; i < len; i++) {
             let exp = exps[i];
-            if (exp instanceof ExportedFunction && exp.function === obj) {
-                return exp;
-            } else if (exp instanceof ExportedGlobal && exp.global === obj) {
-                return exp;
-            } else if (exp instanceof ExportedMemory && exp.memory === obj) {
-                return exp;
-            } else if (exp instanceof ExportedTable && exp.table === obj) {
+            if (exp.value == obj) {
                 return exp;
             }
         }
     
-        return undefined;
-    }
-
-    /**
-     * @param {WasmFunction|WasmGlobal|WasmMemory|WasmTable} obj 
-     * @returns {Array.<ExportedFunction|ExportedGlobal|ExportedMemory|ExportedTable>}
-     */ 
-    findAllExportDefByObject(obj) {
-        let results = [];
-        let exps = this.exports;
-        let len = exps.length;
-        for (let i = 0; i < len; i++) {
-            let exp = exps[i];
-            if (exp instanceof ExportedFunction && exp.function === obj) {
-                results.push(exp);
-            } else if (exp instanceof ExportedGlobal && exp.global === obj) {
-                results.push(exp);
-            } else if (exp instanceof ExportedMemory && exp.memory === obj) {
-                results.push(exp);
-            } else if (exp instanceof ExportedTable && exp.table === obj) {
-                results.push(exp);
-            }
-        }
-    
-        return results;
+        return null;
     }
 
     // Custom Sections
@@ -4142,7 +4027,7 @@ export class WebAssemblyModule {
      * 
      * @param {string} name 
      * @param {boolean} checkExports 
-     * @returns {WasmFunction|ImportedFunction}
+     * @returns {WasmFunction|ImportedFunction?}
      */
     getFunctionByName(name, checkExports) {
 
@@ -4163,11 +4048,11 @@ export class WebAssemblyModule {
         len = exported.length
         for (let i = 0; i < len; i++) {
             let exp = exported[i];
-            if (!(exp instanceof ExportedFunction)) {
+            if (exp._kind != WA_EXPORT_KIND_FUNC) {
                 continue;
             }
             if (exp.name == name) {
-                return exp.function;
+                return exp.value;
             }
         }
 
@@ -4467,7 +4352,7 @@ export function parseWebAssemblyBinary(buf, options) {
             chunk.dataOffset = data.offset;
             chunk.size = chunk.size - (data.offset - tmp);
             data.offset = tmp;
-        } else if (type > 0x0C) {
+        } else if (type > 0x0d) {
             console.warn("section type: %d not handled", type);
         }
 
@@ -4625,7 +4510,7 @@ export function parseWebAssemblyBinary(buf, options) {
                 sec._cache = {offset: chunk.offset, size: chunk.size, dataOffset: chunk.dataOffset};
                 break;
             }
-            case 0x0d:  // data-count
+            case 0x0d:  // tag-section (exception/event handling)
             {
                 let sec = WebAssemblyTagSection.decode(mod, data, size);
                 chunks[chunk.index] = sec;

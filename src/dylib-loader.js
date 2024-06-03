@@ -31,7 +31,7 @@
 
 import * as fs from "node:fs"
 import { ByteArray } from "./core/ByteArray";
-import { WasmType, ImportedFunction } from "./core/types"
+import { WasmType, ImportedFunction, WA_EXPORT_KIND_FUNC } from "./core/types"
 import { WebAssemblyFuncTypeSection, WebAssemblyImportSection, WebAssemblyFunctionSection, WebAssemblyExportSection, WebAssemblyDataSection } from "./core/WebAssembly";
 import { WebAssemblyCustomSectionNetBSDExecHeader } from "./ylinker/rtld.exechdr"
 import { WebAssemblyCustomSectionNetBSDDylinkV2 } from "./ylinker/rtld.dylink0";
@@ -212,9 +212,9 @@ export class DylibSymbolLinker {
         let len = exports.length;
         for (let i = 0; i < len; i++) {
             let exp = exports[i];
-            if (exp.type == "function") {
+            if (exp._kind == WA_EXPORT_KIND_FUNC) {
                 let name = exp.name;
-                let func = {name: name, type: exp.function.type};
+                let func = {name: name, type: exp.value.type};
                 func_exports[name] = func;
             }
         }

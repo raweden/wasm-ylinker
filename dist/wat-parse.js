@@ -8,6 +8,8 @@
 // 
 // idents cannot be redeclared "redefinition of function $test"
 
+import { WA_EXPORT_KIND_FUNC, WA_EXPORT_KIND_GLOBAL, WA_EXPORT_KIND_MEMORY, WA_EXPORT_KIND_TABLE, WasmExport } from "../src/core/types";
+
 
 function isIdentChar(chr) {
 	return (chr > 0x5D && chr < 0x7B)	// a-z + '^_`' at start
@@ -2551,9 +2553,7 @@ function parseWAT(source, options) {
 		mem.max = tkn.value;
 
 		if (exp) {
-			let obj = new ExportedMemory();
-			obj.name = exp;
-			obj.memory = mem;
+			let obj = new WasmExport(WA_EXPORT_KIND_MEMORY, exp, mem);
 			exported.push(obj)
 		}
 
@@ -3032,9 +3032,7 @@ function parseWAT(source, options) {
 		}
 
 		if (exp) {
-			let obj = new ExportedGlobal();
-			obj.name = exp;
-			obj.global = glob;
+			let obj = new WasmExport(WA_EXPORT_KIND_GLOBAL, exp, glob);
 			exported.push(obj);
 		}
 
@@ -3210,9 +3208,7 @@ function parseWAT(source, options) {
 		}
 
 		if (exp) {
-			let obj = new ExportedFunction();
-			obj.name = exp;
-			obj.function = func;
+			let obj = new WasmExport(WA_EXPORT_KIND_FUNC, exp, func);
 			exported.push(obj);
 		}
 
@@ -3306,9 +3302,7 @@ function parseWAT(source, options) {
 		}
 
 		if (exp) {
-			let obj = new ExportedTable();
-			obj.name = exp;
-			obj.table = tbl;
+			let obj = new WasmExport(WA_EXPORT_KIND_TABLE, exp, tbl);
 			exported.push(obj);
 		}
 

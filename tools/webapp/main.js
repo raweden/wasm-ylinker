@@ -31,7 +31,7 @@
 
 import { ByteArray, lengthBytesUTF8, lengthSLEB128, lengthULEB128 } from "../../src/core/ByteArray";
 import * as constant from "../../src/core/const";
-import { WebAssemblySection, WasmFunction, WasmType, WasmGlobal, ImportedFunction, ImportedGlobal, ImportedTable, ImportedMemory, WasmTag, WasmTable, WasmMemory, WasmDataSegment, WasmElementSegment, WebAssemblyCustomSection, ImportedTag, WasmLocal } from "../../src/core/types";
+import { WebAssemblySection, WasmFunction, WasmType, WasmGlobal, ImportedFunction, ImportedGlobal, ImportedTable, ImportedMemory, WasmTag, WasmTable, WasmMemory, WasmDataSegment, WasmElementSegment, WebAssemblyCustomSection, ImportedTag, WasmLocal, WA_EXPORT_KIND_FUNC } from "../../src/core/types";
 import { parseWebAssemblyBinary,  WebAssemblyModule } from "../../src/core/WebAssembly";
 import { WA_TYPE_ANY, opcode_info } from "../../src/core/inst";
 import { type_name } from "../../src/core/utils";
@@ -1765,10 +1765,10 @@ class WasmFunctionsInspectorView {
 		len = exported.length;
 		for (let i = 0; i < len; i++) {
 			let exp = exported[i];
-			if (!(exp instanceof ImportedFunction)) {
+			if (exp._kind != WA_EXPORT_KIND_FUNC) {
 				continue;
 			}
-			let func = exp.function;
+			let func = exp.value;
 			let idx = functions.indexOf(func);
 			if (idx == -1)
 				continue;
@@ -2108,11 +2108,12 @@ class WasmTablesInspectorView {
 		let len = exported.length;
 		for (let i = 0; i < len; i++) {
 			let exp = exported[i];
-			if (!(exp instanceof ImportedFunction)) {
+			if (exp._kind != WA_EXPORT_KIND_FUNC) {
 				continue;
 			}
-			let func = exp.function;
-			let idx = functions.indexOf(func);
+
+			let func = exp.value;
+			let idx = items.indexOf(func);
 			if (idx == -1)
 				continue;
 			let obj = items[idx];

@@ -466,58 +466,72 @@ export class WasmElementSegment {
 
 // export declaration type
 
-const WA_EXPORT_KIND_FUNC = 0;
-const WA_EXPORT_KIND_TABLE = 1;
-const WA_EXPORT_KIND_MEMORY = 2;
-const WA_EXPORT_KIND_GLOBAL = 3;
+export const WA_EXPORT_KIND_FUNC = 0;
+export const WA_EXPORT_KIND_TABLE = 1;
+export const WA_EXPORT_KIND_MEMORY = 2;
+export const WA_EXPORT_KIND_GLOBAL = 3;
+export const WA_EXPORT_KIND_TAG = 4;
 
-export class WasmExport {
-
-    constructor(kind, name, value) {
-        this.kind = kind;
-        this.name = name;
-        this.value = value;
+/**
+ * 
+ * @param {string} str 
+ * @returns {number}
+ */
+function fromExportKindString(str) {
+    switch (str) {
+        case "function":
+            return WA_EXPORT_KIND_FUNC;
+        case "table":
+            return WA_EXPORT_KIND_TABLE;
+        case "memory":
+            return WA_EXPORT_KIND_MEMORY;
+        case "global":
+            return WA_EXPORT_KIND_GLOBAL;
+        case "tag":
+            return WA_EXPORT_KIND_TAG;
+        default:
+            return -1;
     }
 }
 
-export class ExportedFunction {
+export class WasmExport {
 
-    constructor() {
-        this.type = "function";
-        this.name = undefined;
-        this.typeidx = undefined;
+    /**
+     * 
+     * @param {number|string} kind 
+     * @param {string} name 
+     * @param {WasmFunction|WasmTable|WasmMemory|WasmGlobal|WasmTag} value 
+     */
+    constructor(kind, name, value) {
+        if (typeof kind == "string") {
+            kind = fromExportKindString(kind);
+        }
+        if (!Number.isInteger(kind) || kind < 0 || kind > WA_EXPORT_KIND_TAG) {
+            throw new TypeError("invalid argument");
+        }
+        this._kind = kind;
+        this.name = name;
+        this.value = value;
+
+        Object.freeze(this);
     }
-};
 
-export class ExportedTable {
-
-    constructor() {
-        this.type = "table";
-        this.name = undefined;
-        this.min = null;
-        this.max = null;
+    get kind() {
+        let num = this._kind;
+        switch (num) {
+            case WA_EXPORT_KIND_FUNC:
+                return "function";
+            case WA_EXPORT_KIND_TABLE:
+                return "table";
+            case WA_EXPORT_KIND_MEMORY:
+                return "memory";
+            case WA_EXPORT_KIND_GLOBAL:
+                return "global";
+            case WA_EXPORT_KIND_TAG:
+                return "tag";
+        }
     }
-};
-
-export class ExportedMemory {
-
-    constructor() {
-        this.type = "memory";
-        this.name = undefined;
-        this.min = null;
-        this.max = null;
-        this.shared = false;
-    }
-};
-
-export class ExportedGlobal {
-
-    constructor() {
-        this.type = "global";
-        this.name = undefined;
-        this.mutable = false;
-    }
-};
+}
 
 // utility function for handling types
 

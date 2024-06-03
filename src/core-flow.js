@@ -33,8 +33,8 @@ import { SECTION_TYPE_EXPORT, SECTION_TYPE_MEMORY, SECTION_TYPE_IMPORT, SECTION_
  	WA_TYPE_I32, WA_TYPE_I64, WA_TYPE_F32, WA_TYPE_F64, __nsym} from "./core/const";	
 import { WasmFunction, WasmGlobal, WasmType, WasmLocal, 
 	ImportedFunction, ImportedMemory, ImportedGlobal, 
-	ExportedFunction, ExportedMemory, ExportedGlobal,
-	WebAssemblySection } from "./core/types";
+	WebAssemblySection, 
+	WasmExport, WA_EXPORT_KIND_FUNC, WA_EXPORT_KIND_MEMORY, WA_EXPORT_KIND_GLOBAL} from "./core/types";
 import { AtomicInst, BlockInst, ReturnInst, IfInst } from "./core/inst";
 import { WebAssemblyFuncTypeSection, WebAssemblyFunctionSection, WebAssemblyTableSection, WebAssemblyMemorySection,
 	WebAssemblyGlobalSection, WebAssemblyDataSection, WebAssemblyModule, traverseStack} from "./core/WebAssembly";
@@ -110,11 +110,11 @@ export function namedGlobalsMap(mod) {
 	let len = exported.length;
 	for (let i = 0; i < len; i++) {
 		let exp = exported[i];
-		if (exp.type != "global")
+		if (exp._kind != WA_EXPORT_KIND_GLOBAL)
 			continue;
 		arr1.push(exp.name);
-		arr2.push(exp.global);
-		map[exp.name] = exp.global;
+		arr2.push(exp.value);
+		map[exp.name] = exp.value;
 	}
 
 	len = globals.length;
@@ -303,7 +303,7 @@ function convertMemoryAction(ctx, mod, options) {
 					let len = exps.length;
 					for (let i = 0; i < len; i++) {
 						let exp = exps[i];
-						if (!(exp instanceof ExportedMemory)) {
+						if (exp._kind !== WA_EXPORT_KIND_MEMORY) {
 							continue;
 						}
 						if (exp.memory == org) {
@@ -916,31 +916,6 @@ function postOptimizeWasmDylibAction(ctx, module, options) {
 
 function dumpImportedFnAction(ctx, module, options) {
 	
-}
-
-function removeExportFor(mod, obj) {
-
-	if (obj instanceof WasmFunction) {
-
-	} else if (obj instanceof WasmGlobal) {
-
-		let idx = -1;
-		let exported = mod.exports;
-		let len = exported.length;
-		for (let i = 0; i < len; i++) {
-			let exp = exported[i];
-			if (!(exp instanceof ExportedGlobal))
-				continue;
-			if (exp.global == obj) {
-				idx = i;
-				break;
-			}
-		}
-
-		if (idx !== -1) {
-			exported.splice(idx, 1);
-		}
-	}
 }
 
 const REPLACE_CALL_SKIP_FUNC = Symbol("@skip-func");
@@ -1925,9 +1900,7 @@ function filterModuleExports(ctx, mod, options) {
 		for (let y = 0; y < ylen; y++) {
 			let func = functions[y];
 			if (func[__nsym] == name) {
-				let exp = new ExportedFunction();
-				exp.name = name;
-				exp.function = func;
+				let exp = new WasmExport(WA_EXPORT_KIND_FUNC, name, func);
 				exps.push(exp);
 			}
 		}
