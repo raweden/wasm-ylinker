@@ -41,10 +41,13 @@ import { _flowActions, namedGlobalsMap, replaceCallInstructions, getWorkflowPara
 import { WebAssemblyCustomSectionNetBSDDylinkV2 } from "../../src/ylinker/rtld.dylink0";
 import { WebAssemblyCustomSectionNetBSDExecHeader } from "../../src/ylinker/rtld.exechdr";
 
-const WASM_PAGE_SIZE = (1 << 16);
-
-const moreIcon = `<svg aria-hidden="true" focusable="false" role="img" class="octicon octicon-kebab-horizontal" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="display: inline-block; user-select: none; vertical-align: text-bottom; overflow: visible;"><path d="M8 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM1.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm13 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path></svg>`;
-
+/**
+ * 
+ * @param {ArrayBuffer|Blob} buffer 
+ * @param {string} filename 
+ * @param {string} filetype 
+ * @returns {Promise<void, Error>}
+ */
 function saveAsFile(buffer, filename, filetype) {
 	let resolveFn, rejectFn;
     let promise = new Promise(function(resolve, reject){
@@ -90,8 +93,15 @@ function saveAsFile(buffer, filename, filetype) {
       	URL.revokeObjectURL(downloadUrl);
       	setTimeout(resolveFn, 100);
     }
+
+	return promise;
 }
 
+/**
+ * 
+ * @param {WebAssemblyModule} mod 
+ * @param {WebAssemblySection[]} sections 
+ */
 function showWasmInfoStats(mod, sections) {
 	let container = document.querySelector("div#wasm-modules-stats");
 
@@ -394,7 +404,7 @@ const _workflows = [];
 /**
  * 
  * @param {WebAssemblyModule} mod 
- * @returns 
+ * @returns {Map<number, number>}
  */
 function computeInstructionStatistics(mod) {
 
@@ -442,6 +452,10 @@ function computeInstructionStatistics(mod) {
 
 let __uiInit = false;
 
+/**
+ * 
+ * @returns {HTMLElement}
+ */
 function createMemidxInfo() {
 
 	let section = document.createElement("section");
@@ -596,6 +610,12 @@ function setupUI() {
 	});
 }
 
+/**
+ * 
+ * @param {Element} container 
+ * @param {WebAssemblyModule} module 
+ * @param {WasmMemory|ImportedMemory} memory 
+ */
 function showMemoryParamEditor(container, module, memory) {
 
 	let maxInput = container.querySelector("#memory-max");
@@ -661,7 +681,7 @@ function showMemoryParamEditor(container, module, memory) {
  * 
  * @param {HTMLDivElement} container 
  * @param {WebAssemblyModule} module 
- * @param {*} mem 
+ * @param {WasmMemory|ImportedMemory} mem 
  */
 function showInitialMemory(container, module, mem) {
 
@@ -765,6 +785,11 @@ function showInitialMemory(container, module, mem) {
 	}
 }
 
+/**
+ * 
+ * @param {number} type 
+ * @returns {string}
+ */
 function emcc_type_name(type) {
     switch(type) {
         case 0x7F: 
@@ -789,6 +814,11 @@ function emcc_type_name(type) {
     }
 }
 
+/**
+ * 
+ * @param {WasmType} functype 
+ * @returns {string}
+ */
 function emccStyleTypeString(functype) {
     let arg, ret;
     let argc = functype.argc;
@@ -2110,7 +2140,7 @@ const _inspectorViews = {};
 
 /**
  * 
- * @param {*} mod 
+ * @param {WebAssemblyModule} mod 
  */
 function populateWebAssemblyInfo(mod) {
 
@@ -2238,71 +2268,6 @@ function populateWebAssemblyInfo(mod) {
 
 }
 
-// run-length-encoding
-
-
-/*
-// NOTE: the impl below (from the as3 era) don't works, its more of a unfinished mockup.
-private static function encode_rle(bytes:ByteArray,channel:Vector.<uint>):void{
-	var c:Vector.<uint> = channel;
-	var len:int = c.length;
-	var i:int;			// holds the position for the main loop.
-	var m:Boolean;		// holds boolean for if the value is matched(true) or diffrent(false).
-	var b:Vector.<uint>	// holds reference for the current run lenght block.
-	var run:int;		// holds position for the sub loop.
-	var v:uint;			// holds the current repeated or uniqe value.
-	//
-	for (i = 0; i < len; i++) {
-		if (!m) {
-			// Different type run.
-			while (!m && run < 128) {
-				// determent that the next 2 values isnt the same as the last, in that case m must be set to false.
-				i++;
-			}
-			// writes the rle block to byte array.
-			bytes.writeByte(uint(run + 125));
-			bytes.writeByte(v);
-			run = 0;
-		} else {		
-			// Same type run.
-			while (m && run < 128) {
-				// determent that the next value is the same as the current, as long as it is this loop will run.
-				run++;
-				i++;
-			}
-			// writes the rle block to byte array.
-			bytes.writeByte(uint(run + 125));
-			bytes.writeByte(v);
-			run = 0;
-		}
-	}
-}
-private static function decode_rle(bytes:ByteArray,channel:Vector.<int>,len:int):void{
-	var i:int;
-	var n:int;
-	var byte:int;
-	var size:int;
-	i = 0;
-	while (i < len) {
-		byte = bytes.readUnsignedByte();
-		if (byte >= 128) {
-			size = byte - 125;
-			byte = bytes.readUnsignedByte();
-			for (n = 0; n < size && (i + 1) < len; n++){
-				channel.push(byte);
-			}
-			i += size;
-		} else {
-			size = byte + 1;
-			for (n = 0; n < size && (i + 1) < len; n++){
-				byte = bytes.readUnsignedByte();
-				channel.push(byte);
-			}
-			i += size;
-		}
-	}
-}		
-*/
 
 // UI
 // TODO: 
@@ -2751,98 +2716,6 @@ function setupTargetPanel(container) {
 
 		evt.preventDefault();
 	});
-
-	// output data
-	/*
-	let outputPicker = document.createElement("li");
-	outputPicker.classList.add("workflow-action", "workflow-output-file");
-	header = document.createElement("div");
-	header.classList.add("action-header", "file-label");
-	header.textContent = "Output";
-	outputPicker.appendChild(header);
-	body = document.createElement("div");
-	body.classList.add("action-body");
-	body.style.width = "100%";
-	body.textContent = "body";
-	outputPicker.appendChild(body);
-	options = document.createElement("div");
-	options.classList.add("action-header", "file-picker-button");
-	options.textContent = "chose";
-	outputPicker.appendChild(options);
-	workflowUl.appendChild(outputPicker);
-
-	options.addEventListener("click", function(evt) {
-		console.log("should pick file for output-data");
-	});
-
-	outputPicker.addEventListener("dragenter", function(evt) {
-		event.preventDefault();
-	});
-
-	outputPicker.addEventListener("dragover", function(evt) {
-		event.preventDefault();
-	});
-
-	outputPicker.addEventListener("drop", function(evt) {
-
-		let files = filesFromDataTransfer(evt.dataTransfer);
-		if (files.length == 0) {
-			event.preventDefault();
-			return;
-		}
-		let label = outputPicker.querySelector(".action-body");
-		label.textContent = files[0].name;
-		appendFiles(files);
-
-		event.preventDefault();
-	});
-
-	// output binary
-
-	let outputDataPicker = document.createElement("li");
-	outputDataPicker.classList.add("workflow-action", "workflow-output-file");
-	header = document.createElement("div");
-	header.classList.add("action-header", "file-label");
-	header.textContent = "Output";
-	outputDataPicker.appendChild(header);
-	body = document.createElement("div");
-	body.classList.add("action-body");
-	body.style.width = "100%";
-	body.textContent = "body";
-	outputDataPicker.appendChild(body);
-	options = document.createElement("div");
-	options.classList.add("action-header", "file-picker-button");
-	options.textContent = "chose";
-	outputDataPicker.appendChild(options);
-	workflowUl.appendChild(outputDataPicker);
-
-	options.addEventListener("click", function(evt) {
-		console.log("should pick file for output-wasm");
-	});
-
-	outputDataPicker.addEventListener("dragenter", function(evt) {
-		event.preventDefault();
-	});
-
-	outputDataPicker.addEventListener("dragover", function(evt) {
-		event.preventDefault();
-	});
-
-	outputDataPicker.addEventListener("drop", function(evt) {
-
-		let files = filesFromDataTransfer(evt.dataTransfer);
-		if (files.length == 0) {
-			event.preventDefault();
-			return;
-		}
-		let label = outputDataPicker.querySelector(".action-body");
-		label.textContent = files[0].name;
-		appendFiles(files);
-
-		event.preventDefault();
-		return false;
-	});
-	*/
 }
 
 let fileUl;
@@ -3027,7 +2900,6 @@ async function loadFilePairs(binary, symbolMapFile, options, parseOptions) {
 	return mod;
 }
 
-const flow = {};
 const globalApp = {
 	_extentions: [],
 	_uiInspect: [],
@@ -3170,18 +3042,6 @@ async function setupMainUI() {
 	}
 
 	fileUl = document.createElement("ul");
-
-	/*
-	let fileTab = document.querySelector("nav.topnav #tab-files.tab-item");
-	fileTab.addEventListener("click", function (evt) {
-
-		document.body.appendChild(fileUl);
-		fileUl.style.position = "absolute";
-		fileUl.style.left = "10px";
-		fileUl.style.top = "10px";
-		fileUl.style.background = "#fff";
-	});
-	*/
 
 	let targetPanel = document.createElement("div");
 	targetPanel.classList.add("target-panel");

@@ -636,7 +636,29 @@ export const builtin_op_replace_map = [ // every function is ImportedFunction an
 			calle._usage--;
 			return true;
 		}
+	}, {
+		module: MODULE_BUILT_IN,
+		name: "f32_trunc",
+		type: WasmType.create([WA_TYPE_F32], [WA_TYPE_F32]),
+		/** @type {InstReplaceCallback} */
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0x8F};
+			calle._usage--;
+			return true;
+		}
+	}, {
+		module: MODULE_BUILT_IN,
+		name: "f32_sqrt",
+		type: WasmType.create([WA_TYPE_F32], [WA_TYPE_F32]),
+		/** @type {InstReplaceCallback} */
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0x91};
+			calle._usage--;
+			return true;
+		}
 	},
+
+	
 
 	// other builtins
 	

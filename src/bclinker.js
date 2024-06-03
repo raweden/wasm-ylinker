@@ -60,17 +60,6 @@ import { validateWasmModuleDataSegments } from "./core/validate"
 import { u8_memcpy } from "./core/utils"
 import { RuntimeLinkingSymbol, DataSegmentStartSymbol, DataSegmentEndSymbol } from "./ylinker/core"
 
-function readSelectorType(buf) {
-    let str = "";
-    let len = buf.byteLength;
-    for (let i = 0; i < len; i++) {
-        let c = buf[i];
-        str += String.fromCharCode(c);
-    }
-
-    return str;
-}
-
 /**
  * @typedef DataSection
  * @type {Object}
@@ -150,6 +139,7 @@ function _replaceInCtorAndDtor(obj, oldsym, newsym) {
 /**
  * 
  * @param {DataSection} dataSection 
+ * @returns {void}
  */
 function packDataSegments(dataSection) {
     let dataSegments = dataSection.dataSegments;
@@ -335,10 +325,6 @@ export class ByteCodeLinker {
         mod.producers = this.producers;
 	}
 
-    prepareModule(wasmModule) {
-
-    }
-
     getDataSegmentSubMap(name) {
         let map;
         if (this.datasubmap.hasOwnProperty(name)) {
@@ -351,6 +337,11 @@ export class ByteCodeLinker {
         return map;
     }
 
+    /**
+     * 
+     * @param {ImportedFunction|ImportedGlobal|ImportedMemory|ImportedTable|ImportedTag} imp 
+     * @returns {void}
+     */
     appendImport(imp) {
         
         if (imp instanceof ImportedFunction) {
@@ -1482,6 +1473,11 @@ export class ByteCodeLinker {
         this._loaders.push(loader);
     }
 
+    /**
+     * 
+     * @param {number} fd A open file-descriptor
+     * @returns {void}
+     */
     writeSymbolLog(fd) {
         let symtable = this._symtable;
         let lines = ["Memory symbols", ""];
@@ -4598,7 +4594,7 @@ export class ByteCodeLinker {
 
 /**
  * 
- * @param {integer} opcode 
+ * @param {number} opcode A integer value representing the opcode.
  * @returns {boolean}
  */
 function isLoadOrStore(opcode) {
@@ -4613,8 +4609,9 @@ function isLoadOrStore(opcode) {
 }
 
 /**
+ * @typedef {number} integer
  * 
- * @param {integer} opcode 
+ * @param {integer} opcode A integer value representing the opcode.
  * @returns {boolean}
  */
 function isLoadInst(opcode) {
@@ -4630,7 +4627,7 @@ function isLoadInst(opcode) {
 
 /**
  * 
- * @param {integer} opcode 
+ * @param {integer} opcode A integer value representing the opcode.
  * @returns {boolean}
  */
 function isStoreInst(opcode) {
@@ -4662,6 +4659,13 @@ function isAtomicMemoryInst(opcode) {
 
 // generating exports
 
+/**
+ * 
+ * @param {ByteCodeLinker} linker 
+ * @param {WebAssemblyModule} module 
+ * @param {object} profile 
+ * @returns 
+ */
 function dl_generate_exports(linker, module, profile) {
 
     // export visiable symbols.
@@ -4940,7 +4944,7 @@ function _producersAddSDK(producersData, value, version) {
  * @param {WebAssemblyModule} module 
  * @param {string} import_module 
  * @param {string} name 
- * @returns {!ImportedGlobal}
+ * @returns {ImportedGlobal}
  */
 function find_or_create_import_global(module, import_module, name) {
     let globs = module.globals;
@@ -4984,6 +4988,15 @@ function find_import_function(module, import_module, name, type) {
     return null;
 }
 
+/** 
+ * This callback is displayed as part of the Requester class.
+ * @callback BuiltinGeneratorCallback
+ * @param {ByteCodeLinker} linker
+ * @param {WebAssemblyModule} module
+ * @param {string} symbol
+ * 
+ * @type {Object.<string, BuiltinGeneratorCallback>}
+ */
 const builtin_generators = {
     'dlopen': function(linker, module, symbol) {
         let ops, ftype, l1, l2, __dso_glob;
@@ -5179,7 +5192,7 @@ const builtin_generators = {
         ops = dladdr.opcodes;
 
         ftype = module.getOrCreateType([WA_TYPE_I32, WA_TYPE_I32, WA_TYPE_I32], WA_TYPE_I32);
-        imp = find_import_function(module, "dlfcn", "__dlopen", ftype);
+        imp = find_import_function(module, "dlfcn", "__dladdr", ftype);
         if (!imp) {
             imp = new ImportedFunction();
             imp.module = "dlfcn";
@@ -5296,6 +5309,13 @@ const builtin_generators = {
     }
 }
 
+/**
+ * 
+ * @param {ByteCodeLinker} linker 
+ * @param {WebAssemblyModule} module 
+ * @param {string} symbol 
+ * @returns 
+ */
 function generate_builtin_symbol(linker, module, symbol) {
 
     if (builtin_generators.hasOwnProperty(symbol)) {
