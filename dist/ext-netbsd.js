@@ -551,8 +551,7 @@ let _netbsdUserBinaryForkWorkflow = {
 				shared: true,
 			}
 		}, {
-			action: "postOptimizeAtomicInst",
-			options: undefined,
+			action: "fixup_builtins"
 		}, {
 			action: "generateWasmRTLDUserBinary",
 			options: undefined
@@ -599,6 +598,8 @@ let _netbsdDynldBinaryWorkflow = {
 				max: 1954,
 				shared: true,
 			}
+		}, {
+			action: "fixup_builtins"
 		}, {
 			action: "postOptimizeNetbsdUserBinary",
 			options: undefined,

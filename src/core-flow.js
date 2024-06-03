@@ -39,6 +39,7 @@ import { AtomicInst, BlockInst, ReturnInst, IfInst } from "./core/inst";
 import { WebAssemblyFuncTypeSection, WebAssemblyFunctionSection, WebAssemblyTableSection, WebAssemblyMemorySection,
 	WebAssemblyGlobalSection, WebAssemblyDataSection, WebAssemblyModule, traverseStack} from "./core/WebAssembly";
 import { WebAssemblyCustomSectionName } from "./core/name";
+import { builtin_op_replace_map, fixup_builtins } from "./fixup-builtin";
 
 // The core flow is was is common for GUI & Shell command, and is not part of a specific type of binary.
 
@@ -50,6 +51,9 @@ export const _flowActions = {
 	},
 	postOptimizeMemInst: {
 		handler: postOptimizeMemInstAction
+	},
+	fixup_builtins: {
+		handler: postBuiltinInstAction
 	},
 	convertToImportedGlobal: {
 		handler: convertToImportedGlobalAction
@@ -1304,6 +1308,14 @@ const atomic_op_replace_map = [
 			return true;
 		}
 	}, {
+		name: {module: "__builtin", name: "f64_abs"},
+		type: WasmType.create([WA_TYPE_F64], [WA_TYPE_F64]),
+		replace: function(inst, index, arr, scope, calle) {
+			arr[index] = {opcode: 0x8b};
+			calle._usage--;
+			return true;
+		}
+	}, {
 		module: MODULE_BUILT_IN,
 		name: "memory_copy",
 		type: WasmType.create(null, [WA_TYPE_I32]),
@@ -1543,6 +1555,10 @@ function memset_to_inst_handler(inst, index, arr, func) {
 function postOptimizeAtomicInst(ctx, mod) {
 
 	replaceCallInstructions(ctx, mod, null, atomic_op_replace_map)
+}
+
+function postBuiltinInstAction(ctx, mod) {
+	replaceCallInstructions(ctx, mod, null, builtin_op_replace_map);
 }
 
 function postOptimizeMemInstAction(ctx, mod) {
